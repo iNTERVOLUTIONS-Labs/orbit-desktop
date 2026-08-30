@@ -1,0 +1,159 @@
+/* Los tokens del sistema de diseño, transcritos de docs/DESIGN.md §3.
+   No se inventa ningún valor aquí: los de marca salen de los SVG de Orbit y los
+   derivados están calculados para cumplir contraste. Si hay que cambiar uno, se
+   cambia en el documento primero — es donde está escrito el porqué y el ratio. */
+
+:root {
+  /* ── Marca (extraídas de assets/*.svg de Orbit) ───────────────────── */
+  --o-cyan-100: #b9fbfb;
+  --o-cyan-300: #6fe3e3;
+  --o-cyan-400: #5ee7e7;   /* acento canónico, sólo sobre oscuro: 12,68:1 */
+  --o-cyan-500: #3ac7d8;
+  --o-cyan-700: #10707e;   /* derivada: acento sobre claro */
+  --o-cyan-800: #0b5561;   /* derivada: texto de acento sobre claro */
+
+  --o-violet-300: #bdb5f8;
+  --o-violet-400: #9c90f4; /* derivada: el violeta legible sobre oscuro */
+  --o-violet-500: #7c6cf0; /* marca. Relleno y degradados, NUNCA texto: da
+                              4,03:1 sobre superficie elevada y falla AA */
+  --o-violet-600: #5a48d6;
+  --o-violet-700: #4b3bc4;
+
+  /* ── Tinta y papel ───────────────────────────────────────────────── */
+  --o-ink-900: #080c18;
+  --o-ink-850: #0b1020;    /* fondo canónico oscuro */
+  --o-ink-800: #0d1428;
+  --o-ink-750: #10182f;
+  --o-ink-700: #16203c;
+  --o-ink-650: #1e2a4a;
+  --o-slate-600: #253355;
+  --o-slate-550: #33456b;
+  --o-slate-500: #4a5878;
+  --o-slate-450: #55679a;
+  --o-slate-400: #5a6b92;
+  --o-slate-350: #64729a;
+  --o-slate-300: #7c8bb0;
+  --o-slate-250: #7e8aa8;
+  --o-slate-200: #8a9ac0;
+  --o-slate-150: #9fb3d9;
+  --o-slate-100: #c6d0e4;
+  --o-paper-200: #e3e8f2;
+  --o-paper-100: #edf1fb;
+  --o-paper-50: #f5f8ff;
+  --o-white: #ffffff;
+
+  /* ── Estado. Los «obvios» no llegan: #12885A da 4,21:1 y #A66508 da
+        4,40:1 sobre claro — fallan AA por poco, que es la peor forma de
+        fallar porque parece que va bien. ──────────────────────────── */
+  --o-green-400: #4ade9e;
+  --o-green-700: #0e6e49;  /* 5,90:1 */
+  --o-amber-400: #f5b544;
+  --o-amber-700: #8a5406;  /* 5,89:1 */
+  --o-red-400: #ff7a70;
+  --o-red-600: #c63127;
+  --o-red-700: #a32720;    /* 6,89:1 */
+}
+
+/* ── Tema claro. Es una traducción del oscuro, no su espejo: el cian de
+      marca sobre blanco da 1,5:1, que no es texto sino una sugerencia de
+      texto. El claro tiene sus propios acentos. ───────────────────── */
+:root {
+  --bg: var(--o-paper-50);
+  --surface: var(--o-white);
+  --surface-2: var(--o-paper-50);
+  --surface-sunken: #edf1f8;
+  --border: var(--o-paper-200);
+  --border-strong: var(--o-slate-250);
+  --fg: var(--o-ink-850);
+  --fg-muted: #4a5878;
+  --fg-faint: var(--o-slate-350);
+  --accent: var(--o-cyan-700);
+  --accent-text: var(--o-cyan-800);
+  --accent-fill: var(--o-cyan-700);
+  --on-accent: var(--o-white);
+  --focus: var(--o-cyan-800);
+
+  --st-ok: var(--o-green-700);
+  --st-warn: var(--o-amber-700);
+  --st-error: var(--o-red-700);
+  --st-unknown: var(--o-slate-350);
+  --st-na: var(--o-slate-350);
+  --on-solid: var(--o-white);
+
+  --shadow-1: 0 1px 2px rgb(11 16 32 / 6%), 0 1px 3px rgb(11 16 32 / 8%);
+  --shadow-2: 0 4px 12px rgb(11 16 32 / 10%), 0 1px 3px rgb(11 16 32 / 6%);
+  --shadow-3: 0 12px 32px rgb(11 16 32 / 16%), 0 2px 8px rgb(11 16 32 / 8%);
+
+  --chip-tinte: 12%;
+
+  /* ── Espaciado, radios, tipografía ───────────────────────────────── */
+  --e-1: 4px;  --e-2: 8px;  --e-3: 12px; --e-4: 16px;
+  --e-5: 24px; --e-6: 32px; --e-7: 48px;
+  --r-1: 4px;  --r-2: 6px;  --r-3: 10px; --r-4: 14px;
+  --fuente: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  color-scheme: light dark;
+}
+
+/* El bloque oscuro va dos veces a propósito, y no es duplicación por descuido:
+   con `:not([data-theme="light"])` dentro del media query y `[data-theme="dark"]`
+   fuera, la elección explícita gana **en los dos sentidos**. Es el bug clásico
+   de los temas hechos sólo con media query: el botón sólo funciona en una
+   dirección. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: var(--o-ink-850);
+    --surface: var(--o-ink-750);
+    --surface-2: var(--o-ink-700);
+    --surface-sunken: var(--o-ink-900);
+    --border: var(--o-ink-650);
+    --border-strong: var(--o-slate-450);
+    --fg: var(--o-paper-100);
+    --fg-muted: var(--o-slate-150);
+    --fg-faint: var(--o-slate-300);
+    --accent: var(--o-cyan-400);
+    --accent-text: var(--o-cyan-400);
+    --accent-fill: var(--o-cyan-400);
+    --on-accent: #06121a;
+    --focus: var(--o-cyan-400);
+    --st-ok: var(--o-green-400);
+    --st-warn: var(--o-amber-400);
+    --st-error: var(--o-red-400);
+    --st-unknown: var(--o-slate-300);
+    --st-na: var(--o-slate-300);
+    --on-solid: var(--o-ink-850);
+    /* En oscuro la sombra casi no se ve: la elevación la hace la superficie. */
+    --shadow-1: none;
+    --shadow-2: 0 8px 24px rgb(0 0 0 / 45%);
+    --shadow-3: 0 20px 48px rgb(0 0 0 / 60%);
+    --chip-tinte: 18%;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: var(--o-ink-850);
+  --surface: var(--o-ink-750);
+  --surface-2: var(--o-ink-700);
+  --surface-sunken: var(--o-ink-900);
+  --border: var(--o-ink-650);
+  --border-strong: var(--o-slate-450);
+  --fg: var(--o-paper-100);
+  --fg-muted: var(--o-slate-150);
+  --fg-faint: var(--o-slate-300);
+  --accent: var(--o-cyan-400);
+  --accent-text: var(--o-cyan-400);
+  --accent-fill: var(--o-cyan-400);
+  --on-accent: #06121a;
+  --focus: var(--o-cyan-400);
+  --st-ok: var(--o-green-400);
+  --st-warn: var(--o-amber-400);
+  --st-error: var(--o-red-400);
+  --st-unknown: var(--o-slate-300);
+  --st-na: var(--o-slate-300);
+  --on-solid: var(--o-ink-850);
+  --shadow-1: none;
+  --shadow-2: 0 8px 24px rgb(0 0 0 / 45%);
+  --shadow-3: 0 20px 48px rgb(0 0 0 / 60%);
+  --chip-tinte: 18%;
+}

@@ -91,7 +91,15 @@ Todavía no hay interfaz, pero sí hay núcleo — y se prueba entero sin levant
 una ventana:
 
 ```bash
-cargo test --all          # 89 pruebas
+cargo test --all          # 90 pruebas del núcleo
+cd ui && npx vitest run   # 33 de la interfaz
+```
+
+La interfaz tiene sus dos pantallas de la fase 1 y se puede mirar:
+
+```bash
+cd ui && npm install && npx vite      # http://localhost:5174
+cd ui && npx playwright test          # y las capturas de los dos temas
 ```
 
 `crates/orbit-client` es el transporte SSH, el contrato tipado, el catálogo de
