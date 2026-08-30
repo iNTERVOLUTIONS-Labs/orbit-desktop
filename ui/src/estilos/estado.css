@@ -1,0 +1,95 @@
+/* ══ El estado semántico vive AQUÍ y en ningún otro sitio ═══════════════════
+ *
+ * Es una regla, no una preferencia, y hay una comprobación en CI que falla el
+ * build si se rompe. El motivo: **la distinción entre `served:false`,
+ * `service:null` y `service:"stopped"` es el activo más valioso de este
+ * producto**, y es exactamente lo que se disuelve cuando el estado pasa a ser
+ * tres clases de color repetidas en cuatro componentes. El día que alguien
+ * añada una quinta copia con un matiz distinto, la lista y el detalle dejan de
+ * decir lo mismo, y nadie lo notará hasta que un usuario vea un incidente donde
+ * no lo hay.
+ *
+ * Las clases se llaman como el concepto, no como el color. `.chip--sin-vhost`,
+ * no `.chip--rojo`: el día que el rojo cambie, el nombre sigue siendo verdad.
+ */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-1);
+  padding: 2px var(--e-2);
+  border-radius: var(--r-1);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  /* El tinte se calcula en vez de mantener seis colores más a mano. Los
+     porcentajes de los dos temas no son iguales a propósito: sobre oscuro hace
+     falta más tinte para que el chip se despegue del fondo, y sobre claro menos
+     para que el texto siga cumpliendo. */
+  background: color-mix(in srgb, var(--chip) var(--chip-tinte), var(--surface));
+  color: var(--chip);
+}
+
+/* El glifo es la mitad de la información. El color NUNCA es el único portador:
+   el 8 % de los hombres tiene alguna deficiencia de visión del color, las
+   capturas que la gente pega en un issue a veces son en gris, y esta lista se
+   mira de reojo, donde la forma sobrevive y el color no. */
+.chip__glifo { font-family: var(--mono); font-size: 11px; }
+
+.chip--activo        { --chip: var(--st-ok); }
+.chip--parado        { --chip: var(--st-error); }
+.chip--mantenimiento { --chip: var(--st-warn); }
+/* «No aplica» y «desconocido» son los dos neutros y tienen glifos distintos
+   —`—` y `·`—, tomados de `orbit top`. Que la interfaz gráfica y la del
+   terminal coincidan en el glifo no es nostalgia: la misma persona usa las dos,
+   a veces el mismo día, y aprender dos vocabularios para lo mismo es un
+   impuesto gratuito. */
+.chip--no-aplica     { --chip: var(--st-na); }
+.chip--desconocido   { --chip: var(--st-unknown); }
+
+/* El ÚNICO estado con chip sólido, y se lo gana.
+ *
+ * Sin vhost, nginx no atiende el dominio en absoluto: la conexión se cierra —ni
+ * 404 ni 502, `curl` dice 000— así que ningún otro campo del estado describe lo
+ * que recibe un visitante. Ni siquiera `maintenance`: sin vhost tampoco se
+ * sirve la página de 503.
+ *
+ * La distinción es de FORMA y no de tono, y por eso sobrevive al daltonismo y
+ * al blanco y negro. Contraste comprobado: #0B1020 sobre #FF7A70 da 7,46:1, y
+ * #FFFFFF sobre #A32720 da 7,32:1. */
+.chip--sin-vhost {
+  --chip: var(--st-error);
+  background: var(--st-error);
+  color: var(--on-solid);
+}
+
+/* Las facetas NO son el estado, y por eso nunca alteran el chip principal: van
+   en su propia columna. Una web sin HTTPS no está «rota», y pintarla de rojo
+   junto a una que de verdad lo está enseña a ignorar el rojo. */
+.faceta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-1);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.faceta--aviso     { color: var(--st-warn); }
+.faceta--desconocida { color: var(--st-unknown); font-family: var(--mono); }
+
+/* Los seis finales de un lote. Ni comparten color, ni glifo, ni celda de
+   recuento — y agruparlos en «correctas / fallidas» está prohibido: confundir
+   «no hay cambios» con «no he podido preguntar» costó un fallo real, un remoto
+   caído anunciado como «nada que hacer» cada cinco minutos. */
+.lote--deployed    { --chip: var(--st-ok); }
+.lote--failed      { --chip: var(--st-error); }
+.lote--unchanged   { --chip: var(--st-na); }
+.lote--unreachable { --chip: var(--st-warn); }
+.lote--gone        { --chip: var(--st-error); }
+.lote--skipped     { --chip: var(--st-unknown); }
+
+/* Una fila cuyo nombre no pasa la regla de forma: llega del servidor y no se
+   puede operar sobre ella. Se marca y no se «arregla»: un nombre arreglado ya
+   no identifica a nadie. */
+.fila--no-operable { opacity: .72; }
+.fila--no-operable .celda-nombre { text-decoration: line-through; }

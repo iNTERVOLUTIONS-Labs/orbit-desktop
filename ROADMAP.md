@@ -36,9 +36,14 @@ Escribir las decisiones antes que el código, que es lo que hizo Orbit con su
 
 ## Fase 1 · Ver 🚧
 
-El núcleo ya está: `crates/orbit-client` con el transporte, el contrato tipado,
-el catálogo de órdenes y el escapado, y `tests/fakeserver` con 38 respuestas.
-**89 pruebas.** Falta la interfaz.
+El núcleo está: `crates/orbit-client` con el transporte, el contrato tipado, el
+catálogo de órdenes y el escapado, con 90 pruebas rápidas y 11 de punta a punta
+contra un `sshd` de verdad. Y la interfaz tiene sus dos pantallas —lista y
+detalle— con 33 pruebas y capturas en los dos temas.
+
+**Falta enganchar las dos mitades**: hoy la interfaz se alimenta de las mismas
+respuestas del servidor falso, no del transporte. Eso es Tauri, y va después de
+`~/.ssh/config`.
 
 Se empezó por aquí y no por una pantalla porque es lo que el plan de pruebas
 manda: sin el escapador demostrado, sin el servidor falso y sin el barrido de

@@ -1,0 +1,25 @@
+/* Lo mínimo, y nada de un `reset` de terceros: son sesenta tokens y unos pocos
+   componentes, no hace falta un motor. */
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--fuente);
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Un foco visible en todo, y con un color que cumple contraste en los dos
+   temas. Quitar el contorno del foco es la forma más rápida de dejar la
+   aplicación sin teclado. */
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Quien pide menos movimiento no quiere «menos», quiere ninguno. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

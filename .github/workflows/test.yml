@@ -160,6 +160,58 @@ jobs:
         if: always()
         run: tests/e2e/parar-sshd.sh "$RUNNER_TEMP/e2e"
 
+  interfaz:
+    # La interfaz. Dos capas de comprobación, y las dos hacen falta:
+    #
+    #   · las pruebas del DOM afirman que lo pintado es lo correcto
+    #   · las capturas comprueban que lo correcto además SE VE
+    #
+    # No es redundancia. Los dos únicos defectos de esta fase salieron de mirar
+    # una captura con el DOM ya en verde: los chips neutros pintaban el guion
+    # dos veces, y un bidi override hacía que una fila leyera como una app que
+    # no era. El DOM era correcto en los dos casos.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Node
+        run: node --version && npm --version
+
+      - name: Dependencias, con el lockfile congelado
+        # Un build que resuelve versiones es un build que puede traer otra cosa
+        # hoy que ayer.
+        run: npm ci --no-audit --no-fund
+
+      - name: Tipos
+        run: npx svelte-check --tsconfig ./tsconfig.json --threshold error
+
+      - name: Pruebas del DOM y de las reglas del sistema de diseño
+        run: npx vitest run
+
+      - name: Que compila, y cuánto pesa
+        # El peso es una característica de producto —y fue el argumento que
+        # decidió el framework—, así que se publica en cada tanda. Una
+        # característica que no se mide se degrada sola.
+        run: |
+          npx vite build
+          echo "### Tamaño del paquete" >> "$GITHUB_STEP_SUMMARY"
+          gzip -c dist/assets/*.js | wc -c | xargs -I{} echo "JS: {} bytes comprimidos" >> "$GITHUB_STEP_SUMMARY"
+          gzip -c dist/assets/*.css | wc -c | xargs -I{} echo "CSS: {} bytes comprimidos" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Capturas
+        env:
+          CHROMIUM: /usr/bin/google-chrome
+        run: npx playwright test
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: capturas
+          path: ui/capturas/
+
   documentacion:
     runs-on: ubuntu-latest
     steps:
