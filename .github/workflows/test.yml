@@ -113,6 +113,36 @@ jobs:
           cargo install cargo-audit --locked --quiet || true
           cargo audit --deny warnings
 
+  e2e:
+    # De punta a punta, atravesando un sshd de verdad. No es opcional: lo que
+    # sólo existe dentro de un shell remoto no lo ve un doble local, y el
+    # escapado se prueba contra un shell de verdad o no se ha probado.
+    #
+    # Ya ha pagado su coste dos veces: destapó que un cambio de clave de host le
+    # llegaba a la interfaz como «no he llegado al servidor» —la descripción de
+    # un problema de red, no la de un ataque— y que el registro del argv se
+    # partía con un argumento que llevara un salto de línea dentro.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Levantar el sshd del banco
+        run: tests/e2e/montar-sshd.sh "$RUNNER_TEMP/e2e"
+
+      - name: Las pruebas de punta a punta
+        env:
+          ORBIT_E2E: ${{ runner.temp }}/e2e
+        run: cargo test -p orbit-client --test e2e_sshd -- --ignored --nocapture
+
+      - name: Parar el sshd
+        # Siempre, también si la tanda falla: un sshd huérfano escuchando hace
+        # que la siguiente falle por un motivo que no tiene nada que ver.
+        if: always()
+        run: tests/e2e/parar-sshd.sh "$RUNNER_TEMP/e2e"
+
   documentacion:
     runs-on: ubuntu-latest
     steps:
