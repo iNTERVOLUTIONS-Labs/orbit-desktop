@@ -132,6 +132,20 @@ jobs:
       - name: openssh-server, que el runner no trae de serie
         run: sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server
 
+      - name: Desbloquear la cuenta del runner
+        # Va aquí y NO dentro del banco a propósito: el banco no toca nada del
+        # sistema, y eso es lo que hace que se pueda ejecutar en el portátil de
+        # cualquiera sin pensárselo. Esto sí lo toca, así que se ve en el
+        # workflow y no escondido en un script.
+        #
+        # La cuenta del runner no tiene contraseña y queda marcada como
+        # bloqueada ('!' en shadow). Con 'UsePAM no', sshd se niega a dejar
+        # entrar a una cuenta bloqueada **aunque la clave pública sea
+        # correcta** — y lo registra a nivel INFO, o sea que con LogLevel ERROR
+        # el fichero de log salía vacío y el fallo parecía no tener causa.
+        # '*' significa «sin contraseña» sin significar «bloqueada».
+        run: sudo usermod -p '*' "$USER"
+
       - name: Levantar el sshd del banco
         run: tests/e2e/montar-sshd.sh "$RUNNER_TEMP/e2e"
 

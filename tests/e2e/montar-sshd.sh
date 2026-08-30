@@ -53,7 +53,12 @@ PubkeyAuthentication yes
 UsePAM no
 PrintMotd no
 StrictModes no
-LogLevel ERROR
+# VERBOSE y no ERROR: este log sólo se lee cuando algo ha fallado, y con ERROR
+# se callaba justo lo que hacía falta. Un rechazo de autenticación —«account is
+# locked», que es lo que pasa en un runner de CI donde la cuenta no tiene
+# contraseña— se registra a nivel INFO, así que con ERROR el fichero salía
+# vacío y el fallo parecía no tener causa.
+LogLevel VERBOSE
 # El entorno tiene que cruzar para poder pedirle un caso patológico concreto al
 # servidor falso. En un servidor de verdad esto NO está, y por eso el cliente
 # no se apoya en el entorno para nada: para el idioma usa 'orbit --lang'.
