@@ -1,0 +1,22 @@
+[package]
+name = "orbit-client"
+description = "El núcleo de Orbit Desktop: transporte SSH, contrato --json y su tipado."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Vive aparte de la interfaz a propósito (ARCHITECTURE §4.3): así se prueba con
+# 'cargo test' sin levantar una ventana, un cambio de framework no lo toca, y
+# una TUI podría reutilizarlo sin duplicar nada.
+#
+# Las dependencias se cuentan: cada una es código de terceros ejecutándose en el
+# proceso que sostiene las credenciales SSH del usuario, que es el argumento con
+# el que se descartó Electron. Hoy son dos, y las dos de primera necesidad.
+[dependencies]
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+
+[dev-dependencies]
+# Nada. Las pruebas usan el servidor falso de tests/fakeserver, que es bash.

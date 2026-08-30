@@ -25,3 +25,6 @@ __pycache__/
 *.tmp
 *.swp
 *.local
+
+# El impresor de argv de la prueba de propiedad, si queda suelto en /tmp
+orbit-desktop-impresor.sh

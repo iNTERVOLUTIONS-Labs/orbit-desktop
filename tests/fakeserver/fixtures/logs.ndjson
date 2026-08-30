@@ -1,0 +1,5 @@
+{"schema":1,"event":"meta","app":"app001","source":"nginx","unit":null,"since":null,"follow":false,"lines":80}
+{"event":"line","ts":"2026-08-29T14:02:11+02:00","stream":"access","text":"[29/Aug/2026:14:02:11 +0200] GET / 200"}
+{"event":"line","ts":null,"stream":"access","text":"sin marca de tiempo"}
+{"event":"line","ts":"2026-08-29T14:03:01","stream":"error","text":"2026/08/29 14:03:01 [error] algo"}
+{"event":"end","lines":3,"truncated":false}
