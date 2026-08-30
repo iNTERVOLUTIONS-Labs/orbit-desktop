@@ -15,7 +15,7 @@
 import {
   leerLog,
   type App, type Despliegue, type Doctor, type Entorno,
-  type Lista, type Log, type Monitor,
+  type Envoltorio, type Lista, type Log, type Metricas, type Monitor, type Trafico,
 } from './contrato'
 
 import listaSana from './muestras/list.json'
@@ -170,4 +170,28 @@ export async function entornoValor(alias: string, app: string, clave: string): P
 export async function monitor(alias: string): Promise<Monitor> {
   if (!hayPuente()) return monitorMuestra as Monitor
   return invocar<Monitor>('monitor', { alias })
+}
+
+import traficoMuestra from './muestras/traffic.json'
+import metricasMuestra from './muestras/metrics.json'
+
+/** El tráfico. Viene **envuelto** —`{schema, apps:[…]}`— también pidiendo una
+ *  sola app: lo comprobamos ejecutando, porque la documentación lo daba plano. */
+export async function trafico(alias: string, app: string, desde = '7d'): Promise<Trafico> {
+  const r = hayPuente()
+    ? await invocar<Envoltorio<Trafico>>('trafico', { alias, app, desde })
+    : (traficoMuestra as Envoltorio<Trafico>)
+  const t = r.apps[0]
+  if (!t) throw { clase: 'sin-datos', mensaje: `no hay tráfico de «${app}»` }
+  return t
+}
+
+/** Las métricas. También envueltas. */
+export async function metricas(alias: string, app: string): Promise<Metricas> {
+  const r = hayPuente()
+    ? await invocar<Envoltorio<Metricas>>('metricas', { alias, app })
+    : (metricasMuestra as Envoltorio<Metricas>)
+  const m = r.apps[0]
+  if (!m) throw { clase: 'sin-datos', mensaje: `no hay métricas de «${app}»` }
+  return m
 }

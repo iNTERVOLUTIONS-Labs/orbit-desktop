@@ -11,12 +11,14 @@
   import * as vivos from './lib/vivos.svelte'
   import EntornoVista from './componentes/Entorno.svelte'
   import MonitorVista from './componentes/MonitorVista.svelte'
+  import TraficoVista from './componentes/TraficoVista.svelte'
+  import MetricasVista from './componentes/MetricasVista.svelte'
   import { periodoDelMonitor } from './lib/despliegue'
-  import type { App, Doctor, Entorno, Log, Monitor } from './lib/contrato'
+  import type { App, Doctor, Entorno, Log, Metricas, Monitor, Trafico } from './lib/contrato'
   import {
     arreglar, cancelar, desplegar, diagnostico, entorno as pedirEntorno,
     entornoValor, hayPuente, log as pedirLog, monitor as pedirMonitor,
-    portada, servidoresDelConfig,
+    metricas as pedirMetricas, portada, servidoresDelConfig, trafico as pedirTrafico,
     type AliasSsh, type ErrorDelPuente,
   } from './lib/puente'
 
@@ -39,7 +41,9 @@
   let entorno = $state<Entorno | null>(null)
   let monitor = $state<Monitor | null>(null)
   let periodo = $state(3)
-  let pestana = $state<'detalle' | 'log' | 'entorno' | 'despliegue'>('detalle')
+  let trafico = $state<Trafico | null>(null)
+  let metricas = $state<Metricas | null>(null)
+  let pestana = $state<'detalle' | 'log' | 'entorno' | 'trafico' | 'despliegue'>('detalle')
 
   // La hoja de comando de un despliegue. Se enseña la orden literal ANTES de
   // ejecutarla: es la prueba visible de que esto sólo invoca `orbit`.
@@ -79,6 +83,8 @@
     log = null
     entorno = null
     monitor = null
+    trafico = null
+    metricas = null
     vista = 'apps'
     cargando = true
     try {
@@ -156,6 +162,23 @@
     if (entorno && entorno.app === a.name) return
     try {
       entorno = await pedirEntorno(alias, a.name)
+    } catch (e) {
+      error = e as ErrorDelPuente
+    }
+  }
+
+  async function verTrafico(a: App) {
+    pestana = 'trafico'
+    if (trafico && trafico.app === a.name) return
+    try {
+      // Las dos a la vez: se miran juntas y son dos comandos distintos, así que
+      // pedirlas en serie doblaría la espera de una pantalla sin ganar nada.
+      const [t, m] = await Promise.all([
+        pedirTrafico(alias, a.name),
+        pedirMetricas(alias, a.name),
+      ])
+      trafico = t
+      metricas = m
     } catch (e) {
       error = e as ErrorDelPuente
     }
@@ -285,6 +308,8 @@
             // El entorno es de una app concreta: al cambiar de app, el que
             // había deja de valer, y con él cualquier valor revelado.
             entorno = null
+            trafico = null
+            metricas = null
             pestana = 'detalle'
           }}
         />
@@ -302,6 +327,9 @@
           </button>
           <button type="button" class:activo={pestana === 'entorno'} onclick={() => verEntorno(elegida!)}>
             entorno
+          </button>
+          <button type="button" class:activo={pestana === 'trafico'} onclick={() => verTrafico(elegida!)}>
+            tráfico
           </button>
           {#if vivos.ver(alias, elegida.name)}
             <button type="button" class:activo={pestana === 'despliegue'} onclick={() => (pestana = 'despliegue')}>
@@ -323,6 +351,18 @@
                 servidor={alias}
                 pedirValor={(k) => entornoValor(alias, elegida!.name, k)}
               />
+            </div>
+          {:else}
+            <div class="log-envoltorio"><Esqueleto filas={4} /></div>
+          {/if}
+        {:else if pestana === 'trafico'}
+          {#if trafico}
+            <div class="log-envoltorio">
+              <TraficoVista {trafico} servidor={alias} />
+              {#if metricas}
+                <h3 class="sub">Despliegues</h3>
+                <MetricasVista {metricas} />
+              {/if}
             </div>
           {:else}
             <div class="log-envoltorio"><Esqueleto filas={4} /></div>
@@ -427,4 +467,6 @@
   .perdido { margin: 0; font-size: 13px; color: var(--fg); max-width: 68ch; }
   .perdido-que { margin: var(--e-3) 0 0; font-size: 12px; color: var(--fg-muted); max-width: 68ch; }
   .motivo { font-family: var(--mono); }
+  .sub { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+         color: var(--fg-faint); margin: var(--e-6) 0 var(--e-3); }
 </style>

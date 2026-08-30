@@ -336,6 +336,27 @@ fn monitor(alias: String, binario: Option<String>) -> Resultado {
     pedir(&alias, binario, Comando::Top)
 }
 
+/// El tráfico de una app, del log que nginx ya escribe.
+///
+/// Sin cookies, sin JavaScript y sin nada nuevo corriendo: es lo que hace que
+/// una analítica quepa aquí cuando un panel web no cabe. Y el dato lleva ahí
+/// desde la primera visita.
+#[tauri::command]
+fn trafico(
+    alias: String,
+    app: String,
+    desde: Option<String>,
+    binario: Option<String>,
+) -> Resultado {
+    pedir(&alias, binario, Comando::Trafico { app, desde })
+}
+
+/// El histórico de despliegues de una app.
+#[tauri::command]
+fn metricas(alias: String, app: String, binario: Option<String>) -> Resultado {
+    pedir(&alias, binario, Comando::Metricas { app: Some(app) })
+}
+
 /// Los alias de `~/.ssh/config`, para poder importarlos.
 ///
 /// **No conecta con ninguno**: enumerar no es visitar. Saber si en un alias hay
@@ -366,6 +387,8 @@ pub fn ejecutar() {
             entorno,
             entorno_valor,
             monitor,
+            trafico,
+            metricas,
             desplegar,
             cancelar,
             servidores_del_config,

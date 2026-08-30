@@ -119,7 +119,13 @@ nombres, cada valor de uno en uno con su `orbit env get` de verdad, y se oculta
 solo a los 30 segundos, al perder el foco la ventana y al cambiar de pantalla—
 y el **monitor**, con el periodo adaptado a lo que de verdad tarda.
 
-Falta el resto: métricas, tráfico y la terminal de `exec`.
+Y el **tráfico** con las **métricas**, que son las dos pantallas cuyo valor está
+en lo que **no** afirman: son IPs y no personas, lo automático va aparte —en un
+VPS con IP pública es la mayoría—, una ventana que el log ya no cubre se anuncia
+recortada, un percentil sin muestras no se pinta como cero, y la tendencia no se
+dibuja plana cuando el servidor se la calla.
+
+Falta la terminal de `exec`.
 
 ### Lo que había aquí, ya hecho
 

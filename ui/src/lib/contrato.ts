@@ -348,3 +348,62 @@ export function bytes(n: number | null): string {
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1 }
   return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`
 }
+
+// ── el tráfico ─────────────────────────────────────────────────────────────
+
+export interface Latencia {
+  p50: number | null
+  p95: number | null
+  max: number | null
+  /** Sobre cuántas líneas se calcularon. Con 0, los tres percentiles son `null`
+   *  y **no se pintan**: un percentil sin muestras no es un cero, es nada. */
+  lines: number
+}
+
+export interface Trafico {
+  app: string
+  since: string
+  from: string
+  /** **`false` = la ventana pedida excede lo que el log cubre.** Se dice, no se
+   *  devuelve un número más pequeño y se calla: un total recortado sin avisar
+   *  se lee como el total. */
+  complete: boolean
+  requests: number | null
+  /** Son **IPs, no personas**. Una misma persona con datos móviles son tres. */
+  ips: number | null
+  ips_capped: boolean
+  bytes: number | null
+  /** Lo automático va **aparte**. En un VPS con IP pública buena parte del
+   *  tráfico son escáneres buscando `/.git/config`, y sumarlo al de las
+   *  personas convierte la analítica en un número que no describe a nadie. */
+  automated: number | null
+  status: Record<string, number>
+  latency_ms: Latencia
+  paths: Array<{ path: string; requests: number }>
+  referrers?: Array<{ referrer: string; requests: number }>
+  hours?: Array<{ hour: string; requests: number }>
+}
+
+/** Las respuestas de `traffic` y `metrics` vienen envueltas: `{schema, apps:[…]}`
+ *  también cuando se pide una sola app. Lo comprobamos ejecutando, porque la
+ *  documentación las daba planas. */
+export interface Envoltorio<T> {
+  schema: number
+  apps: T[]
+}
+
+// ── las métricas ───────────────────────────────────────────────────────────
+
+export interface Metricas {
+  app: string
+  deploys: number | null
+  failed: number | null
+  /** La **mediana**, no la media. Un build que una vez tardó 400 s no describe
+   *  ningún despliegue real. */
+  build_median_s: number | null
+  /** **`null` con menos de seis builds**, a propósito: dos datos no son una
+   *  tendencia y fingirla es peor que no tenerla. Cuando es null, **no se pinta
+   *  ninguna flecha** — ni siquiera una plana. */
+  build_trend_s: number | null
+  last: string | null
+}
