@@ -45,25 +45,59 @@ fn codigo_enviado(s: &str) -> String {
         .join("\n")
 }
 
-/// **SEC-01 y SEC-04.** Sólo el transporte puede lanzar un proceso.
+/// **SEC-01 y SEC-04.** Sólo dos ficheros pueden lanzar un proceso, y hacen
+/// cosas distintas.
 ///
 /// Es la mitigación estructural de la inyección de comandos: si el sitio donde
-/// una lista de argumentos se convierte en una cadena es uno solo, se prueba una
-/// vez y se audita una vez. Repartido por veinte pantallas, se equivoca en la
-/// diecinueve.
+/// una lista de argumentos se convierte en una cadena de shell es uno solo, se
+/// prueba una vez y se audita una vez. Repartido por veinte pantallas, se
+/// equivoca en la diecinueve.
+///
+/// `descubrir.rs` está en la lista y la regla **se afinó, no se relajó**, que
+/// es una distinción que importa. Lo que hace es `ssh -G <alias>`: una consulta
+/// **local** que no abre ninguna conexión y que no construye ninguna cadena de
+/// shell —los argumentos van por `argv` a un `execve`, sin shell de por medio—.
+/// La comprobación de abajo lo fija: ahí no puede aparecer nunca el binario de
+/// Orbit ni una llamada al transporte.
+///
+/// Y afinarla salió barato: al mirar por qué este fichero la incumplía apareció
+/// que un alias que empezara por guion se le habría pasado a `ssh` como una
+/// **opción** en el sitio donde va un nombre. Ahora se descarta.
 #[test]
-fn solo_el_transporte_lanza_procesos() {
+fn solo_dos_ficheros_lanzan_procesos() {
+    const PERMITIDOS: [&str; 2] = ["transporte.rs", "descubrir.rs"];
     for (nombre, texto) in fuentes() {
-        if nombre == "transporte.rs" {
+        if PERMITIDOS.contains(&nombre.as_str()) {
             continue;
         }
         let codigo = codigo_enviado(&texto);
         for prohibido in ["Command::new", "std::process", "\"ssh\""] {
             assert!(
                 !codigo.contains(prohibido),
-                "{nombre} contiene «{prohibido}»: sólo transporte.rs puede lanzar procesos"
+                "{nombre} contiene «{prohibido}»: sólo {PERMITIDOS:?} pueden lanzar procesos"
             );
         }
+    }
+}
+
+/// Y descubrir servidores **no puede convertirse en hablar con ellos**.
+///
+/// Enumerar no es visitar. Si este fichero llegara a invocar el binario de
+/// Orbit o al transporte, abrir una pantalla pasaría a significar abrir
+/// cuarenta sesiones SSH — y la lista de comandos que el cliente puede generar
+/// dejaría de estar en un solo sitio.
+#[test]
+fn descubrir_no_habla_con_ningun_servidor() {
+    let c = codigo_enviado(&fs::read_to_string(crate_dir().join("src/descubrir.rs")).unwrap());
+    assert!(
+        c.contains("\"-G\""),
+        "la consulta tiene que ser la local de ssh"
+    );
+    for prohibido in ["orbit", "transporte::", "ejecutar("] {
+        assert!(
+            !c.contains(prohibido),
+            "descubrir.rs menciona «{prohibido}»: enumerar no es visitar"
+        );
     }
 }
 

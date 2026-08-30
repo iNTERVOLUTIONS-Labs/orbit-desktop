@@ -72,6 +72,16 @@ pub fn alias_del_fichero(texto: &str) -> Vec<String> {
             if patron.contains('*') || patron.contains('?') || patron.starts_with('!') {
                 continue;
             }
+            // Y uno que empiece por guion **no es un destino: es una opción**.
+            // `ssh -G -oAlgo=x` le pasaría a OpenSSH una opción en el sitio
+            // donde esperábamos un nombre. Aquí el riesgo es pequeño —el
+            // fichero es del propio usuario y `-G` no conecta con nada— pero
+            // dejarlo pasar es apostar a que nadie encuentre una opción que
+            // importe, y esa apuesta se pierde una vez y para siempre. Se cortó
+            // al ver que la regla de arquitectura señalaba este fichero.
+            if patron.starts_with('-') {
+                continue;
+            }
             if !fuera.iter().any(|x: &String| x == patron) {
                 fuera.push(patron.to_string());
             }
@@ -209,6 +219,15 @@ Host !prod
         let v = alias_del_fichero(EJEMPLO);
         assert!(!v.iter().any(|x| x.contains('*')));
         assert!(!v.iter().any(|x| x.starts_with('!')));
+    }
+
+    #[test]
+    fn un_alias_que_empieza_por_guion_no_es_un_destino() {
+        // Sería una opción de ssh en el sitio donde va un nombre.
+        assert_eq!(
+            alias_del_fichero("Host -oProxyCommand=evil\n  HostName x\n"),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
