@@ -202,6 +202,11 @@ jobs:
           gzip -c dist/assets/*.css | wc -c | xargs -I{} echo "CSS: {} bytes comprimidos" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Capturas
+        # Sobre el build, no sobre `vite dev`: las capturas tienen que mirar lo
+        # que se publica. Y con el Chrome del runner, porque los binarios de
+        # Playwright no cubren todas las distribuciones —aquí se desarrolla en
+        # una Ubuntu 26.04 donde no hay— así que el navegador se elige por
+        # variable en los dos sitios.
         env:
           CHROMIUM: /usr/bin/google-chrome
         run: npx playwright test
