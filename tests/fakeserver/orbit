@@ -221,6 +221,25 @@ case "$CASE" in
     } >&2
     emitir deploy-ok.json ;;
 
+  # ── El progreso servido DESPACIO ─────────────────────────────────────────
+  # Con pausas de verdad, que es lo único que distingue «se sirve mientras
+  # ocurre» de «se lee entero al final»: sin ellas las dos cosas se ven igual y
+  # la prueba no probaría nada.
+  deploy-lento)
+    {
+      for paso in code release build activate service nginx; do
+        printf '{"event":"step","app":"mi-web","step":"%s","status":"start","elapsed_s":0}\n' "$paso"
+        sleep "${ORBIT_FAKE_PAUSA:-0.2}"
+        printf '{"event":"step","app":"mi-web","step":"%s","status":"ok","elapsed_s":1}\n' "$paso"
+      done
+    } >&2
+    emitir deploy-ok.json ;;
+
+  # ── Un despliegue que no termina nunca, para probar la cancelación ───────
+  deploy-eterno)
+    printf '{"event":"step","app":"mi-web","step":"build","status":"start","elapsed_s":0}\n' >&2
+    while :; do sleep 1; done ;;
+
   # ── P-49 · lo que la documentación promete y el binario no da ────────────
   # Es la clase de fallo que encontramos auditando: 'doctor --fix --json --yes'
   # documentado y muerto. La fuente de verdad es el binario.

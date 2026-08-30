@@ -79,8 +79,13 @@ cronómetro, los cuatro finales de un despliegue, y **el lote con sus seis
 finales separados**, que es lo que justifica el proyecto — la salida en prosa no
 los distinguía y confundir dos de ellos costó un fallo real.
 
-Falta engancharlo al transporte en vivo: hoy la pantalla lee el flujo, y lo que
-queda es el canal que lo va sirviendo mientras ocurre.
+Y el canal en vivo ya está: el transporte sirve cada línea de `--progress`
+**según llega**, no al terminar, con su mando para cancelar. Se pueden lanzar
+varios a la vez, en apps y servidores distintos — cada uno es un proceso SSH
+independiente y nada en el servidor los coordina, ni falta.
+
+Falta la pantalla que los junta: la lista de despliegues vivos y el aviso al
+cerrar la ventana con uno en curso.
 
 ### Lo que había aquí
 
