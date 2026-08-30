@@ -194,6 +194,33 @@ case "$CASE" in
   # ── P-43 · la respuesta habla de otra app ────────────────────────────────
   otra-app)       emitir info-otra-app.json ;;
 
+  # ── P-31 · una línea rota en medio del NDJSON ────────────────────────────
+  # No puede tumbar el flujo: un byte mal puesto convertiría un log en una
+  # pantalla vacía, y quien mira un log suele estar mirándolo porque algo va mal.
+  log-roto)
+    emitir logs.ndjson | head -2
+    printf '{"event":"line","ts":null,"stream":"acce\n'
+    emitir logs.ndjson | tail -2 ;;
+
+  # ── Un log en vivo: hay meta con follow:true y NO hay 'end' ──────────────
+  # Es correcto: un flujo que no termina no tiene final que anunciar.
+  log-vivo)
+    emitir logs.ndjson | head -1 | sed 's/"follow":false/"follow":true/'
+    emitir logs.ndjson | sed -n '2,4p' ;;
+
+  # ── El progreso de un despliegue, mezclado con prosa por stderr ──────────
+  # Por stderr va también todo lo que Orbit le cuenta a una persona, así que lo
+  # que no empieza por llave es prosa y no una línea rota.
+  deploy-progreso)
+    {
+      printf '  ✔ Actualizando el clon\n'
+      printf '{"event":"step","app":"mi-web","step":"fetch","status":"ok"}\n'
+      printf '{"event":"step","app":"mi-web","step":"build","status":"start"}\n'
+      printf '  ✔ Compilando\n'
+      printf '{"event":"step","app":"mi-web","step":"build","status":"ok"}\n'
+    } >&2
+    emitir deploy-ok.json ;;
+
   # ── P-49 · lo que la documentación promete y el binario no da ────────────
   # Es la clase de fallo que encontramos auditando: 'doctor --fix --json --yes'
   # documentado y muerto. La fuente de verdad es el binario.

@@ -26,3 +26,26 @@ for (const tema of ['dark', 'light'] as const) {
     })
   })
 }
+
+// Las dos pantallas que el contrato terminado desbloqueó.
+for (const tema of ['dark', 'light'] as const) {
+  test.describe(`operar · tema ${tema}`, () => {
+    test.use({ colorScheme: tema })
+
+    test('diagnóstico', async ({ page }) => {
+      await page.goto('/')
+      await page.getByRole('button', { name: 'diagnóstico' }).click()
+      await expect(page.locator('.lista li').first()).toBeVisible()
+      await page.screenshot({ path: `capturas/${tema}-diagnostico.png`, fullPage: true })
+    })
+
+    test('log de una app', async ({ page }) => {
+      await page.goto('/')
+      await page.getByRole('button', { name: 'pruebas', exact: true }).click()
+      await page.getByRole('button', { name: /parada/ }).click()
+      await page.getByRole('button', { name: 'log', exact: true }).click()
+      await expect(page.locator('.log')).toBeVisible()
+      await page.screenshot({ path: `capturas/${tema}-log.png`, fullPage: true })
+    })
+  })
+}

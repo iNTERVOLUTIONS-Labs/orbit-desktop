@@ -526,3 +526,90 @@ fn p51_hay_un_suelo_por_llamada_y_conviene_conocerlo() {
     let v: Version = r.leer().unwrap();
     assert_eq!(v.schema, 1);
 }
+
+// ── el flujo NDJSON, que es la única excepción del contrato ────────────────
+
+use orbit_client::flujo::{leer_log, leer_progreso, Canal, SucesoDeLog};
+
+#[test]
+fn el_flujo_de_logs_se_lee_entero() {
+    let c = Comando::Logs {
+        app: "app001".into(),
+        desde: None,
+        lineas: None,
+        seguir: false,
+        solo_nginx: true,
+    };
+    let r = falso("sano", &c).unwrap();
+    let l = leer_log(&r.stdout);
+    assert_eq!(l.rotas, 0);
+    // Y el acceso se distingue del error, que es lo que la prosa pierde porque
+    // `tail` mezcla los dos ficheros sin decir cuál es cuál.
+    let canales: Vec<Canal> = l
+        .sucesos
+        .iter()
+        .filter_map(|s| match s {
+            SucesoDeLog::Linea(x) => Some(x.stream),
+            _ => None,
+        })
+        .collect();
+    assert!(canales.contains(&Canal::Access));
+    assert!(canales.contains(&Canal::Error));
+}
+
+#[test]
+fn p31_una_linea_rota_no_deja_el_log_en_blanco() {
+    // Un byte mal puesto no puede convertir un log en una pantalla vacía, y
+    // quien mira un log suele estar mirándolo porque algo va mal.
+    let c = Comando::Logs {
+        app: "app001".into(),
+        desde: None,
+        lineas: None,
+        seguir: false,
+        solo_nginx: true,
+    };
+    let r = falso("log-roto", &c).unwrap();
+    let l = leer_log(&r.stdout);
+    assert_eq!(l.rotas, 1, "la rota se cuenta, no se calla");
+    assert!(l.sucesos.len() >= 3, "el resto tiene que seguir leyéndose");
+}
+
+#[test]
+fn un_log_en_vivo_no_trae_fin_y_el_meta_ya_lo_avisó() {
+    let c = Comando::Logs {
+        app: "app001".into(),
+        desde: None,
+        lineas: None,
+        seguir: true,
+        solo_nginx: true,
+    };
+    let r = falso("log-vivo", &c).unwrap();
+    let l = leer_log(&r.stdout);
+    assert!(!l.sucesos.iter().any(|s| matches!(s, SucesoDeLog::Fin(_))));
+    match &l.sucesos[0] {
+        SucesoDeLog::Meta(m) => assert!(m.follow),
+        _ => panic!("la primera línea tiene que ser el meta"),
+    }
+}
+
+#[test]
+fn el_progreso_va_por_stderr_y_el_objeto_por_stdout() {
+    // Los dos canales a la vez y sin mezclarse. Es la razón por la que
+    // `--progress` puede existir sin romper «por stdout, un solo objeto».
+    let c = Comando::Desplegar {
+        app: "mi-web".into(),
+        progreso: true,
+    };
+    let r = falso("deploy-progreso", &c).unwrap();
+
+    let d: Despliegue = r.leer().expect("por stdout, el objeto");
+    assert!(d.ok);
+
+    let (pasos, rotas) = leer_progreso(&r.stderr);
+    assert_eq!(rotas, 0, "la prosa de stderr no es una línea rota");
+    assert_eq!(pasos.len(), 3);
+    assert!(
+        pasos.iter().all(|p| p.app.as_deref() == Some("mi-web")),
+        "cada paso lleva su app: sin eso, un paso de un lote no se atribuye"
+    );
+}

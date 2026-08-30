@@ -99,3 +99,16 @@
    la regla de este fichero no admite excepciones por comodidad: la primera vez
    que la rompí fue escribiendo justo esto, y la comprobación lo cazó. */
 .aviso-alto { border-color: var(--st-error); }
+
+/* Los niveles del diagnóstico. Aquí, y no en el componente, por la misma regla
+   de siempre: si el aspecto de un nivel se copia en dos sitios, el día que
+   alguien cambie uno la lista y el detalle dejan de decir lo mismo. */
+.diag--ok    .glifo { color: var(--st-ok); }
+.diag--info  .glifo { color: var(--st-unknown); }
+.diag--warn  .glifo { color: var(--st-warn); }
+.diag--error .glifo { color: var(--st-error); }
+
+/* El canal de una línea de log. Aquí por lo mismo: el día que el rojo del error
+   cambie, tiene que cambiar en un sitio. */
+.log--error .canal { color: var(--st-error); }
+.log--access .canal, .log--journal .canal { color: var(--st-unknown); }

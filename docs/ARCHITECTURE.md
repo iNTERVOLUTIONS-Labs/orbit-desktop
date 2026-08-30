@@ -318,13 +318,13 @@ confirmación**: una YubiKey que pide un toque por conexión lo pediría una vez
 
 ---
 
-## 7. La deuda que no es nuestra, y que ya está pagada
+## 7. La deuda que no era nuestra, y que ya está saldada
 
 El trabajo más rentable de todo el proyecto **no estaba en este repositorio**, y
 por eso conviene que quede escrito aquí: un PR a `orbit` que cerrara los huecos
 del contrato en vez de rodearlos desde el cliente.
 
-**Está abierto:
+**Está fusionado:
 [iNTERVOLUTIONS-Labs/orbit#1](https://github.com/iNTERVOLUTIONS-Labs/orbit/pull/1)**,
 con los cinco cambios que [CLIENT.md](CLIENT.md) §9b especificaba:
 
@@ -353,8 +353,10 @@ en el otro lado:
   la regla práctica del constructor de comandos: **`--json` siempre delante**, que
   es la única posición con un comportamiento definido.
 
-Mientras el PR no esté fusionado, el cliente tiene que hablar con servidores que
-no lo tengan. Eso no es un caso raro ni temporal —un parque de servidores tarda
-meses en actualizarse— así que la degradación es parte del diseño y no un apaño:
+Y sigue haciendo falta hablar con servidores que **no** lo tengan: un parque de
+servidores tarda meses en actualizarse, así que la degradación no es un apaño
+temporal, es parte del diseño. Se ve en la pantalla de diagnóstico, que enseña
+el botón de arreglar sólo si el servidor sabe hacerlo sin preguntar, y en su
+lugar la orden para copiar:
 `orbit version --json` publica `version` y `contract` por separado, y de ahí sale
 qué pantallas pueden ofrecer qué. La política está en [CLIENT.md](CLIENT.md) §4.4.

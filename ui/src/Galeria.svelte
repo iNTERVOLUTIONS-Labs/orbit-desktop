@@ -4,6 +4,11 @@
   import Fallo from './componentes/Fallo.svelte'
   import Esqueleto from './componentes/Esqueleto.svelte'
   import ListaApps from './componentes/ListaApps.svelte'
+  import Diagnostico from './componentes/Diagnostico.svelte'
+  import VisorLog from './componentes/VisorLog.svelte'
+  import { leerLog, type Doctor } from './lib/contrato'
+  import doctorMuestra from './lib/muestras/doctor.json'
+  import logCrudo from './lib/muestras/logs.ndjson?raw'
   import type { App, Estado } from './lib/contrato'
   import listaHostil from './lib/muestras/list-nombre-hostil.json'
 
@@ -30,6 +35,12 @@
     ['caduca pronto', e({ ssl: true, cert_days: 6 })],
     ['válido', e({ ssl: true, cert_days: 74 })],
   ]
+
+  const LOG = leerLog(logCrudo)
+  // El mismo diagnóstico, con y sin la capacidad de arreglar. Es la diferencia
+  // que el PR a Orbit desbloqueó, y verla lado a lado es lo que dice si el «sin
+  // botón» sigue siendo útil.
+  const DIAG = doctorMuestra as Doctor
 
   const FALLOS = [
     {
@@ -111,6 +122,33 @@
   </p>
   <div class="panel">
     <ListaApps apps={listaHostil.apps as App[]} servidor="comprometido" />
+  </div>
+
+  <h2>El diagnóstico</h2>
+  <p class="nota">
+    El botón sólo aparece donde <code>fixable</code> lo permite. Uno que no hace
+    nada es peor que ninguno: invita a averiguar por qué no se puede pulsar, y
+    la respuesta es una frase que se podía haber leído sin el botón.
+  </p>
+  <div class="panel">
+    <Diagnostico doctor={DIAG} servidor="vps-ovh" alArreglar={() => {}} />
+  </div>
+  <p class="nota">
+    Y contra un servidor que no puede aplicarlo sin terminal: en vez de un botón
+    gris, la orden para copiar.
+  </p>
+  <div class="panel">
+    <Diagnostico doctor={DIAG} servidor="vps-ovh" alArreglar={null} />
+  </div>
+
+  <h2>El log</h2>
+  <p class="nota">
+    Se puede separar el log de acceso del de error. Es la primera pregunta de
+    cualquiera que mira un log de nginx, y la salida en prosa no la contesta
+    porque <code>tail</code> mezcla los dos ficheros sin decir cuál es cuál.
+  </p>
+  <div class="panel">
+    <VisorLog log={LOG} app="app001" />
   </div>
 
   <h2>Cargando</h2>

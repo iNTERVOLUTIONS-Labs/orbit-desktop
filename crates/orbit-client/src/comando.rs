@@ -125,6 +125,13 @@ pub enum Comando {
         app: String,
     },
     Doctor,
+    /// Aplica lo que se puede arreglar sin decidir nada por nadie.
+    ///
+    /// Lleva `--yes` porque el servidor lo exige con `--json`: sin terminal no
+    /// hay a quién preguntar, y dar por hecho que alguien ha dicho que sí sería
+    /// aplicar cambios en su servidor sin que los acepte. La confirmación la
+    /// pide la interfaz, que sí tiene delante a una persona.
+    DoctorArreglar,
     /// Tarda ~1 s a propósito: la CPU es la diferencia entre dos lecturas, y una
     /// foto suelta tiene que esperar a la segunda. Con 40 apps son ~2,1 s.
     Top,
@@ -213,6 +220,10 @@ impl Comando {
             Self::Doctor => {
                 json(&mut v);
                 v.push("doctor".into());
+            }
+            Self::DoctorArreglar => {
+                json(&mut v);
+                v.extend(["doctor".into(), "--fix".into(), "--yes".into()]);
             }
             Self::Top => {
                 json(&mut v);
@@ -433,6 +444,17 @@ mod tests {
         .argv(B)
         .unwrap();
         assert!(!v.iter().any(|x| x == "--json"));
+    }
+
+    #[test]
+    fn arreglar_lleva_el_yes_que_el_servidor_exige() {
+        // Sin `--yes`, `doctor --fix --json` se niega: sin terminal no hay a
+        // quién preguntar. Y ese camino estuvo documentado y MUERTO durante
+        // versiones, porque `--yes` no era una bandera global — así que contra
+        // un servidor viejo esto falla, y la interfaz vuelve a enseñar la orden
+        // para copiar.
+        let v = Comando::DoctorArreglar.argv(B).unwrap();
+        assert_eq!(v, [B, "--json", "doctor", "--fix", "--yes"]);
     }
 
     #[test]

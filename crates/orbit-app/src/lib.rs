@@ -152,6 +152,46 @@ fn doctor(alias: String, binario: Option<String>) -> Resultado {
     pedir(&alias, binario, Comando::Doctor)
 }
 
+/// El log de una app, **crudo**.
+///
+/// Devuelve el NDJSON tal cual y no una lista ya parseada, y es a propósito:
+/// `logs` es la única excepción del contrato —un flujo, no un objeto— y
+/// convertirlo aquí obligaría a inventar una tercera forma entre el servidor y
+/// la interfaz. El lector vive en `flujo.rs` y tiene su gemelo en TypeScript,
+/// que son dos y no tres.
+#[tauri::command]
+fn logs(
+    alias: String,
+    app: String,
+    desde: Option<String>,
+    binario: Option<String>,
+) -> Result<String, ErrorParaLaInterfaz> {
+    let s = servidor(&alias, binario);
+    let c = Comando::Logs {
+        app,
+        desde,
+        lineas: Some(500),
+        // Nunca en vivo por este camino: un flujo que no termina no se puede
+        // devolver de una llamada que sí. La pantalla en vivo es otra cosa.
+        seguir: false,
+        solo_nginx: false,
+    };
+    let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
+    Ok(r.stdout)
+}
+
+/// Aplica lo que el servidor sabe arreglar sin decidir nada por nadie.
+///
+/// Existe desde que `orbit doctor --fix --json --yes` funciona. Estuvo
+/// documentado y muerto durante versiones —`--yes` no era una bandera global y
+/// no había forma de dársela— así que contra un servidor más viejo esto falla,
+/// y la interfaz vuelve a enseñar la orden para copiar. Por eso la capacidad se
+/// **pregunta** y no se supone.
+#[tauri::command]
+fn doctor_arreglar(alias: String, binario: Option<String>) -> Resultado {
+    pedir(&alias, binario, Comando::DoctorArreglar)
+}
+
 /// Los alias de `~/.ssh/config`, para poder importarlos.
 ///
 /// **No conecta con ninguno**: enumerar no es visitar. Saber si en un alias hay
@@ -176,6 +216,8 @@ pub fn ejecutar() {
             lista,
             info,
             doctor,
+            doctor_arreglar,
+            logs,
             servidores_del_config,
         ])
         .run(tauri::generate_context!())
