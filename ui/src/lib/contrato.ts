@@ -242,3 +242,61 @@ export function leerLog(texto: string): Log {
   }
   return out
 }
+
+// ── el despliegue ──────────────────────────────────────────────────────────
+
+export interface Commit {
+  sha: string | null
+  subject: string | null
+  ref: string | null
+}
+
+export interface Despliegue {
+  schema: number
+  app: string
+  ok: boolean
+  release: string | null
+  /** La release anterior. Viaja en el objeto **precisamente** para poder
+   *  ofrecer la vuelta atrás sin una segunda llamada. */
+  previous: string | null
+  commit: Commit
+  /** Salió mal y se volvió atrás. */
+  rolled_back: boolean
+  /** Orbit arregló el build por su cuenta y reintentó. Es **distinto** de
+   *  `rolled_back` y se enseña distinto: los dos campos existen para que un
+   *  panel pueda distinguir lo que es distinto. */
+  recovered: boolean
+  duration_s: number
+  failed_step: string | null
+  error: string | null
+}
+
+export type FinalDeLote =
+  | 'deployed' | 'failed' | 'unchanged' | 'unreachable' | 'gone' | 'skipped'
+
+export interface AppDelLote {
+  app: string
+  status: FinalDeLote
+  /** El objeto de `deploy <app> --json` **sin recortar**. `null` en las que no
+   *  se han desplegado, y entonces el motivo va en `error`: un null es una
+   *  respuesta, un objeto a medias no. */
+  result: Despliegue | null
+  error: string | null
+}
+
+export interface Lote {
+  schema: number
+  apps: AppDelLote[]
+  total: number
+  deployed: number
+  failed: number
+  unchanged: number
+  unreachable: number
+  gone: number
+  skipped: number
+  /** La **misma regla que el código de salida**: ni fallidas, ni sin contacto,
+   *  ni ramas desaparecidas. Existe para que quien mire el objeto y quien mire
+   *  el rc no puedan discrepar nunca. */
+  ok: boolean
+  duration_s: number
+}

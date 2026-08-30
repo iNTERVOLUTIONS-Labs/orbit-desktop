@@ -6,6 +6,13 @@
   import ListaApps from './componentes/ListaApps.svelte'
   import Diagnostico from './componentes/Diagnostico.svelte'
   import VisorLog from './componentes/VisorLog.svelte'
+  import Despliegue from './componentes/Despliegue.svelte'
+  import LoteVista from './componentes/Lote.svelte'
+  import { leerProgreso } from './lib/despliegue'
+  import type { Despliegue as Obj, Lote } from './lib/contrato'
+  import loteMuestra from './lib/muestras/deploy-all.json'
+  import falloMuestra from './lib/muestras/deploy-fallido.json'
+  import okMuestra from './lib/muestras/deploy-ok.json'
   import { leerLog, type Doctor } from './lib/contrato'
   import doctorMuestra from './lib/muestras/doctor.json'
   import logCrudo from './lib/muestras/logs.ndjson?raw'
@@ -41,6 +48,24 @@
   // que el PR a Orbit desbloqueó, y verla lado a lado es lo que dice si el «sin
   // botón» sigue siendo útil.
   const DIAG = doctorMuestra as Doctor
+
+  const PROG = leerProgreso([
+    '{"event":"step","app":"tienda","step":"code","status":"start","elapsed_s":0}',
+    '{"event":"step","app":"tienda","step":"code","status":"ok","elapsed_s":3}',
+    '{"event":"step","app":"tienda","step":"release","status":"start","elapsed_s":3}',
+    '{"event":"step","app":"tienda","step":"release","status":"ok","elapsed_s":5}',
+    '{"event":"step","app":"tienda","step":"build","status":"start","elapsed_s":5}',
+    '{"event":"step","app":"tienda","step":"build","status":"ok","elapsed_s":103}',
+    '{"event":"step","app":"tienda","step":"activate","status":"start","elapsed_s":103}',
+  ].join('\n'))
+  const OK = okMuestra as Obj
+  const RECUPERADO: Obj = { ...OK, recovered: true, duration_s: 214 }
+  const REVERTIDO: Obj = {
+    ...OK, ok: false, rolled_back: true, release: null,
+    failed_step: 'service', duration_s: 64,
+    error: 'la app no responde al health check en 30 s',
+  }
+  const ROTO = falloMuestra as Obj
 
   const FALLOS = [
     {
@@ -150,6 +175,35 @@
   <div class="panel">
     <VisorLog log={LOG} app="app001" />
   </div>
+
+  <h2>El despliegue, en marcha</h2>
+  <p class="nota">
+    La barra está ponderada: seis pasos no valen un sexto cada uno, y el build
+    es el 70-85&nbsp;% del tiempo. Y es monótona creciente — una barra que
+    retrocede destruye más confianza que cualquier error.
+  </p>
+  <div class="panel"><Despliegue app="tienda" servidor="vps-ovh" progreso={PROG} /></div>
+
+  <h2>Los cuatro finales</h2>
+  <p class="nota">
+    El objeto no tiene un campo «resultado» con cuatro valores: tiene
+    <code>ok</code>, <code>rolled_back</code> y <code>recovered</code>, y su
+    combinación da cuatro finales que se ven distintos porque lo son.
+  </p>
+  {#each [['Bien', OK], ['Al segundo intento', RECUPERADO], ['Falló y volvió atrás', REVERTIDO], ['Falló', ROTO]] as [titulo, r] (titulo)}
+    <h3>{titulo}</h3>
+    <div class="panel">
+      <Despliegue app="tienda" servidor="vps-ovh" progreso={leerProgreso('')} resultado={r as Obj} />
+    </div>
+  {/each}
+
+  <h2>El lote, con sus seis finales</h2>
+  <p class="nota">
+    Seis y no dos. Confundir «al día» con «no he podido preguntar» costó un fallo
+    real: un remoto caído anunciado como «nada que hacer» cada cinco minutos,
+    durante días. Agruparlos está prohibido.
+  </p>
+  <div class="panel"><LoteVista lote={loteMuestra as Lote} servidor="vps-ovh" /></div>
 
   <h2>Cargando</h2>
   <p class="nota">
