@@ -1,0 +1,55 @@
+# ══ Excepciones de la auditoría de dependencias ═══════════════════════════
+#
+# La política, que está escrita en docs/QA.md §7.2 y aquí se cumple:
+#
+#   · Una **vulnerabilidad** falla el build. Sin excepciones.
+#   · Un aviso de **«sin mantenimiento»** para el que no hay arreglo puede
+#     ponerse aquí, y **con fecha de caducidad**. Pasada la fecha, vuelve a
+#     fallar.
+#
+# Lo segundo no es burocracia. Una excepción sin caducidad se convierte en
+# permanente en tres meses, y a partir de ahí el escaneo ya no dice nada: sigue
+# saliendo en verde y ha dejado de mirar. La fecha es lo que obliga a volver a
+# pensarlo.
+#
+# ── Qué son estas diecisiete ──────────────────────────────────────────────
+#
+# Ninguna es una vulnerabilidad. Son las ligaduras de **GTK3** que arrastra
+# Tauri en Linux —atk, gdk, gtk, gdkwayland, gdkx11 y sus -sys—, marcadas
+# «unmaintained» porque el ecosistema de gtk-rs se movió a GTK4. Tauri sigue en
+# GTK3 porque es lo que usa webkit2gtk, así que **no hay una versión mantenida
+# a la que subir**: no es una actualización que se nos haya olvidado hacer.
+#
+# Las otras —proc-macro-error, unic-*— entran por el mismo árbol.
+#
+# ── Qué se hace con esto ──────────────────────────────────────────────────
+#
+# Revisar en cada caducidad si Tauri ya ha migrado a GTK4 o si el proyecto
+# sigue justificando el envoltorio. Y si llegara a aparecer una vulnerabilidad
+# de verdad en cualquiera de estas cajas, esta lista **no la taparía**: sólo
+# silencia el aviso concreto de «sin mantenimiento», identificado por su ID.
+#
+# CADUCA: 2027-03-01
+[advisories]
+ignore = [
+  # atk, atk-sys, gdk, gdk-sys, gdkwayland-sys, gdkx11, gdkx11-sys,
+  # gtk, gtk-sys, gtk3-macros — las ligaduras GTK3 de Tauri.
+  "RUSTSEC-2024-0411",
+  "RUSTSEC-2024-0412",
+  "RUSTSEC-2024-0413",
+  "RUSTSEC-2024-0414",
+  "RUSTSEC-2024-0415",
+  "RUSTSEC-2024-0416",
+  "RUSTSEC-2024-0417",
+  "RUSTSEC-2024-0418",
+  "RUSTSEC-2024-0419",
+  "RUSTSEC-2024-0420",
+  "RUSTSEC-2024-0429",
+  # proc-macro-error y las unic-*, por el mismo árbol.
+  "RUSTSEC-2024-0370",
+  "RUSTSEC-2025-0075",
+  "RUSTSEC-2025-0080",
+  "RUSTSEC-2025-0081",
+  "RUSTSEC-2025-0098",
+  "RUSTSEC-2025-0100",
+]

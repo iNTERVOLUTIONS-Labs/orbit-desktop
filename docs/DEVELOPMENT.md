@@ -213,6 +213,44 @@ se acusa a sí misma da un número perfectamente consistente y perfectamente fal
 
 ---
 
+## 4b. Las excepciones de la auditoría, y por qué caducan
+
+`cargo audit` corre en cada tanda y **una vulnerabilidad falla el build, sin
+excepciones**. Es código de terceros ejecutándose en el proceso que sostiene las
+credenciales SSH del usuario, que es el argumento con el que se descartó
+Electron: no vale relajarlo aquí.
+
+Lo que sí admite excepción es un aviso de **«sin mantenimiento» para el que no
+hay arreglo**. Hoy hay diecisiete, y ninguna es una vulnerabilidad: son las
+ligaduras de **GTK3** que arrastra Tauri en Linux —`atk`, `gdk`, `gtk`,
+`gdkwayland`, `gdkx11` y sus `-sys`— marcadas así porque el ecosistema de
+`gtk-rs` se movió a GTK4. Tauri sigue en GTK3 porque es lo que usa `webkit2gtk`,
+así que **no hay una versión mantenida a la que subir**: no es una actualización
+que se nos haya olvidado hacer.
+
+Van en `.cargo/audit.toml`, **una a una por su identificador** —nunca una regla
+que silencie una categoría entera— y con una fecha:
+
+```
+# CADUCA: 2027-03-01
+```
+
+Y la fecha se comprueba, que es lo único que la hace valer:
+
+```bash
+tools/caducidad-excepciones.sh
+```
+
+Corre en CI **antes** de auditar y falla si la fecha pasó, o si hay excepciones
+y no hay fecha. Sin eso, una excepción se vuelve permanente en tres meses y a
+partir de ahí el escaneo sigue saliendo en verde **habiendo dejado de mirar**,
+que es peor que no tenerlo: afirma algo que ya no comprueba.
+
+Cuando caduque, lo que toca es mirar si Tauri ya ha migrado a GTK4 —o si el
+envoltorio sigue justificándose— y no ampliar la fecha por inercia.
+
+---
+
 ## 5. Cómo se audita el contrato cuando Orbit cambia
 
 Orbit sube de versión sin que el contrato cambie —es lo normal— pero cuando

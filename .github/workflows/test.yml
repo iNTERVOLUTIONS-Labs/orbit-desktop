@@ -114,10 +114,19 @@ jobs:
         # siempre, también cuando pasa.
         run: ORBIT_SEMILLA=$RANDOM ORBIT_CASOS=800 cargo test -p orbit-client --test escapado -- --nocapture
 
+      - name: Las excepciones de la auditoría siguen vigentes
+        # Antes de auditar, se comprueba que las excepciones no hayan caducado.
+        # Sin esto, una excepción se vuelve permanente y el escaneo pasa a salir
+        # en verde habiendo dejado de mirar.
+        run: ./tools/caducidad-excepciones.sh
+
       - name: Auditoría de dependencias
-        # Falla el build en alta y crítica. Es código de terceros ejecutándose en
-        # el proceso que sostiene las credenciales SSH del usuario, que es el
-        # argumento con el que se descartó Electron.
+        # Una vulnerabilidad falla el build, sin excepciones. Es código de
+        # terceros ejecutándose en el proceso que sostiene las credenciales SSH
+        # del usuario, que es el argumento con el que se descartó Electron.
+        #
+        # Los avisos de «sin mantenimiento» sin arreglo disponible están en
+        # .cargo/audit.toml, uno a uno por su ID y con fecha de caducidad.
         run: |
           cargo install cargo-audit --locked --quiet || true
           cargo audit --deny warnings
