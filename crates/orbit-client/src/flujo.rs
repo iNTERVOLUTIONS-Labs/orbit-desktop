@@ -144,10 +144,81 @@ pub fn leer_log(texto: &str) -> Lectura {
 /// puede atribuir a nadie.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct PasoDeDespliegue {
+    /// `step` para un paso de un despliegue, `app` para el final de una app
+    /// dentro de un lote. Los dos niveles se mezclan por el mismo canal, y por
+    /// eso hay que mirar esto antes que nada.
     pub event: String,
+    /// **Siempre se usa para atribuir**, también en un despliegue de una sola
+    /// app. Es el campo que se añadió justo para que un lote pueda mezclar
+    /// niveles por el mismo canal, y usarlo desde el principio evita tener dos
+    /// analizadores.
     pub app: Option<String>,
     pub step: Option<String>,
     pub status: Option<String>,
+    /// Segundos desde que empezó. Es lo que permite que la barra tenga su
+    /// propio reloj: los sucesos llegan cuando llegan, y una barra que sólo se
+    /// moviera con ellos estaría quieta noventa segundos durante el build y
+    /// luego daría un salto.
+    pub elapsed_s: Option<u64>,
+}
+
+/// Los seis pasos de un despliegue, en orden, con lo que pesa cada uno.
+///
+/// **Seis pasos no valen un sexto cada uno**: el build es típicamente el 70-85 %
+/// del tiempo, así que una barra lineal se quedaría clavada en el 33 % durante
+/// dos minutos y luego correría hasta el final. Estos son los pesos por defecto,
+/// para cuando no hay histórico.
+pub const PASOS: [(&str, &str, f32); 6] = [
+    ("code", "actualizar el clon de git", 0.05),
+    ("release", "copiar a la release nueva", 0.05),
+    ("build", "compilar", 0.70),
+    ("activate", "mover el symlink current", 0.03),
+    ("service", "reiniciar y esperar al health check", 0.12),
+    ("nginx", "recargar nginx", 0.05),
+];
+
+/// Los pesos afinados con el histórico de la app, si lo hay.
+///
+/// `build_median_s` y la mediana total salen de `orbit metrics <app> --json`. Si
+/// el servidor **se calla la tendencia** —lo hace con menos de seis builds,
+/// porque dos datos no son una tendencia y fingirla es peor que no tenerla— la
+/// interfaz respeta ese silencio en vez de rellenarlo: se usan los pesos por
+/// defecto y se dice que es una estimación sin histórico.
+pub fn pesos(build_mediana_s: Option<u64>, total_mediana_s: Option<u64>) -> [f32; 6] {
+    let por_defecto = [0.05, 0.05, 0.70, 0.03, 0.12, 0.05];
+    let (b, t) = match (build_mediana_s, total_mediana_s) {
+        (Some(b), Some(t)) if t > 0 && b <= t => (b as f32, t as f32),
+        _ => return por_defecto,
+    };
+    let peso_build = (b / t).clamp(0.05, 0.95);
+    // El resto se reparte proporcionalmente a lo que pesaban por defecto entre
+    // ellos, para no inventarse una distribución nueva con un solo dato.
+    let resto_defecto: f32 =
+        por_defecto[0] + por_defecto[1] + por_defecto[3] + por_defecto[4] + por_defecto[5];
+    let escala = (1.0 - peso_build) / resto_defecto;
+    [
+        por_defecto[0] * escala,
+        por_defecto[1] * escala,
+        peso_build,
+        por_defecto[3] * escala,
+        por_defecto[4] * escala,
+        por_defecto[5] * escala,
+    ]
+}
+
+/// Hasta dónde llega la barra con los pasos ya terminados.
+///
+/// **Monótona creciente, nunca retrocede.** Una barra que retrocede destruye más
+/// confianza que cualquier error, así que si un cálculo diera menos que lo ya
+/// pintado, manda lo ya pintado.
+pub fn avance(terminados: &[String], pesos: &[f32; 6], anterior: f32) -> f32 {
+    let mut a = 0.0f32;
+    for (i, (nombre, _, _)) in PASOS.iter().enumerate() {
+        if terminados.iter().any(|t| t == nombre) {
+            a += pesos[i];
+        }
+    }
+    a.max(anterior).clamp(0.0, 1.0)
 }
 
 /// Lee el progreso. Misma regla: **una línea rota no tumba un despliegue.**
@@ -306,6 +377,53 @@ mod tests {
         let (pasos, _) = leer_progreso(e);
         assert_eq!(pasos[0].app.as_deref(), Some("una"));
         assert_eq!(pasos[1].app.as_deref(), Some("otra"));
+    }
+
+    #[test]
+    fn los_pesos_por_defecto_suman_uno_y_el_build_manda() {
+        let p = pesos(None, None);
+        assert!((p.iter().sum::<f32>() - 1.0).abs() < 0.001);
+        // El build es el paso largo: una barra que le diera un sexto se
+        // quedaría clavada dos minutos y luego correría hasta el final.
+        assert!(p[2] > 0.5);
+    }
+
+    #[test]
+    fn con_historico_los_pesos_salen_de_lo_medido() {
+        // 90 s de build sobre 120 s totales: el build pesa tres cuartos.
+        let p = pesos(Some(90), Some(120));
+        assert!((p[2] - 0.75).abs() < 0.01);
+        assert!((p.iter().sum::<f32>() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn un_historico_absurdo_no_desbarata_la_barra() {
+        // Un build más largo que el total no puede pasar, y si pasa no se
+        // convierte en una barra con pesos negativos.
+        let p = pesos(Some(500), Some(10));
+        assert_eq!(p, pesos(None, None), "se vuelve a los pesos por defecto");
+        let q = pesos(Some(0), Some(0));
+        assert_eq!(q, pesos(None, None));
+    }
+
+    #[test]
+    fn la_barra_nunca_retrocede() {
+        // Una barra que retrocede destruye más confianza que cualquier error.
+        let p = pesos(None, None);
+        let hechos = vec!["code".to_string(), "release".to_string()];
+        let a = avance(&hechos, &p, 0.0);
+        // Un cálculo que diera menos que lo ya pintado no puede ganar.
+        assert_eq!(avance(&[], &p, a), a);
+        assert!(avance(&hechos, &p, 0.9) >= 0.9);
+    }
+
+    #[test]
+    fn la_barra_no_llega_al_final_antes_de_tiempo() {
+        let p = pesos(None, None);
+        let casi: Vec<String> = PASOS[..5].iter().map(|(n, _, _)| n.to_string()).collect();
+        assert!(avance(&casi, &p, 0.0) < 1.0);
+        let todos: Vec<String> = PASOS.iter().map(|(n, _, _)| n.to_string()).collect();
+        assert!((avance(&todos, &p, 0.0) - 1.0).abs() < 0.001);
     }
 
     #[test]

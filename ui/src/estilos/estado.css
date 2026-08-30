@@ -112,3 +112,21 @@
    cambie, tiene que cambiar en un sitio. */
 .log--error .canal { color: var(--st-error); }
 .log--access .canal, .log--journal .canal { color: var(--st-unknown); }
+
+/* Los cuatro finales de un despliegue. Se ven distintos porque SON distintos:
+   el objeto no tiene un campo «resultado» con cuatro valores, tiene `ok`,
+   `rolled_back` y `recovered`, y su combinación da estos cuatro. */
+.final--bien        { border-color: var(--st-ok); }
+/* Ni rojo ni igual que un éxito limpio: cuatro seguidos son un patrón que
+   alguien debería mirar. */
+.final--recuperado  { border-color: var(--st-warn); }
+/* Falló, pero la web sigue en pie — y eso es lo primero que se dice. */
+.final--revertido   { border-color: var(--st-warn); }
+.final--roto        { border-color: var(--st-error); }
+.final--bien       .titular { color: var(--st-ok); }
+.final--recuperado .titular { color: var(--st-warn); }
+.final--revertido  .titular { color: var(--st-ok); }
+.final--roto       .titular { color: var(--st-error); }
+.paso--hecho    .glifo { color: var(--st-ok); }
+.paso--haciendo .glifo { color: var(--st-warn); }
+.paso--pendiente .glifo { color: var(--st-unknown); }

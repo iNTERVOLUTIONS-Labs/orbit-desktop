@@ -72,7 +72,17 @@ no ve ni `nginx -t` ni `orbit list`.
 con la conexión caliente, y contra el servidor falso se ven en pantalla las ocho
 clasificaciones de estado.
 
-## Fase 2 · Desplegar 📋
+## Fase 2 · Desplegar 🚧
+
+Hecho el núcleo de la pantalla: la barra ponderada con los seis pasos y su
+cronómetro, los cuatro finales de un despliegue, y **el lote con sus seis
+finales separados**, que es lo que justifica el proyecto — la salida en prosa no
+los distinguía y confundir dos de ellos costó un fallo real.
+
+Falta engancharlo al transporte en vivo: hoy la pantalla lee el flujo, y lo que
+queda es el canal que lo va sirviendo mientras ocurre.
+
+### Lo que había aquí
 
 `deploy <app> --json --progress` con la barra de pasos y la estimación sacada de
 `build_median_s`. `deploy --all` con los **seis** finales pintados separados.
