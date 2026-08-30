@@ -20,7 +20,7 @@ jobs:
     # la primera vez que se ejecutó sólo se daba en zsh.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Instalar los cuatro shells
         run: sudo apt-get update -qq && sudo apt-get install -y -qq dash zsh busybox
@@ -34,13 +34,18 @@ jobs:
             command -v "$s" >/dev/null || { echo "falta $s: la prueba no está completa"; exit 1; }
           done
 
+      # Los números están elegidos, no puestos a ojo: cada caso son cuatro
+      # procesos —uno por shell— y con 5.000 el trabajo tardaba 8m25s, que es un
+      # peaje en cada PR y acaba haciendo que alguien lo quiera quitar. Con 1.200
+      # baja a poco más de dos minutos y sigue cubriendo el corpus fijo entero,
+      # que es donde viven los casos que ya han fallado alguna vez.
       - name: Prueba de propiedad del escapado
-        run: python3 tests/escaping/prop_test.py 20260830 5000
+        run: python3 tests/escaping/prop_test.py 20260830 1200
 
       - name: Y con semilla aleatoria, para que no se fosilice el corpus
         # La semilla se imprime siempre, también cuando pasa: un fallo que no se
         # puede reproducir no es un fallo, es una anécdota.
-        run: python3 tests/escaping/prop_test.py "$RANDOM" 2000
+        run: python3 tests/escaping/prop_test.py "$RANDOM" 600
 
   contrato:
     # Mide el contrato contra un Orbit de verdad con 40 apps. No es una prueba
@@ -48,10 +53,10 @@ jobs:
     # queden viejas sin que nadie se entere.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Traer Orbit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: iNTERVOLUTIONS-Labs/orbit
           path: .orbit
@@ -67,7 +72,7 @@ jobs:
   documentacion:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Ningún enlace interno roto
         run: |
           rc=0
