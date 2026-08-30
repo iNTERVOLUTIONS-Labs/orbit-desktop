@@ -44,6 +44,11 @@ pub enum ErrorForma {
     NombreDeApp(String),
     ClaveDeEntorno(String),
     Release(String),
+    /// `orbit exec` sin comando abre un `bash` interactivo. Un cliente sin
+    /// terminal no puede con eso, y fingir medio terminal es peor que no
+    /// ofrecerlo: lo que se ofrece en su lugar es la orden `ssh` para pegarla
+    /// en un terminal de verdad.
+    ExecSinComando,
     Escapado(shquote::ErrorEscapado),
 }
 
@@ -53,6 +58,10 @@ impl std::fmt::Display for ErrorForma {
             Self::NombreDeApp(s) => write!(f, "«{s}» no tiene forma de nombre de app"),
             Self::ClaveDeEntorno(s) => write!(f, "«{s}» no tiene forma de variable de entorno"),
             Self::Release(s) => write!(f, "«{s}» no tiene forma de release"),
+            Self::ExecSinComando => write!(
+                f,
+                "«orbit exec» sin comando abre una shell interactiva, y aquí no hay terminal"
+            ),
             Self::Escapado(e) => write!(f, "{e}"),
         }
     }
@@ -110,6 +119,19 @@ pub fn release_valida(s: &str) -> bool {
         None => true,
         Some(s) => !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()),
     }
+}
+
+/// Cómo viaja lo que alguien escribe en la pantalla de `exec`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModoDeExec {
+    /// Argumentos separados. **No pasa por ningún shell**: el servidor ejecuta
+    /// el `argv` tal cual, así que un `&&` es un argumento literal y no un
+    /// operador. Es el modo por defecto porque es el que no sorprende.
+    Argumentos(Vec<String>),
+    /// Un solo argumento con el texto entero. El servidor lo reconoce por su
+    /// regla y lo pasa a `bash -lc`, así que aquí `&&`, `|` y `$(…)` **sí**
+    /// hacen lo que parece.
+    Shell(String),
 }
 
 /// Qué se le puede pedir a un servidor. **Este enumerado es la superficie.**
@@ -175,6 +197,32 @@ pub enum Comando {
     },
     DesplegarTodo {
         progreso: bool,
+    },
+    /// Ejecuta algo dentro de una app.
+    ///
+    /// **Es la puerta trasera, y se trata como tal.** No se usa para nada de la
+    /// interfaz —ni para leer un fichero, ni para contar releases, ni para
+    /// tapar un hueco del contrato—, porque el día que se use, el cliente deja
+    /// de hablar el contrato y pasa a hablar Bash contra un servidor cuyo
+    /// layout puede cambiar.
+    ///
+    /// Los dos modos existen porque el servidor tiene una **regla del argumento
+    /// único**: si le llega uno solo y contiene metacaracteres, lo ejecuta con
+    /// `bash -lc`; con dos o más, ejecuta el `argv` tal cual. O sea que
+    /// `exec web "ls -la"` y `exec web ls -la` **no son lo mismo**.
+    ///
+    /// Aplicar esa heurística por dentro sería lo peor de las tres opciones:
+    /// quien escribe no podría predecir cuándo su `&&` se ejecuta y cuándo se
+    /// pasa como texto, y **una herramienta de depuración que no es predecible
+    /// tampoco sirve**. Así que se elige, y se ve.
+    ///
+    /// Nótese lo que esto **no** es: aunque uno de los modos acabe en un shell
+    /// remoto, el cliente **nunca construye una cadena de shell**. Pasa N
+    /// argumentos o pasa uno, y los dos caminos van por el mismo escapador. La
+    /// decisión de meter eso en un shell la toma Orbit, no nosotros.
+    Ejecutar {
+        app: String,
+        modo: ModoDeExec,
     },
     /// La release es obligatoria: sin ella y sin terminal, `rollback` aborta —y
     /// hace bien, porque el «valor por defecto» sería la que ya está activa.
@@ -331,6 +379,34 @@ impl Comando {
                     v.push("--progress".into());
                 }
             }
+            Self::Ejecutar { app, modo } => {
+                // Sin '--json': la salida de `exec` es la del comando, sin
+                // envolver y sin formatear, y eso es lo correcto. Orbit lo
+                // rechaza explícitamente por delante, y por detrás se lo pasa al
+                // comando — que es lo que quiere quien escribe
+                // `orbit exec app mi-script --json`.
+                v.push("exec".into());
+                v.push(app_ok(app)?);
+                match modo {
+                    ModoDeExec::Argumentos(args) => {
+                        if args.is_empty() {
+                            // Sin comando, `orbit exec` abre un bash
+                            // interactivo, y un cliente sin terminal no puede
+                            // con eso. Fingir medio terminal es, en palabras de
+                            // la propia documentación de Orbit, la peor
+                            // solución de todas.
+                            return Err(ErrorForma::ExecSinComando);
+                        }
+                        v.extend(args.iter().cloned());
+                    }
+                    ModoDeExec::Shell(texto) => {
+                        if texto.trim().is_empty() {
+                            return Err(ErrorForma::ExecSinComando);
+                        }
+                        v.push(texto.clone());
+                    }
+                }
+            }
             Self::Revertir { app, release } => {
                 if !release_valida(release) {
                     return Err(ErrorForma::Release(release.clone()));
@@ -458,6 +534,88 @@ mod tests {
     }
 
     #[test]
+    fn los_dos_modos_de_exec_producen_argv_distintos() {
+        // `exec web "ls -la"` y `exec web ls -la` NO son lo mismo: el primero
+        // pasa por un shell y el segundo no. La diferencia se elige, no se
+        // adivina — una herramienta de depuración que no es predecible tampoco
+        // sirve.
+        let uno = Comando::Ejecutar {
+            app: "web".into(),
+            modo: ModoDeExec::Shell("ls -la".into()),
+        }
+        .argv(B)
+        .unwrap();
+        let otro = Comando::Ejecutar {
+            app: "web".into(),
+            modo: ModoDeExec::Argumentos(vec!["ls".into(), "-la".into()]),
+        }
+        .argv(B)
+        .unwrap();
+        assert_eq!(uno, [B, "exec", "web", "ls -la"]);
+        assert_eq!(otro, [B, "exec", "web", "ls", "-la"]);
+        assert_ne!(uno, otro);
+    }
+
+    #[test]
+    fn exec_no_lleva_json() {
+        // La salida de `exec` es la del comando, sin envolver. Orbit rechaza
+        // `--json` por delante, y por detrás se lo pasa al comando — que es lo
+        // que quiere quien escribe `orbit exec app mi-script --json`.
+        let v = Comando::Ejecutar {
+            app: "web".into(),
+            modo: ModoDeExec::Shell("ls".into()),
+        }
+        .argv(B)
+        .unwrap();
+        assert!(!v.iter().any(|x| x == "--json"));
+    }
+
+    #[test]
+    fn exec_sin_comando_se_rechaza_aqui() {
+        // Sin comando, `orbit exec` abre un bash interactivo, y un cliente sin
+        // terminal no puede con eso. Fingir medio terminal es peor que no
+        // ofrecerlo.
+        for modo in [
+            ModoDeExec::Argumentos(vec![]),
+            ModoDeExec::Shell("   ".into()),
+        ] {
+            let r = Comando::Ejecutar {
+                app: "web".into(),
+                modo,
+            }
+            .argv(B);
+            assert_eq!(r, Err(ErrorForma::ExecSinComando));
+        }
+    }
+
+    #[test]
+    fn el_texto_de_exec_sobrevive_al_escapado() {
+        // Es texto arbitrario por diseño, y tiene que llegar entero: la prueba
+        // de propiedad lo comprueba contra cuatro shells, aquí sólo se fija que
+        // viaja como UN argumento.
+        let sucio = "psql \"select * from t where x = 'y'\" && echo $HOME";
+        let v = Comando::Ejecutar {
+            app: "web".into(),
+            modo: ModoDeExec::Shell(sucio.into()),
+        }
+        .argv(B)
+        .unwrap();
+        assert_eq!(v.len(), 4);
+        assert_eq!(v[3], sucio);
+    }
+
+    #[test]
+    fn la_lista_de_patrones_es_pedagogica_y_se_sabe() {
+        // No impide nada —hay mil formas de escribir un rm— y por eso su valor
+        // es parar el error de dedos a las tres de la mañana, no defender.
+        assert!(parece_peligroso("rm -rf /srv/apps").is_some());
+        assert!(parece_peligroso("DROP DATABASE tienda").is_some());
+        assert!(parece_peligroso("php artisan migrate").is_none());
+        // Y se salta sin proponérselo, que es justo lo que hay que documentar.
+        assert!(parece_peligroso("cd / && rm -rf apps").is_none());
+    }
+
+    #[test]
     fn logs_es_el_unico_flujo() {
         assert!(Comando::Logs {
             app: "web".into(),
@@ -494,4 +652,31 @@ mod tests {
         let c = Comando::Info { app: String::new() };
         assert!(c.argv(B).is_err());
     }
+}
+
+/// Los patrones que hacen que la pantalla de `exec` pida una confirmación
+/// reforzada.
+///
+/// **Es una lista negra, y por eso su valor es pedagógico y no defensivo.** No
+/// impide nada: hay mil formas de escribir un `rm`, y quien quiera saltársela lo
+/// hará sin proponérselo. Lo que sí para es el **error de dedos a las tres de la
+/// mañana**, que es el caso real y el único contra el que una lista así sirve.
+///
+/// Se documenta así a propósito para que nadie la confunda con una protección y
+/// construya encima suponiendo que lo es.
+pub fn parece_peligroso(texto: &str) -> Option<&'static str> {
+    let t = texto.to_lowercase();
+    const PATRONES: [(&str, &str); 7] = [
+        ("rm -rf /", "borra recursivamente desde una ruta absoluta"),
+        ("drop database", "borra una base de datos entera"),
+        ("truncate", "vacía una tabla"),
+        ("mkfs", "formatea un sistema de ficheros"),
+        ("dd of=/dev/", "escribe directamente sobre un dispositivo"),
+        ("chmod -r 777 /", "abre los permisos de todo"),
+        ("> /dev/sd", "escribe sobre un disco"),
+    ];
+    PATRONES
+        .iter()
+        .find(|(p, _)| t.contains(p))
+        .map(|(_, q)| *q)
 }

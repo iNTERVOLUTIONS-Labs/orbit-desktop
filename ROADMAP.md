@@ -106,7 +106,7 @@ cada cinco minutos— y el contrato tiene seis finales justamente para que un
 cliente no pueda repetirlo. **Agruparlos en «correctas / fallidas» está
 prohibido.**
 
-## Fase 3 · Operar 🚧
+## Fase 3 · Operar ✅
 
 Adelantada en parte, porque el PR a Orbit la desbloqueó antes de tiempo: ya está
 el **log** —con el filtro que separa el de acceso del de error, que es lo que la
@@ -125,7 +125,11 @@ VPS con IP pública es la mayoría—, una ventana que el log ya no cubre se anu
 recortada, un percentil sin muestras no se pinta como cero, y la tendencia no se
 dibuja plana cuando el servidor se la calla.
 
-Falta la terminal de `exec`.
+Y la pantalla de **`exec`**, que es la puerta trasera y se trata como tal: los
+cuatro datos siempre a la vista, los dos modos explícitos en vez de la
+heurística invisible del servidor, la orden exacta antes de ejecutarla, el
+histórico que no toca el disco, y **sin shell interactiva** — se ofrece la orden
+para pegarla en un terminal de verdad, que es más honesto que emular medio.
 
 ### Lo que había aquí, ya hecho
 

@@ -15,7 +15,8 @@
 import {
   leerLog,
   type App, type Despliegue, type Doctor, type Entorno,
-  type Envoltorio, type Lista, type Log, type Metricas, type Monitor, type Trafico,
+  type Envoltorio, type Lista, type Log, type Metricas, type Monitor,
+  type SalidaDeExec, type Trafico,
 } from './contrato'
 
 import listaSana from './muestras/list.json'
@@ -194,4 +195,31 @@ export async function metricas(alias: string, app: string): Promise<Metricas> {
   const m = r.apps[0]
   if (!m) throw { clase: 'sin-datos', mensaje: `no hay métricas de «${app}»` }
   return m
+}
+
+/**
+ * Ejecuta algo dentro de una app. **La puerta trasera.**
+ *
+ * `shell: true` manda el texto como un argumento y el servidor lo pasa a
+ * `bash -lc`; `false` manda los argumentos separados. La diferencia la elige
+ * quien escribe, y la ve.
+ */
+export async function correr(
+  alias: string, app: string, shell: boolean, argumentos: string[],
+): Promise<SalidaDeExec> {
+  if (!hayPuente()) {
+    // Sin servidor **no se simula una salida**. Fingir que un comando se
+    // ejecutó en un servidor que no existe es la clase de mentira que esta
+    // pantalla no se puede permitir: alguien miraría la salida y creería que su
+    // migración corrió.
+    await new Promise((r) => setTimeout(r, 200))
+    return {
+      orden: `orbit exec ${app} ${shell ? JSON.stringify(argumentos.join(' ')) : argumentos.join(' ')}`,
+      stdout: '',
+      stderr: 'Sin envoltorio de escritorio: aquí no se ejecuta nada.\n' +
+              'Esta pantalla no simula salidas, porque una salida de mentira se lee igual que una de verdad.\n',
+      codigo: 1,
+    }
+  }
+  return invocar<SalidaDeExec>('correr', { alias, app, shell, argumentos })
 }

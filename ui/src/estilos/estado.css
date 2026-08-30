@@ -144,3 +144,10 @@
 /* Una tendencia que empeora. Ámbar y no rojo: que el build tarde más no es una
    avería, es algo que mirar. */
 .tendencia--peor strong { color: var(--st-warn); }
+
+/* La pantalla de `exec`. La advertencia de los secretos y el aviso de un patrón
+   peligroso son estados, así que su aspecto se decide aquí. */
+.secretos { border-left: 3px solid var(--st-warn); }
+.peligro strong { color: var(--st-warn); }
+.chorro--err { border-left: 3px solid var(--st-error); }
+.codigo--mal { color: var(--st-error); }
