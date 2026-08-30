@@ -130,3 +130,8 @@
 .paso--hecho    .glifo { color: var(--st-ok); }
 .paso--haciendo .glifo { color: var(--st-warn); }
 .paso--pendiente .glifo { color: var(--st-unknown); }
+
+/* Una hoja de comando peligrosa. El borde rojo va aquí y no en el componente
+   por la misma regla: el aspecto de «esto es grave» se decide en un sitio. */
+.hoja--peligrosa { border-color: var(--st-error); }
+.hoja--peligrosa .confirmar { background: var(--st-error); color: var(--on-solid); }

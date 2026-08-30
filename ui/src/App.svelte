@@ -5,9 +5,14 @@
   import Fallo from './componentes/Fallo.svelte'
   import Diagnostico from './componentes/Diagnostico.svelte'
   import VisorLog from './componentes/VisorLog.svelte'
+  import DespliegueVista from './componentes/Despliegue.svelte'
+  import HojaDeComando from './componentes/HojaDeComando.svelte'
+  import AvisoDeCierre from './componentes/AvisoDeCierre.svelte'
+  import * as vivos from './lib/vivos.svelte'
   import type { App, Doctor, Log } from './lib/contrato'
   import {
-    arreglar, diagnostico, hayPuente, log as pedirLog, portada, servidoresDelConfig,
+    arreglar, cancelar, desplegar, diagnostico, hayPuente,
+    log as pedirLog, portada, servidoresDelConfig,
     type AliasSsh, type ErrorDelPuente,
   } from './lib/puente'
 
@@ -27,7 +32,32 @@
 
   // El log de la app elegida. También bajo demanda.
   let log = $state<Log | null>(null)
-  let pestana = $state<'detalle' | 'log'>('detalle')
+  let pestana = $state<'detalle' | 'log' | 'despliegue'>('detalle')
+
+  // La hoja de comando de un despliegue. Se enseña la orden literal ANTES de
+  // ejecutarla: es la prueba visible de que esto sólo invoca `orbit`.
+  let hoja = $state<App | null>(null)
+
+  vivos.escuchar()
+
+  async function lanzar(a: App) {
+    hoja = null
+    pestana = 'despliegue'
+    const k = vivos.clave(alias, a.name)
+    vivos.empezar(alias, a.name)
+    try {
+      vivos.terminar(k, await desplegar(alias, a.name))
+      // Un despliegue cambia el estado de la app: la portada deja de ser de
+      // fiar y se vuelve a pedir, en vez de parchear la fila a mano.
+      apps = null
+      cargar(alias)
+    } catch (e) {
+      const err = e as ErrorDelPuente
+      // NO se llama fallo. Si se perdió el contacto, el despliegue sigue en el
+      // servidor y el cliente ya no sabe qué pasó.
+      vivos.perder(k, err.mensaje)
+    }
+  }
 
   async function cargar(a: string) {
     alias = a
@@ -102,6 +132,18 @@
   })
 </script>
 
+{#if hoja}
+  <HojaDeComando
+    titulo="Desplegar {hoja.name}"
+    servidor={alias}
+    orden="orbit deploy {hoja.name}"
+    consecuencia="Actualiza el clon, compila en una release nueva y sólo al final mueve el symlink. Si el build falla, la versión que está publicada ahora ni se entera. Al reiniciar el proceso puede haber uno o dos segundos sin respuesta."
+    verbo="Desplegar"
+    alConfirmar={() => lanzar(hoja!)}
+    alCancelar={() => (hoja = null)}
+  />
+{/if}
+
 <div class="marco">
   <!-- El servidor activo está SIEMPRE visible, no escondido en un desplegable
        que se lee al entrar. El accidente más caro de un cliente multiservidor
@@ -112,6 +154,7 @@
     <p class="marca">Orbit</p>
     <ul>
       {#each servidores as s (s.alias)}
+        {@const enMarcha = vivos.enCurso(s.alias).length}
         <li>
           <button
             type="button"
@@ -122,6 +165,14 @@
             onclick={() => cargar(s.alias)}
           >
             {s.alias}
+            {#if enMarcha > 0}
+              <!-- Volver a un despliegue tiene que ser un clic: mientras corre,
+                   el servidor lleva su contador. -->
+              <span
+                class="corriendo"
+                title={enMarcha === 1 ? 'un despliegue en curso' : `${enMarcha} despliegues en curso`}
+              >◐ {enMarcha}</span>
+            {/if}
             {#if s.salto}
               <!-- Un salto se anuncia porque cambia lo que se puede prometer
                    sobre la latencia: el saludo se paga dos veces. -->
@@ -140,6 +191,7 @@
   </nav>
 
   <main>
+    <AvisoDeCierre />
     <header class="cabecera">
       <h1>{alias || '—'}</h1>
       {#if apps && vista === 'apps'}
@@ -193,9 +245,46 @@
           <button type="button" class:activo={pestana === 'log'} onclick={() => verLog(elegida!)}>
             log
           </button>
+          {#if vivos.ver(alias, elegida.name)}
+            <button type="button" class:activo={pestana === 'despliegue'} onclick={() => (pestana = 'despliegue')}>
+              despliegue
+            </button>
+          {/if}
+          <button type="button" class="lanzar" onclick={() => (hoja = elegida)}>
+            Desplegar
+          </button>
         </nav>
         {#if pestana === 'detalle'}
           <DetalleApp app={elegida} servidor={alias} />
+        {:else if pestana === 'despliegue'}
+          {@const v = vivos.ver(alias, elegida.name)}
+          {#if v}
+            {#if v.error}
+              <!-- Perder el contacto NO es fallar. El despliegue sigue en el
+                   servidor y ya no sabemos qué pasó; decirlo es incómodo y
+                   verdadero, y viene con la forma de averiguarlo. -->
+              <div class="log-envoltorio">
+                <p class="perdido" role="alert">
+                  He perdido el contacto durante el despliegue. <strong>El estado es
+                  desconocido</strong>: puede haber terminado, puede seguir. No lo
+                  reintento solo — dos despliegues a la vez sobre la misma app son,
+                  en el mejor caso, dos releases.
+                </p>
+                <p class="perdido-que">
+                  Para saberlo: mira las releases y el último despliegue en la
+                  pestaña de detalle. <span class="motivo">{v.error}</span>
+                </p>
+              </div>
+            {:else}
+              <DespliegueVista
+                app={elegida.name}
+                servidor={alias}
+                progreso={v.progreso}
+                resultado={v.resultado}
+                crudo={v.crudo}
+              />
+            {/if}
+          {/if}
         {:else if log}
           <div class="log-envoltorio"><VisorLog {log} app={elegida.name} /></div>
         {:else}
@@ -258,4 +347,13 @@
   .vistas button.activo, .pestanas button.activo { border-color: var(--border-strong); color: var(--fg); }
   .vistas button:focus-visible, .pestanas button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   .log-envoltorio { padding: var(--e-3) var(--e-5) var(--e-5); }
+  .corriendo { font-family: var(--mono); font-size: 11px; color: var(--accent-text); }
+  .lanzar {
+    margin-left: auto;
+    border: 1px solid var(--border-strong) !important;
+    color: var(--fg) !important;
+  }
+  .perdido { margin: 0; font-size: 13px; color: var(--fg); max-width: 68ch; }
+  .perdido-que { margin: var(--e-3) 0 0; font-size: 12px; color: var(--fg-muted); max-width: 68ch; }
+  .motivo { font-family: var(--mono); }
 </style>

@@ -8,6 +8,7 @@
   import VisorLog from './componentes/VisorLog.svelte'
   import Despliegue from './componentes/Despliegue.svelte'
   import LoteVista from './componentes/Lote.svelte'
+  import HojaDeComando from './componentes/HojaDeComando.svelte'
   import { leerProgreso } from './lib/despliegue'
   import type { Despliegue as Obj, Lote } from './lib/contrato'
   import loteMuestra from './lib/muestras/deploy-all.json'
@@ -205,6 +206,43 @@
   </p>
   <div class="panel"><LoteVista lote={loteMuestra as Lote} servidor="vps-ovh" /></div>
 
+  <h2>La hoja de comando</h2>
+  <p class="nota">
+    Antes de cambiar nada, la orden literal. Existe por tres motivos y ninguno es
+    estético: es la <strong>prueba visible</strong> de que esto sólo invoca
+    <code>orbit</code> —la promesa que lo deja existir—; enseña la CLI mientras se
+    usa el ratón; y convierte «¿qué va a pasar?» en algo que se lee.
+  </p>
+  <div class="panel hoja-demo">
+    <HojaDeComando
+      titulo="Volver atrás"
+      servidor="vps-ovh"
+      orden="orbit rollback tienda 20260805-041230"
+      consecuencia="Reinicia el servicio y recarga nginx. La web deja de responder entre uno y dos segundos. Y si la app tiene el autodespliegue puesto, el siguiente ciclo del temporizador volverá a poner la versión de la que estás saliendo."
+      verbo="Volver atrás"
+      alConfirmar={() => {}}
+      alCancelar={() => {}}
+    />
+  </div>
+  <p class="nota">
+    Y cuando el daño es irreversible, hay que escribir el nombre. La fricción es
+    un recurso escaso: se gasta donde no hay vuelta atrás y en ningún otro sitio,
+    porque pedirla para todo enseña a teclear sin leer.
+  </p>
+  <div class="panel hoja-demo">
+    <HojaDeComando
+      titulo="Retirar y borrar los datos"
+      servidor="vps-ovh"
+      orden="orbit remove tienda -y --purge"
+      consecuencia="Quita la app de nginx y de systemd —eso se deshace— y BORRA /srv/apps/tienda: el .env, todas las releases y las subidas de tus usuarios. Eso no vuelve."
+      verbo="Borrar"
+      peligrosa={true}
+      confirmarEscribiendo="tienda"
+      alConfirmar={() => {}}
+      alCancelar={() => {}}
+    />
+  </div>
+
   <h2>Cargando</h2>
   <p class="nota">
     Un esqueleto y no un spinner: un spinner dice «espera» y no dice cuánto; el
@@ -236,4 +274,8 @@
     background: var(--surface); border: 1px solid var(--border);
     border-radius: var(--r-3); padding: var(--e-4);
   }
+  /* La hoja es un modal a pantalla completa: en la galería se contiene para
+     poder verla junto a lo demás. */
+  .hoja-demo { position: relative; min-height: 380px; overflow: hidden; }
+  .hoja-demo :global(.velo) { position: absolute; }
 </style>
