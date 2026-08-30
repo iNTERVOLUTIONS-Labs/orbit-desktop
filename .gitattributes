@@ -1,0 +1,11 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Los binarios y los ficheros generados no entran en los diffs.
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.woff2 binary
+pnpm-lock.yaml -diff
+Cargo.lock -diff
