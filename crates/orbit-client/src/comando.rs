@@ -433,6 +433,33 @@ impl Comando {
     }
 }
 
+/// Los patrones que hacen que la pantalla de `exec` pida una confirmación
+/// reforzada.
+///
+/// **Es una lista negra, y por eso su valor es pedagógico y no defensivo.** No
+/// impide nada: hay mil formas de escribir un `rm`, y quien quiera saltársela lo
+/// hará sin proponérselo. Lo que sí para es el **error de dedos a las tres de la
+/// mañana**, que es el caso real y el único contra el que una lista así sirve.
+///
+/// Se documenta así a propósito para que nadie la confunda con una protección y
+/// construya encima suponiendo que lo es.
+pub fn parece_peligroso(texto: &str) -> Option<&'static str> {
+    let t = texto.to_lowercase();
+    const PATRONES: [(&str, &str); 7] = [
+        ("rm -rf /", "borra recursivamente desde una ruta absoluta"),
+        ("drop database", "borra una base de datos entera"),
+        ("truncate", "vacía una tabla"),
+        ("mkfs", "formatea un sistema de ficheros"),
+        ("dd of=/dev/", "escribe directamente sobre un dispositivo"),
+        ("chmod -r 777 /", "abre los permisos de todo"),
+        ("> /dev/sd", "escribe sobre un disco"),
+    ];
+    PATRONES
+        .iter()
+        .find(|(p, _)| t.contains(p))
+        .map(|(_, q)| *q)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -652,31 +679,4 @@ mod tests {
         let c = Comando::Info { app: String::new() };
         assert!(c.argv(B).is_err());
     }
-}
-
-/// Los patrones que hacen que la pantalla de `exec` pida una confirmación
-/// reforzada.
-///
-/// **Es una lista negra, y por eso su valor es pedagógico y no defensivo.** No
-/// impide nada: hay mil formas de escribir un `rm`, y quien quiera saltársela lo
-/// hará sin proponérselo. Lo que sí para es el **error de dedos a las tres de la
-/// mañana**, que es el caso real y el único contra el que una lista así sirve.
-///
-/// Se documenta así a propósito para que nadie la confunda con una protección y
-/// construya encima suponiendo que lo es.
-pub fn parece_peligroso(texto: &str) -> Option<&'static str> {
-    let t = texto.to_lowercase();
-    const PATRONES: [(&str, &str); 7] = [
-        ("rm -rf /", "borra recursivamente desde una ruta absoluta"),
-        ("drop database", "borra una base de datos entera"),
-        ("truncate", "vacía una tabla"),
-        ("mkfs", "formatea un sistema de ficheros"),
-        ("dd of=/dev/", "escribe directamente sobre un dispositivo"),
-        ("chmod -r 777 /", "abre los permisos de todo"),
-        ("> /dev/sd", "escribe sobre un disco"),
-    ];
-    PATRONES
-        .iter()
-        .find(|(p, _)| t.contains(p))
-        .map(|(_, q)| *q)
 }
