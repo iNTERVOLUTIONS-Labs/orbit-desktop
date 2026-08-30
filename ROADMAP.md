@@ -34,7 +34,16 @@ Escribir las decisiones antes que el código, que es lo que hizo Orbit con su
   test-strict` en verde con 2.524 comprobaciones y la salida en prosa idéntica
   byte a byte
 
-## Fase 1 · Ver 📋
+## Fase 1 · Ver 🚧
+
+El núcleo ya está: `crates/orbit-client` con el transporte, el contrato tipado,
+el catálogo de órdenes y el escapado, y `tests/fakeserver` con 38 respuestas.
+**89 pruebas.** Falta la interfaz.
+
+Se empezó por aquí y no por una pantalla porque es lo que el plan de pruebas
+manda: sin el escapador demostrado, sin el servidor falso y sin el barrido de
+secretos, todo lo demás se construye sobre una afirmación.
+
 
 Un servidor, leído de `~/.ssh/config` por su alias. El transporte con
 `ControlMaster`. `version`, `status`, `list`, `info`. Dos pantallas.

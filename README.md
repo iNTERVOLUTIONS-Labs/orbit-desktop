@@ -87,8 +87,25 @@ una función que haya que escribir.
 
 ## Lo que ya se puede ejecutar
 
-Todavía no hay aplicación, pero sí hay dos herramientas, y las dos existen
-porque una cifra que nadie ha medido no es una cifra.
+Todavía no hay interfaz, pero sí hay núcleo — y se prueba entero sin levantar
+una ventana:
+
+```bash
+cargo test --all          # 89 pruebas
+```
+
+`crates/orbit-client` es el transporte SSH, el contrato tipado, el catálogo de
+órdenes y el escapado. Vive fuera de la interfaz a propósito: un cambio de
+framework no lo toca, y una TUI podría reutilizarlo sin duplicar nada.
+
+`tests/fakeserver` es un Orbit de mentira con 38 respuestas. Las sanas están
+generadas con el Orbit de verdad, así que no pueden divergir del contrato; las
+patológicas son las que un VPS no sabe devolver —un JSON cortado, un contrato
+de una versión que no conocemos, un nombre de app con `</script>` dentro— que
+son justo las que hay que probar.
+
+Y dos herramientas más, que existen porque una cifra que nadie ha medido no es
+una cifra.
 
 **El banco de 40 apps.** Monta un Orbit de mentira y mide la latencia del
 contrato, que es la latencia de la interfaz:
