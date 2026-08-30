@@ -49,3 +49,28 @@ for (const tema of ['dark', 'light'] as const) {
     })
   })
 }
+
+// Las dos pantallas de operar que quedaban.
+for (const tema of ['dark'] as const) {
+  test(`entorno · tema ${tema}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: tema })
+    await page.goto('/')
+    await page.getByRole('button', { name: 'pruebas', exact: true }).click()
+    await page.getByRole('button', { name: /parada/ }).click()
+    await page.getByRole('button', { name: 'entorno', exact: true }).click()
+    await expect(page.locator('.claves li').first()).toBeVisible()
+    // Con uno revelado, que es lo que hay que poder mirar: que se ve el reloj y
+    // que los demás siguen ocultos.
+    await page.getByLabel(/Revelar el valor de DB_PASSWORD/).click()
+    await expect(page.locator('.valor')).toBeVisible()
+    await page.screenshot({ path: `capturas/${tema}-entorno.png`, fullPage: true })
+  })
+
+  test(`monitor · tema ${tema}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: tema })
+    await page.goto('/')
+    await page.getByRole('button', { name: 'monitor', exact: true }).click()
+    await expect(page.locator('.tabla tbody tr').first()).toBeVisible()
+    await page.screenshot({ path: `capturas/${tema}-monitor.png`, fullPage: true })
+  })
+}

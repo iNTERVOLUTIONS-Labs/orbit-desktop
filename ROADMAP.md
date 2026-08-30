@@ -114,8 +114,12 @@ salida en prosa pierde porque `tail` los mezcla— y el **diagnóstico**, con el
 botón de arreglar que sólo aparece donde `fixable` lo permite y, contra un
 servidor que no pueda aplicarlo sin terminal, la orden para copiar en su lugar.
 
-Falta el resto: variables de entorno, `top`, métricas, tráfico y la terminal de
-`exec`.
+Y también las **variables de entorno** —con la regla que las gobierna: sólo
+nombres, cada valor de uno en uno con su `orbit env get` de verdad, y se oculta
+solo a los 30 segundos, al perder el foco la ventana y al cambiar de pantalla—
+y el **monitor**, con el periodo adaptado a lo que de verdad tarda.
+
+Falta el resto: métricas, tráfico y la terminal de `exec`.
 
 ### Lo que había aquí, ya hecho
 

@@ -9,10 +9,14 @@
   import HojaDeComando from './componentes/HojaDeComando.svelte'
   import AvisoDeCierre from './componentes/AvisoDeCierre.svelte'
   import * as vivos from './lib/vivos.svelte'
-  import type { App, Doctor, Log } from './lib/contrato'
+  import EntornoVista from './componentes/Entorno.svelte'
+  import MonitorVista from './componentes/MonitorVista.svelte'
+  import { periodoDelMonitor } from './lib/despliegue'
+  import type { App, Doctor, Entorno, Log, Monitor } from './lib/contrato'
   import {
-    arreglar, cancelar, desplegar, diagnostico, hayPuente,
-    log as pedirLog, portada, servidoresDelConfig,
+    arreglar, cancelar, desplegar, diagnostico, entorno as pedirEntorno,
+    entornoValor, hayPuente, log as pedirLog, monitor as pedirMonitor,
+    portada, servidoresDelConfig,
     type AliasSsh, type ErrorDelPuente,
   } from './lib/puente'
 
@@ -26,13 +30,16 @@
   // Qué se está mirando del servidor. Las apps son la portada y lo demás se
   // pide al entrar, no antes: abrir una pantalla no puede significar cuatro
   // llamadas SSH de las que tres no se van a mirar.
-  let vista = $state<'apps' | 'diagnostico'>('apps')
+  let vista = $state<'apps' | 'diagnostico' | 'monitor'>('apps')
   let doctor = $state<Doctor | null>(null)
   let arreglando = $state(false)
 
   // El log de la app elegida. También bajo demanda.
   let log = $state<Log | null>(null)
-  let pestana = $state<'detalle' | 'log' | 'despliegue'>('detalle')
+  let entorno = $state<Entorno | null>(null)
+  let monitor = $state<Monitor | null>(null)
+  let periodo = $state(3)
+  let pestana = $state<'detalle' | 'log' | 'entorno' | 'despliegue'>('detalle')
 
   // La hoja de comando de un despliegue. Se enseña la orden literal ANTES de
   // ejecutarla: es la prueba visible de que esto sólo invoca `orbit`.
@@ -70,6 +77,8 @@
     error = null
     doctor = null
     log = null
+    entorno = null
+    monitor = null
     vista = 'apps'
     cargando = true
     try {
@@ -111,6 +120,44 @@
       error = e as ErrorDelPuente
     } finally {
       arreglando = false
+    }
+  }
+
+  async function verMonitor() {
+    vista = 'monitor'
+    cargando = monitor === null
+    try {
+      // El periodo sale de lo que TARDÓ, no de un número elegido: `top --json`
+      // cuesta ~2,1 s con 40 apps porque la CPU es la diferencia entre dos
+      // lecturas, y encadenar peticiones más rápido de lo que contestan no da
+      // más frescura, da una cola.
+      const t0 = performance.now()
+      monitor = await pedirMonitor(alias)
+      periodo = periodoDelMonitor(performance.now() - t0)
+    } catch (e) {
+      error = e as ErrorDelPuente
+    } finally {
+      cargando = false
+    }
+  }
+
+  // Sólo mientras se está mirando, y sólo con la ventana enfocada. Sondear una
+  // pantalla que nadie ve es gastar una sesión SSH del usuario en nada.
+  $effect(() => {
+    if (vista !== 'monitor') return
+    const t = setInterval(() => {
+      if (!document.hidden) verMonitor()
+    }, periodo * 1000)
+    return () => clearInterval(t)
+  })
+
+  async function verEntorno(a: App) {
+    pestana = 'entorno'
+    if (entorno && entorno.app === a.name) return
+    try {
+      entorno = await pedirEntorno(alias, a.name)
+    } catch (e) {
+      error = e as ErrorDelPuente
     }
   }
 
@@ -204,6 +251,9 @@
         <button type="button" class:activo={vista === 'diagnostico'} onclick={verDiagnostico}>
           diagnóstico
         </button>
+        <button type="button" class:activo={vista === 'monitor'} onclick={verMonitor}>
+          monitor
+        </button>
       </nav>
     </header>
 
@@ -212,6 +262,8 @@
         <Esqueleto />
       {:else if error}
         <Fallo {error} {alias} />
+      {:else if vista === 'monitor' && monitor}
+        <MonitorVista {monitor} servidor={alias} {periodo} />
       {:else if vista === 'diagnostico' && doctor}
         <Diagnostico
           {doctor}
@@ -230,6 +282,9 @@
             // deja de valer. Conservarlo enseñaría el log de una bajo el nombre
             // de otra.
             log = null
+            // El entorno es de una app concreta: al cambiar de app, el que
+            // había deja de valer, y con él cualquier valor revelado.
+            entorno = null
             pestana = 'detalle'
           }}
         />
@@ -245,6 +300,9 @@
           <button type="button" class:activo={pestana === 'log'} onclick={() => verLog(elegida!)}>
             log
           </button>
+          <button type="button" class:activo={pestana === 'entorno'} onclick={() => verEntorno(elegida!)}>
+            entorno
+          </button>
           {#if vivos.ver(alias, elegida.name)}
             <button type="button" class:activo={pestana === 'despliegue'} onclick={() => (pestana = 'despliegue')}>
               despliegue
@@ -256,6 +314,19 @@
         </nav>
         {#if pestana === 'detalle'}
           <DetalleApp app={elegida} servidor={alias} />
+        {:else if pestana === 'entorno'}
+          {#if entorno}
+            <div class="log-envoltorio">
+              <EntornoVista
+                {entorno}
+                app={elegida.name}
+                servidor={alias}
+                pedirValor={(k) => entornoValor(alias, elegida!.name, k)}
+              />
+            </div>
+          {:else}
+            <div class="log-envoltorio"><Esqueleto filas={4} /></div>
+          {/if}
         {:else if pestana === 'despliegue'}
           {@const v = vivos.ver(alias, elegida.name)}
           {#if v}

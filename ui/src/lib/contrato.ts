@@ -300,3 +300,51 @@ export interface Lote {
   ok: boolean
   duration_s: number
 }
+
+// ── el entorno ─────────────────────────────────────────────────────────────
+
+export interface Entorno {
+  schema: number
+  app: string
+  /** **Sólo los nombres.** Los secretos no cruzan el contrato: un panel que
+   *  enseñe el `.env` entero filtra la contraseña de la base de datos en la
+   *  primera captura que alguien pegue en un issue. */
+  keys: string[]
+}
+
+// ── el monitor ─────────────────────────────────────────────────────────────
+
+export interface AppDelMonitor {
+  name: string
+  type: string
+  domain: string
+  port: number | null
+  service: string | null
+  /** `null` la primera vez, y eso es «no se sabe». La CPU es la **diferencia
+   *  entre dos lecturas** del cgroup, así que la primera no da porcentaje.
+   *  Inventar un cero sería mentir: un cero es una afirmación. */
+  cpu_percent: number | null
+  memory_bytes: number | null
+  requests_last_minute: number | null
+  /** Que el minuto llenó el tope de líneas de log que se miran. Un número corto
+   *  sin avisar se lee como «hay poco tráfico», que es justo lo contrario de lo
+   *  que está pasando. */
+  requests_capped: boolean
+}
+
+export interface Monitor {
+  schema: number
+  apps: AppDelMonitor[]
+}
+
+/** Bytes en algo legible. El contrato los da en bruto **a propósito** —`du -h`
+ *  es presentación, y su separador decimal depende de la configuración regional
+ *  del servidor— así que la presentación se hace aquí. */
+export function bytes(n: number | null): string {
+  if (n === null) return '·'
+  const u = ['B', 'KB', 'MB', 'GB']
+  let v = n
+  let i = 0
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1 }
+  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`
+}
