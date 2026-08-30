@@ -116,6 +116,70 @@ en un `argv`, y fingir que sí es peor que fallar.
 
 ---
 
+## 3b. El `sshd` del banco, y lo que sólo se ve ahí
+
+```bash
+tests/e2e/montar-sshd.sh /tmp/e2e-orbit
+ORBIT_E2E=/tmp/e2e-orbit cargo test -p orbit-client --test e2e_sshd -- --ignored --nocapture
+tests/e2e/parar-sshd.sh /tmp/e2e-orbit
+```
+
+Levanta un `sshd` de verdad en el 2222 con sus propias claves, su propio
+`known_hosts` y el servidor falso instalado al otro lado. No toca el `sshd` de
+la máquina ni el `~/.ssh` del usuario.
+
+**Por qué no es opcional.** El doble local cubre el parser, los `null` y los
+seis finales en milisegundos, y no cubre nada de lo que de verdad se rompe en el
+camino: el escapado atravesando `sshd` y un shell de login, `known_hosts`, el
+multiplexado, la separación de stdout y stderr sobre un canal, y los códigos de
+salida de `ssh` frente a los de `orbit`.
+
+Y hay una propiedad incómoda debajo que conviene tener escrita: **`sshd` siempre
+entrega la petición al shell de login del usuario remoto, y OpenSSH concatena
+con espacios los argumentos que le sobran.** O sea que «pasarle un `argv`
+separado a `ssh`» es una creencia falsa, y muy extendida. Por eso la cadena la
+construimos nosotros, escapada, y por eso esta prueba comprueba **lo que le
+llegó** al otro lado y no lo que devolvió: el servidor falso apunta su `argv`
+con los campos separados por bytes nulos, y ése es el único testigo fiable.
+
+### Lo que ha pagado ya
+
+Se escribió para cerrar un criterio pendiente y encontró dos cosas en su primera
+ejecución. Ninguna se veía contra el doble local, y las dos son de las que se
+descubren tarde:
+
+- **Un cambio de clave de host le llegaba a la interfaz como «no he llegado al
+  servidor».** Es la descripción de un problema de red, no la de un ataque de
+  suplantación — que es lo que eso es. Ahora tiene su propio error
+  (`ClaveDeHostCambiada`), su propio texto y conserva el detalle de OpenSSH, que
+  es donde va la huella y la línea del `known_hosts` que hay que quitar. Un
+  doble local no tiene claves de host, así que ahí no podía aparecer.
+- **El mensaje de error se sacaba de la primera línea**, y cuando la clave de un
+  host cambia OpenSSH abre con tres líneas de arroba. La interfaz iba a enseñar
+  un muro de `@@@@@@@` justo en el único error del canal que hay que leer
+  entero. Ahora se busca la primera línea **con palabras**.
+
+Y una tercera, del propio banco: **el registro del `argv` se partía con un
+argumento que llevara un salto de línea dentro**, porque usaba el salto como
+separador de registro. El caso `a\nb` volvía como una lista vacía y la prueba
+acusaba al escapado de un fallo que era del instrumento. Es la regla de siempre:
+antes de creerte una medición, comprueba qué marca en reposo.
+
+### Lo que este banco tampoco ve
+
+- **Latencia de red.** Todo va contra `127.0.0.1`, así que el saludo no cruza
+  nada. Medido aquí: 91 ms sin multiplexar frente a 20 ms con él. Contra un VPS
+  real la diferencia es de otro orden —246 ms frente a 13 ms— y es la palanca de
+  latencia más grande del producto. Por eso la prueba **no afirma un factor**:
+  sólo afirma que multiplexar no sale más lento, que es lo único honesto que se
+  puede medir en un bucle local.
+- **`ProxyJump` con un bastión de verdad**, ni `ProxyCommand`, ni una llave en
+  hardware, ni un `sshd` endurecido con `requiretty`.
+- **Un `sudo` que pida contraseña.** El caso está en el servidor falso, pero
+  aquí se entra como el propio usuario.
+
+---
+
 ## 4. Las trampas que ya conocemos
 
 Heredadas de Orbit o encontradas auditándolo. Están aquí para no volver a

@@ -30,8 +30,16 @@ FIX="$(dirname "$(readlink -f "$0")")/fixtures"
 
 # El registro va primero, antes de cualquier salida: si el caso pedido es
 # "muérete", el argv tiene que quedar apuntado igualmente.
+# Sólo los campos, separados por byte nulo, y **sin salto de línea detrás**: un
+# argumento puede llevar un salto dentro —'orbit exec' recibe texto arbitrario—
+# y usarlo como separador de registro partía el registro por la mitad. El caso
+# `a\nb` volvía como una lista vacía, y la prueba acusaba al escapado de un
+# fallo que era del registro.
+#
+# Cada prueba borra el fichero antes de usarlo y lee el fichero entero, que es
+# lo que hace innecesario un separador de registro.
 if [[ -n "${ORBIT_FAKE_LOG:-}" ]]; then
-  { printf '%s\0' "$@"; printf '\n'; } >> "$ORBIT_FAKE_LOG"
+  printf '%s\0' "$@" >> "$ORBIT_FAKE_LOG"
 fi
 
 # El subcomando, para que un caso sano pueda contestar distinto a cada uno. Se

@@ -104,6 +104,17 @@ pub struct Servidor {
     /// abierto se puede abrir un canal **sin la clave**. Por eso el `persist` es
     /// corto y se puede apagar.
     pub multiplexar: bool,
+    /// Un `~/.ssh/config` alternativo. Normalmente `None`: se usa el del
+    /// usuario, que es la única verdad sobre cómo llega a sus servidores.
+    pub config_ssh: Option<String>,
+    /// Sólo para servidores que **no** están en `~/.ssh/config`. Cuando lo
+    /// están se queda a `None` y lo resuelve `ssh`: duplicarlo aquí crearía dos
+    /// verdades, y la nuestra quedaría vieja en cuanto el usuario tocara su
+    /// config.
+    pub puerto: Option<u16>,
+    /// La **ruta** de la clave, jamás su contenido ni su frase de paso. Lo que
+    /// necesite una credencial se la pide al agente.
+    pub clave: Option<String>,
 }
 
 impl Servidor {
@@ -113,12 +124,34 @@ impl Servidor {
             destino: destino.into(),
             binario: "/usr/local/bin/orbit".into(),
             multiplexar: true,
+            config_ssh: None,
+            puerto: None,
+            clave: None,
         }
     }
 
     /// Las opciones de `ssh`, y cada una está aquí por un motivo escrito.
     pub fn opciones_ssh(&self, dir_control: Option<&str>) -> Vec<String> {
-        let mut o = vec![
+        let mut o: Vec<String> = Vec::new();
+        // '-F' va primero: lo que venga detrás son opciones nuestras y tienen
+        // que poder ganarle a lo que diga el fichero. Normalmente es None y se
+        // usa el ~/.ssh/config del usuario, que es la única verdad sobre cómo
+        // llega a sus servidores.
+        if let Some(c) = &self.config_ssh {
+            o.push("-F".into());
+            o.push(c.clone());
+        }
+        // Puerto y clave sólo para servidores que NO están en el config. Cuando
+        // lo están, los resuelve ssh y aquí van a None.
+        if let Some(p) = self.puerto {
+            o.push("-p".into());
+            o.push(p.to_string());
+        }
+        if let Some(k) = &self.clave {
+            o.push("-i".into());
+            o.push(k.clone());
+        }
+        o.extend([
             // No hay TTY y no debe haberlo: pedirlo cambiaría el comportamiento
             // del otro lado (color, animaciones, selectores interactivos).
             "-T".to_string(),
@@ -140,7 +173,7 @@ impl Servidor {
             "ForwardAgent=no".into(),
             "-o".into(),
             "ClearAllForwardings=yes".into(),
-        ];
+        ]);
         if self.multiplexar {
             if let Some(d) = dir_control {
                 o.extend([
@@ -176,6 +209,22 @@ pub enum ErrorTransporte {
         codigo: i32,
         stderr: String,
     },
+    /// **La clave de un host conocido ha cambiado.**
+    ///
+    /// Tiene variante propia y no es un `NoLlego` cualquiera, porque no es un
+    /// fallo de red: es exactamente lo que se ve en un ataque de suplantación.
+    /// La interfaz lo trata como una pantalla bloqueante sin botón de
+    /// continuar, y la única salida es editar `~/.ssh/known_hosts` a mano fuera
+    /// de la aplicación. Deliberadamente incómodo: cambiar la clave de un host
+    /// es raro —una reinstalación, una migración— y siempre lo sabe el usuario,
+    /// mientras que un ataque de suplantación es exactamente esto.
+    ///
+    /// Existe porque la prueba de punta a punta lo destapó: sin ella, esto le
+    /// llegaba a la interfaz como «no he llegado al servidor», que describe un
+    /// problema de red y no un ataque.
+    ClaveDeHostCambiada {
+        detalle: String,
+    },
     /// `orbit` no está en esa ruta (127) o no se puede ejecutar (126).
     OrbitNoEsta {
         ruta: String,
@@ -210,6 +259,11 @@ impl std::fmt::Display for ErrorTransporte {
             Self::Forma(e) => write!(f, "{e}"),
             Self::NoSePudoLanzar(e) => write!(f, "no he podido lanzar ssh: {e}"),
             Self::NoLlego { stderr, .. } => write!(f, "no he llegado al servidor: {}", primera_linea(stderr)),
+            Self::ClaveDeHostCambiada { .. } => write!(
+                f,
+                "la clave de este servidor ha cambiado. Puede ser una reinstalación, \
+                 o puede ser que estés hablando con otra máquina"
+            ),
             Self::OrbitNoEsta { ruta, .. } => write!(f, "no hay un orbit ejecutable en {ruta}"),
             Self::SudoPideClave => write!(
                 f, "ese usuario necesita contraseña para sudo, y aquí no hay terminal donde escribirla"),
@@ -228,13 +282,26 @@ impl std::fmt::Display for ErrorTransporte {
 impl std::error::Error for ErrorTransporte {}
 
 fn primera_linea(s: &str) -> String {
-    // El mensaje para una persona es la primera línea con contenido. Se busca
-    // así y no con la última porque el error más común de git trae detrás un
+    // El mensaje para una persona es la primera línea **con palabras**.
+    //
+    // La primera línea a secas no vale, y esto no es teoría: cuando la clave de
+    // un host cambia, OpenSSH abre con tres líneas de arroba —el marco del
+    // aviso— y la versión anterior de esta función devolvía «@@@@@@@@@@@@…».
+    // O sea que la interfaz iba a enseñar un muro de arroba justo en el único
+    // error del canal que el usuario tiene que leer entero. Lo cazó la prueba
+    // de punta a punta contra un sshd de verdad; contra el doble local no
+    // aparecía, porque un doble local no tiene claves de host.
+    //
+    // Y tampoco vale la última: el error más común de git trae detrás un
     // párrafo de ayuda, y quedarse con su última línea daba «and the repository
-    // exists.» — un trozo de frase suelto. Es un fallo que Orbit ya cometió.
+    // exists.» — un trozo de frase suelto. Es un fallo que Orbit ya cometió y
+    // tuvo que arreglar dentro de su propio contrato.
     s.lines()
         .map(|l| l.trim_start_matches("  ").trim_start_matches("✗ ").trim())
-        .find(|l| !l.is_empty())
+        .find(|l| {
+            // Con contenido, y que no sea puro marco de dibujo.
+            !l.is_empty() && l.chars().any(|c| c.is_alphanumeric())
+        })
         .unwrap_or("")
         .to_string()
 }
@@ -306,10 +373,17 @@ impl Respuesta {
 }
 
 /// Ejecuta una orden. Es la **única** función del crate que lanza un proceso.
+/// `entorno` se le pone al proceso `ssh` **local**. Si cruza o no al otro lado
+/// depende de que el servidor tenga `AcceptEnv` y nosotros `SendEnv`, así que
+/// **el cliente no se apoya en él para nada**: para el idioma existe
+/// `orbit --lang`, que viaja como argumento y no depende de la configuración
+/// del servidor. Está aquí porque el banco de pruebas lo necesita para pedirle
+/// un caso concreto al servidor falso.
 pub fn ejecutar(
     servidor: &Servidor,
     comando: &Comando,
     dir_control: Option<&str>,
+    entorno: &[(&str, &str)],
 ) -> Result<Respuesta, ErrorTransporte> {
     let argv = comando
         .argv(&servidor.binario)
@@ -324,6 +398,9 @@ pub fn ejecutar(
     // que pasarle varios no separa nada — construiría una cadena y haría creer
     // que no. La cadena la construimos nosotros, escapada, arriba.
     cmd.arg(&linea);
+    for (k, v) in entorno {
+        cmd.env(k, v);
+    }
     ejecutar_proceso(cmd, tope_de_tiempo(comando), &servidor.binario)
 }
 
@@ -438,6 +515,13 @@ fn clasificar(r: Respuesta, binario: &str) -> Result<Respuesta, ErrorTransporte>
     }
     // 255 es el código propio de ssh cuando no llega. Es distinto de que orbit
     // haya fallado, y por eso son dos variantes.
+    // Un cambio de clave de host va ANTES del 255 genérico: no es un problema
+    // de red, es lo que se ve en una suplantación, y merece su propio camino.
+    if e.contains("remote host identification has changed")
+        || e.contains("host key verification failed")
+    {
+        return Err(ErrorTransporte::ClaveDeHostCambiada { detalle: r.stderr });
+    }
     if r.codigo == 255 {
         return Err(ErrorTransporte::NoLlego {
             codigo: 255,
@@ -524,6 +608,19 @@ mod tests {
         let r = resp(r#"{"schema":2,"apps":[]}"#);
         let x: Result<crate::contrato::Lista, _> = r.leer();
         assert!(x.is_err());
+    }
+
+    #[test]
+    fn el_marco_de_un_aviso_de_ssh_no_es_el_mensaje() {
+        // Lo que imprime OpenSSH cuando la clave de un host cambia. La primera
+        // línea es el marco; el mensaje está en la segunda.
+        let s = "@@@@@@@@@@@@@@@@@@@@@@@@@@@\n\
+                 @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n\
+                 @@@@@@@@@@@@@@@@@@@@@@@@@@@\n\
+                 IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!";
+        let m = primera_linea(s);
+        assert!(m.contains("WARNING"), "salió «{m}»");
+        assert!(!m.starts_with("@@@"));
     }
 
     #[test]
