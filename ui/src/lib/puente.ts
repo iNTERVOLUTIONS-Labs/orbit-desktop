@@ -12,7 +12,7 @@
 // falso** que usan las pruebas del núcleo, así que la interfaz y el contrato no
 // pueden divergir.
 
-import type { App, Lista } from './contrato'
+import { leerLog, type App, type Doctor, type Lista, type Log } from './contrato'
 
 import listaSana from './muestras/list.json'
 import listaEstados from './muestras/list-estados.json'
@@ -78,4 +78,40 @@ export async function portada(alias: string): Promise<{ apps: App[] }> {
     return { apps: m.apps }
   }
   return invocar<{ apps: App[] }>('portada', { alias })
+}
+
+import doctorMuestra from './muestras/doctor.json'
+import logMuestra from './muestras/logs.ndjson?raw'
+
+/** El diagnóstico del servidor. */
+export async function diagnostico(alias: string): Promise<Doctor> {
+  if (!hayPuente()) return doctorMuestra as Doctor
+  return invocar<Doctor>('doctor', { alias })
+}
+
+/**
+ * El log de una app.
+ *
+ * Se pide **sin seguir en vivo**, que es lo que hace `orbit logs --json` por
+ * defecto desde que existe el contrato: en modo máquina, una foto. El flujo en
+ * vivo es otra pantalla y otro canal, porque no termina nunca y hay que poder
+ * cerrarlo.
+ */
+export async function log(alias: string, app: string, desde = '1h'): Promise<Log> {
+  if (!hayPuente()) return leerLog(logMuestra)
+  const crudo = await invocar<string>('logs', { alias, app, desde })
+  return leerLog(crudo)
+}
+
+/**
+ * Aplica lo que el servidor sabe arreglar solo.
+ *
+ * Existe desde que `orbit doctor --fix --json --yes` funciona: estuvo
+ * documentado y muerto durante versiones, y hasta que se arregló esta pantalla
+ * sólo podía enseñar el texto. Si el servidor es más viejo, esto falla y la
+ * interfaz vuelve a enseñar la orden para copiar — que es por lo que la
+ * capacidad se pregunta y no se supone.
+ */
+export async function arreglar(alias: string): Promise<Doctor> {
+  return invocar<Doctor>('doctor_arreglar', { alias })
 }

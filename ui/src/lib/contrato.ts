@@ -146,3 +146,99 @@ export function marcarInvisibles(s: string): string {
   }
   return fuera
 }
+
+// ── el diagnóstico ─────────────────────────────────────────────────────────
+
+export interface Comprobacion {
+  id: string
+  level: 'ok' | 'info' | 'warn' | 'error'
+  message: string
+  fix: string | null
+  /** Si `orbit doctor --fix` se encargaría de esto.
+   *
+   *  **El botón sólo se enseña aquí.** Uno que no hace nada es peor que
+   *  ninguno: invita a averiguar por qué no hace nada, y la respuesta es una
+   *  frase que se podría haber leído sin el botón. Este campo existe
+   *  exactamente para poder distinguirlo. */
+  fixable: boolean
+}
+
+export interface Doctor {
+  schema: number
+  checks: Comprobacion[]
+  summary: { ok: number; warn: number; error: number }
+}
+
+/** El orden en que se leen los problemas: primero lo que está roto, después lo
+ *  que avisa, y al final lo que está bien —que se puede plegar—. Ordenar por el
+ *  orden en que Orbit los comprueba pondría un `ok` entre dos errores. */
+export const PESO_NIVEL: Record<Comprobacion['level'], number> = {
+  error: 0, warn: 1, info: 2, ok: 3,
+}
+
+// ── el log ─────────────────────────────────────────────────────────────────
+
+export type Canal = 'journal' | 'access' | 'error'
+
+export interface LineaDeLog {
+  /** Sale del propio log y no se inventa. `null` cuando el formato viejo de
+   *  nginx no la lleva — y ése es el momento de ofrecer `orbit nginx-rebuild`,
+   *  no de poner la hora de ahora. */
+  ts: string | null
+  stream: Canal
+  /** La línea tal cual. **No se estructura**: sacarle el nivel o el código HTTP
+   *  sería inventar un formato que la aplicación del usuario no ha prometido. */
+  text: string
+}
+
+export interface MetaDeLog {
+  schema: number
+  app: string
+  source: 'journal' | 'nginx'
+  unit: string | null
+  since: string | null
+  follow: boolean
+  lines: number | null
+}
+
+export interface Log {
+  meta: MetaDeLog | null
+  lineas: LineaDeLog[]
+  /** Que se llegó al tope de `--lines`, por fuente. */
+  truncado: boolean
+  /** Cuántas líneas no se entendieron. **Se enseña**: si se callara, un log a
+   *  medias se leería como un log completo. */
+  rotas: number
+}
+
+/** Lee el NDJSON de `orbit logs --json`.
+ *
+ *  Una línea rota se salta y se cuenta. Abortar convertiría un byte mal puesto
+ *  en una pantalla vacía, y quien mira un log suele estar mirándolo justamente
+ *  porque algo va mal. */
+export function leerLog(texto: string): Log {
+  const out: Log = { meta: null, lineas: [], truncado: false, rotas: 0 }
+  for (const cruda of texto.split('\n')) {
+    const t = cruda.trim()
+    if (!t) continue
+    let v: Record<string, unknown>
+    try {
+      v = JSON.parse(t)
+    } catch {
+      out.rotas += 1
+      continue
+    }
+    // Por su campo `event` y no por su forma: adivinar por los campos que trae
+    // haría que un campo nuevo cambiara el tipo de un suceso, y los campos se
+    // añaden.
+    switch (v.event) {
+      case 'meta': out.meta = v as unknown as MetaDeLog; break
+      case 'line': out.lineas.push(v as unknown as LineaDeLog); break
+      case 'end': out.truncado = v.truncated === true; break
+      // Un suceso que no conocemos se ignora sin ruido: los sucesos se añaden,
+      // igual que los campos.
+      default: break
+    }
+  }
+  return out
+}

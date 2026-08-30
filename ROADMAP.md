@@ -85,14 +85,25 @@ cada cinco minutos— y el contrato tiene seis finales justamente para que un
 cliente no pueda repetirlo. **Agruparlos en «correctas / fallidas» está
 prohibido.**
 
-## Fase 3 · Operar 📋
+## Fase 3 · Operar 🚧
+
+Adelantada en parte, porque el PR a Orbit la desbloqueó antes de tiempo: ya está
+el **log** —con el filtro que separa el de acceso del de error, que es lo que la
+salida en prosa pierde porque `tail` los mezcla— y el **diagnóstico**, con el
+botón de arreglar que sólo aparece donde `fixable` lo permite y, contra un
+servidor que no pueda aplicarlo sin terminal, la orden para copiar en su lugar.
+
+Falta el resto: variables de entorno, `top`, métricas, tráfico y la terminal de
+`exec`.
+
+### Lo que había aquí, ya hecho
 
 Logs en ventana y en vivo. `doctor` con botón **sólo** donde `fixable` lo
 permita. Variables de entorno, con los nombres a la vista y cada valor tras un
 gesto deliberado. `top` refrescándose. Métricas, tráfico, y la terminal de
 `exec`.
 
-El PR contra `orbit` que esta fase iba a necesitar **ya está abierto**
+El PR contra `orbit` que esta fase iba a necesitar **ya está fusionado**
 ([orbit#1](https://github.com/iNTERVOLUTIONS-Labs/orbit/pull/1)), y se adelantó a
 propósito: era el trabajo más rentable del proyecto y no es trabajo de este
 repositorio. `--json` en `logs` y en `backup list`, el arreglo de `--yes` en

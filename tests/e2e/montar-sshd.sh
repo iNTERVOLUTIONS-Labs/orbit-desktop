@@ -69,6 +69,18 @@ EOF
 # a un fichero: sin '/run/sshd' arranca y muere con «Missing privilege
 # separation directory», exit 255 y **ni una línea por stderr**. Es la clase de
 # fallo que en CI parece que el script no ha hecho nada.
+# Un sshd huérfano de una tanda anterior ocupando el puerto es EL fallo de este
+# banco, y lo predijo su propio comentario antes de ocurrir. Sin esta
+# comprobación el síntoma es un rechazo de autenticación contra un servidor que
+# ya no tiene nuestras claves —«Not allowed at this time»— y eso manda a quien
+# lo mire a buscar el problema donde no está.
+if ss -tln 2>/dev/null | grep -q "127.0.0.1:$PUERTO "; then
+  echo "el puerto $PUERTO ya está ocupado: hay un sshd de una tanda anterior." >&2
+  echo "Párala con:  tests/e2e/parar-sshd.sh <su directorio>" >&2
+  echo "o, si ya no sabes cuál era:  sudo pkill -f 'sshd -f .*sshd_config'" >&2
+  exit 1
+fi
+
 command -v /usr/sbin/sshd >/dev/null || {
   echo "no hay /usr/sbin/sshd: instala openssh-server" >&2; exit 1; }
 sudo install -d -m 0755 /run/sshd
