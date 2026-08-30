@@ -29,6 +29,10 @@ Escribir las decisiones antes que el código, que es lo que hizo Orbit con su
 - ✅ **El banco de 40 apps**, para que las cifras de latencia sean medidas
 - ✅ **La prueba de propiedad del escapado** contra cuatro shells. Encontró un
   fallo real en su primera ejecución, y sólo en zsh
+- ✅ **El PR a `orbit`** con los cinco cambios que el contrato necesitaba
+  ([orbit#1](https://github.com/iNTERVOLUTIONS-Labs/orbit/pull/1)): `make
+  test-strict` en verde con 2.524 comprobaciones y la salida en prosa idéntica
+  byte a byte
 
 ## Fase 1 · Ver 📋
 
@@ -69,12 +73,16 @@ permita. Variables de entorno, con los nombres a la vista y cada valor tras un
 gesto deliberado. `top` refrescándose. Métricas, tráfico, y la terminal de
 `exec`.
 
-**Y aquí se abre el PR contra `orbit`**, que es el trabajo más rentable de todo
-el proyecto y no es trabajo de este repositorio: `--json` en `logs` y en
-`backup list`, y el arreglo de `--yes` en `doctor --fix --json`. Tres huecos del
-contrato desaparecen y el cliente se queda sin una sola línea que parsee texto.
-Es el momento correcto para abrirlo: ya se sabe exactamente qué falta porque se
-ha intentado usar.
+El PR contra `orbit` que esta fase iba a necesitar **ya está abierto**
+([orbit#1](https://github.com/iNTERVOLUTIONS-Labs/orbit/pull/1)), y se adelantó a
+propósito: era el trabajo más rentable del proyecto y no es trabajo de este
+repositorio. `--json` en `logs` y en `backup list`, el arreglo de `--yes` en
+`doctor --fix --json`, la promesa de estabilidad del contrato escrita, y la
+prueba que ejecuta `main()` — la laguna que había dejado un comando documentado
+y roto sin que nadie lo notara.
+
+El efecto: esta fase se escribe contra un contrato completo, y el cliente nace
+con **cero líneas que parseen texto**.
 
 ## Fase 4 · Administrar 📋
 

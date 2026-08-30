@@ -318,16 +318,43 @@ confirmación**: una YubiKey que pide un toque por conexión lo pediría una vez
 
 ---
 
-## 7. La deuda que no es nuestra
+## 7. La deuda que no es nuestra, y que ya está pagada
 
-El trabajo más rentable de todo el proyecto **no está en este repositorio**, y
-conviene que quede escrito aquí y no enterrado: un PR a `orbit` que añada `--json`
-a `logs` y a `backup list`, que arregle `doctor --fix --json --yes`, y que añada
-una prueba que ejecute `main()` — hoy las suites de Orbit cargan el script sin su
-última línea, que es justamente la llamada a `main`, y ésa es la laguna por la
-que un comando documentado lleva roto sin que nadie lo notara.
+El trabajo más rentable de todo el proyecto **no estaba en este repositorio**, y
+por eso conviene que quede escrito aquí: un PR a `orbit` que cerrara los huecos
+del contrato en vez de rodearlos desde el cliente.
 
-Con eso, tres huecos del contrato desaparecen y el cliente se queda sin una sola
-línea que parsee texto. La propuesta completa, con la forma del JSON de cada
-comando y el texto de la promesa de estabilidad que habría que añadir a la
-documentación de Orbit, está en [CLIENT.md](CLIENT.md) §9b.
+**Está abierto:
+[iNTERVOLUTIONS-Labs/orbit#1](https://github.com/iNTERVOLUTIONS-Labs/orbit/pull/1)**,
+con los cinco cambios que [CLIENT.md](CLIENT.md) §9b especificaba:
+
+| | Qué cambia | Qué se lleva por delante |
+|---|---|---|
+| 9b-1 | `doctor --fix --json --yes` **existe** | La pantalla de diagnóstico recupera el botón donde `fixable` lo permite |
+| 9b-2 | `backup list/verify --json` | Bytes en bruto e ISO-8601 en vez de una tabla de anchura fija y un `du -h` con el separador decimal del servidor |
+| 9b-3 | `logs --json` como NDJSON | El parser de texto con heurística de glifos. Y **`stream` distingue el log de acceso del de error**, que la prosa perdía |
+| 9b-4 | `tests/cli_test.sh` | La laguna que dejó pasar 9b-1: `main()` no la ejecutaba ninguna prueba |
+| 9b-5 | La promesa de estabilidad, escrita | La política de contrato 2 deja de ser una apuesta |
+
+**El efecto sobre este repositorio es que `contract/text.rs` no llega a existir.**
+Era la cuarentena de [CLIENT.md](CLIENT.md) §7.1 y sus dos únicos habitantes iban
+a ser `backup list` y `logs`. El cliente nace con **cero líneas que parseen
+texto**, que es un estado que se puede comprobar con una regla de lint en vez de
+perseguirlo como objetivo.
+
+Dos cosas del PR importan aquí aunque no sean del contrato, porque son reglas
+que este cliente tiene que cumplir y que ahora están **fijadas con una prueba**
+en el otro lado:
+
+- **Sin terminal, un comando sin app no aborta: elige la primera por orden
+  alfabético y sale con 0.** Ya era la regla 8 de §3; ahora hay una prueba en
+  `orbit` que se rompe el día que eso cambie.
+- **`--json` detrás de un comando que no lo habla se ignora en silencio.** De ahí
+  la regla práctica del constructor de comandos: **`--json` siempre delante**, que
+  es la única posición con un comportamiento definido.
+
+Mientras el PR no esté fusionado, el cliente tiene que hablar con servidores que
+no lo tengan. Eso no es un caso raro ni temporal —un parque de servidores tarda
+meses en actualizarse— así que la degradación es parte del diseño y no un apaño:
+`orbit version --json` publica `version` y `contract` por separado, y de ahí sale
+qué pantallas pueden ofrecer qué. La política está en [CLIENT.md](CLIENT.md) §4.4.
