@@ -129,6 +129,9 @@ jobs:
       - name: Rust
         run: rustup toolchain install stable --profile minimal && rustup default stable
 
+      - name: openssh-server, que el runner no trae de serie
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server
+
       - name: Levantar el sshd del banco
         run: tests/e2e/montar-sshd.sh "$RUNNER_TEMP/e2e"
 

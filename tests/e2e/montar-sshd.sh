@@ -60,6 +60,19 @@ LogLevel ERROR
 AcceptEnv ORBIT_FAKE_*
 EOF
 
+# Lo que a una máquina limpia le falta, y que no se ve porque el log de sshd va
+# a un fichero: sin '/run/sshd' arranca y muere con «Missing privilege
+# separation directory», exit 255 y **ni una línea por stderr**. Es la clase de
+# fallo que en CI parece que el script no ha hecho nada.
+command -v /usr/sbin/sshd >/dev/null || {
+  echo "no hay /usr/sbin/sshd: instala openssh-server" >&2; exit 1; }
+sudo install -d -m 0755 /run/sshd
+
+# Y la configuración se valida antes de arrancar: 'sshd -t' dice qué línea está
+# mal, y arrancar a ciegas sólo dice que no arrancó.
+sudo /usr/sbin/sshd -t -f "$DIR/sshd_config" || {
+  echo "la configuración del banco no es válida" >&2; exit 1; }
+
 sudo /usr/sbin/sshd -f "$DIR/sshd_config" -E "$DIR/sshd.log"
 
 # Esperar a que escuche de verdad, no dormir un número mágico: preguntarle a
@@ -73,5 +86,12 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 
-echo "el sshd de pruebas no ha llegado a escuchar; mira $DIR/sshd.log" >&2
+# Y si no llega, se enseña el log en vez de nombrarlo: un mensaje que dice
+# «mira este fichero» en un CI donde nadie va a mirarlo no dice nada.
+echo "el sshd de pruebas no ha llegado a escuchar. Su log:" >&2
+sudo cat "$DIR/sshd.log" >&2 2>/dev/null || echo "(sin log)" >&2
+echo "--- último intento de conexión ---" >&2
+ssh -v -o BatchMode=yes -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null -i "$DIR/cliente" \
+    -p "$PUERTO" "$(id -un)@127.0.0.1" true 2>&1 | tail -20 >&2
 exit 1
