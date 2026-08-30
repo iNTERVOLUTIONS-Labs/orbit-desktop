@@ -84,3 +84,15 @@ test('tráfico y métricas · tema dark', async ({ page }) => {
   await expect(page.locator('.cifras').first()).toBeVisible()
   await page.screenshot({ path: 'capturas/dark-trafico.png', fullPage: true })
 })
+
+test('exec · tema dark', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'pruebas', exact: true }).click()
+  await page.getByRole('button', { name: /parada/ }).click()
+  await page.getByRole('button', { name: 'exec', exact: true }).click()
+  await page.locator('.entrada input').fill('rm -rf /srv/apps/parada/releases')
+  await page.getByRole('button', { name: 'Ejecutar' }).click()
+  await expect(page.locator('.peligro')).toBeVisible()
+  await page.screenshot({ path: 'capturas/dark-exec.png', fullPage: true })
+})

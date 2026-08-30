@@ -22,7 +22,7 @@
 //! **La lista de comandos de este fichero ES la superficie.** Si crece, crece
 //! la superficie, y hay que verlo en un diff.
 
-use orbit_client::comando::Comando;
+use orbit_client::comando::{Comando, ModoDeExec};
 use orbit_client::descubrir;
 use orbit_client::transporte::{self, EnCurso, Servidor};
 use std::collections::HashMap;
@@ -357,6 +357,80 @@ fn metricas(alias: String, app: String, binario: Option<String>) -> Resultado {
     pedir(&alias, binario, Comando::Metricas { app: Some(app) })
 }
 
+/// Ejecuta algo dentro de una app. **La puerta trasera.**
+///
+/// Devuelve la salida cruda —stdout y stderr por separado— y **no la
+/// interpreta**: es salida arbitraria de un proceso arbitrario, y puede traer
+/// secuencias ANSI, bytes nulos o megas en una sola línea.
+///
+/// El registro anota **sólo que se ejecutó algo en una app**, nunca qué. Se
+/// hereda de Orbit, que apunta `exec <app>` con el comentario de que un comando
+/// puede llevar una contraseña delante y un log no es sitio para secretos.
+#[tauri::command]
+/// `shell: true` manda el texto como **un** argumento y el servidor lo pasa a
+/// `bash -lc`; `false` manda los argumentos separados y no hay shell. La
+/// diferencia se elige en la pantalla y se ve, en vez de deducirla de la
+/// heurística del servidor: quien escribe tiene que poder predecir cuándo su
+/// `&&` se ejecuta y cuándo se pasa como texto.
+fn correr(
+    alias: String,
+    app: String,
+    shell: bool,
+    argumentos: Vec<String>,
+    binario: Option<String>,
+) -> Result<SalidaDeExec, ErrorParaLaInterfaz> {
+    let modo = if shell {
+        ModoDeExec::Shell(argumentos.join(" "))
+    } else {
+        ModoDeExec::Argumentos(argumentos)
+    };
+    let s = servidor(&alias, binario);
+    let c = Comando::Ejecutar { app, modo };
+    // Se enseña la orden exacta que se va a mandar, ya escapada. Es lo que
+    // convierte «confío en la interfaz» en «he leído lo que va a pasar».
+    let linea = c.linea(&s.binario).map_err(ErrorParaLaInterfaz::from)?;
+    match transporte::ejecutar(&s, &c, dir_control().as_deref(), &[]) {
+        Ok(r) => Ok(SalidaDeExec {
+            orden: linea,
+            stdout: r.stdout,
+            stderr: r.stderr,
+            codigo: r.codigo,
+        }),
+        // Un comando que sale con error NO es un fallo del transporte: es un
+        // comando que salió con error, y su salida es lo que hay que enseñar.
+        Err(transporte::ErrorTransporte::Orbit {
+            codigo,
+            stdout,
+            stderr,
+        }) => Ok(SalidaDeExec {
+            orden: linea,
+            stdout,
+            stderr,
+            codigo,
+        }),
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct SalidaDeExec {
+    /// La orden literal, ya escapada.
+    pub orden: String,
+    pub stdout: String,
+    pub stderr: String,
+    pub codigo: i32,
+}
+
+impl From<orbit_client::comando::ErrorForma> for ErrorParaLaInterfaz {
+    fn from(e: orbit_client::comando::ErrorForma) -> Self {
+        Self {
+            clase: "forma",
+            mensaje: e.to_string(),
+            detalle: None,
+        }
+    }
+}
+
 /// Los alias de `~/.ssh/config`, para poder importarlos.
 ///
 /// **No conecta con ninguno**: enumerar no es visitar. Saber si en un alias hay
@@ -389,6 +463,7 @@ pub fn ejecutar() {
             monitor,
             trafico,
             metricas,
+            correr,
             desplegar,
             cancelar,
             servidores_del_config,

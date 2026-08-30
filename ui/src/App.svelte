@@ -13,12 +13,13 @@
   import MonitorVista from './componentes/MonitorVista.svelte'
   import TraficoVista from './componentes/TraficoVista.svelte'
   import MetricasVista from './componentes/MetricasVista.svelte'
+  import Exec from './componentes/Exec.svelte'
   import { periodoDelMonitor } from './lib/despliegue'
   import type { App, Doctor, Entorno, Log, Metricas, Monitor, Trafico } from './lib/contrato'
   import {
     arreglar, cancelar, desplegar, diagnostico, entorno as pedirEntorno,
     entornoValor, hayPuente, log as pedirLog, monitor as pedirMonitor,
-    metricas as pedirMetricas, portada, servidoresDelConfig, trafico as pedirTrafico,
+    correr, metricas as pedirMetricas, portada, servidoresDelConfig, trafico as pedirTrafico,
     type AliasSsh, type ErrorDelPuente,
   } from './lib/puente'
 
@@ -43,7 +44,7 @@
   let periodo = $state(3)
   let trafico = $state<Trafico | null>(null)
   let metricas = $state<Metricas | null>(null)
-  let pestana = $state<'detalle' | 'log' | 'entorno' | 'trafico' | 'despliegue'>('detalle')
+  let pestana = $state<'detalle' | 'log' | 'entorno' | 'trafico' | 'exec' | 'despliegue'>('detalle')
 
   // La hoja de comando de un despliegue. Se enseña la orden literal ANTES de
   // ejecutarla: es la prueba visible de que esto sólo invoca `orbit`.
@@ -331,6 +332,9 @@
           <button type="button" class:activo={pestana === 'trafico'} onclick={() => verTrafico(elegida!)}>
             tráfico
           </button>
+          <button type="button" class:activo={pestana === 'exec'} onclick={() => (pestana = 'exec')}>
+            exec
+          </button>
           {#if vivos.ver(alias, elegida.name)}
             <button type="button" class:activo={pestana === 'despliegue'} onclick={() => (pestana = 'despliegue')}>
               despliegue
@@ -367,6 +371,15 @@
           {:else}
             <div class="log-envoltorio"><Esqueleto filas={4} /></div>
           {/if}
+        {:else if pestana === 'exec'}
+          <div class="log-envoltorio">
+            <Exec
+              app={elegida.name}
+              servidor={alias}
+              usuario={`orbit-${elegida.name}`}
+              correr={(shell, args) => correr(alias, elegida!.name, shell, args)}
+            />
+          </div>
         {:else if pestana === 'despliegue'}
           {@const v = vivos.ver(alias, elegida.name)}
           {#if v}

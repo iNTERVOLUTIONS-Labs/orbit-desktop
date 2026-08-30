@@ -407,3 +407,37 @@ export interface Metricas {
   build_trend_s: number | null
   last: string | null
 }
+
+// ── exec ───────────────────────────────────────────────────────────────────
+
+export interface SalidaDeExec {
+  /** La orden literal, ya escapada. Se enseña **antes** de ejecutar: es lo que
+   *  convierte «confío en la interfaz» en «he leído lo que va a pasar». */
+  orden: string
+  stdout: string
+  stderr: string
+  codigo: number
+}
+
+/** Los patrones que hacen que la pantalla pida una confirmación reforzada.
+ *
+ *  **Es una lista negra, y por eso su valor es pedagógico y no defensivo.** No
+ *  impide nada —hay mil formas de escribir un `rm`— y quien quiera saltársela lo
+ *  hará sin proponérselo. Lo que sí para es el error de dedos a las tres de la
+ *  mañana, que es el caso real y el único contra el que sirve.
+ *
+ *  Se documenta así para que nadie la confunda con una protección y construya
+ *  encima suponiendo que lo es. */
+export function parecePeligroso(texto: string): string | null {
+  const t = texto.toLowerCase()
+  const patrones: Array<[string, string]> = [
+    ['rm -rf /', 'borra recursivamente desde una ruta absoluta'],
+    ['drop database', 'borra una base de datos entera'],
+    ['truncate', 'vacía una tabla'],
+    ['mkfs', 'formatea un sistema de ficheros'],
+    ['dd of=/dev/', 'escribe directamente sobre un dispositivo'],
+    ['chmod -r 777 /', 'abre los permisos de todo'],
+    ['> /dev/sd', 'escribe sobre un disco'],
+  ]
+  return patrones.find(([p]) => t.includes(p))?.[1] ?? null
+}
