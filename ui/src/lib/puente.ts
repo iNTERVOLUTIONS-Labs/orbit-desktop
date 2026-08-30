@@ -12,7 +12,7 @@
 // falso** que usan las pruebas del núcleo, así que la interfaz y el contrato no
 // pueden divergir.
 
-import { leerLog, type App, type Doctor, type Lista, type Log } from './contrato'
+import { leerLog, type App, type Despliegue, type Doctor, type Lista, type Log } from './contrato'
 
 import listaSana from './muestras/list.json'
 import listaEstados from './muestras/list-estados.json'
@@ -114,4 +114,23 @@ export async function log(alias: string, app: string, desde = '1h'): Promise<Log
  */
 export async function arreglar(alias: string): Promise<Doctor> {
   return invocar<Doctor>('doctor_arreglar', { alias })
+}
+
+/**
+ * Lanza un despliegue.
+ *
+ * El progreso NO vuelve por aquí: sale como eventos `orbit://progreso` según
+ * ocurre, y esta promesa se resuelve con el objeto final. Devolverlo todo junto
+ * al terminar convertiría tres minutos de información en un bloque de texto que
+ * llega cuando ya no sirve.
+ */
+export async function desplegar(alias: string, app: string): Promise<Despliegue> {
+  if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
+  return invocar<Despliegue>('desplegar', { alias, app })
+}
+
+/** Cancela un despliegue en curso. Devuelve si había uno que cancelar. */
+export async function cancelar(alias: string, app: string): Promise<boolean> {
+  if (!hayPuente()) return false
+  return invocar<boolean>('cancelar', { alias, app })
 }

@@ -80,6 +80,12 @@
   --st-na: var(--o-slate-350);
   --on-solid: var(--o-white);
 
+  /* El velo de un modal. Es un color, así que vive aquí: la primera versión lo
+     escribió a mano dentro del componente y la comprobación lo cazó. Sobre
+     claro basta con menos opacidad para que se note que hay algo detrás; sobre
+     oscuro hace falta más, porque si no el modal no se despega del fondo. */
+  --velo: rgb(11 16 32 / 40%);
+
   --shadow-1: 0 1px 2px rgb(11 16 32 / 6%), 0 1px 3px rgb(11 16 32 / 8%);
   --shadow-2: 0 4px 12px rgb(11 16 32 / 10%), 0 1px 3px rgb(11 16 32 / 6%);
   --shadow-3: 0 12px 32px rgb(11 16 32 / 16%), 0 2px 8px rgb(11 16 32 / 8%);
@@ -124,6 +130,7 @@
     --st-na: var(--o-slate-300);
     --on-solid: var(--o-ink-850);
     /* En oscuro la sombra casi no se ve: la elevación la hace la superficie. */
+    --velo: rgb(0 0 0 / 62%);
     --shadow-1: none;
     --shadow-2: 0 8px 24px rgb(0 0 0 / 45%);
     --shadow-3: 0 20px 48px rgb(0 0 0 / 60%);
@@ -152,6 +159,7 @@
   --st-unknown: var(--o-slate-300);
   --st-na: var(--o-slate-300);
   --on-solid: var(--o-ink-850);
+  --velo: rgb(0 0 0 / 62%);
   --shadow-1: none;
   --shadow-2: 0 8px 24px rgb(0 0 0 / 45%);
   --shadow-3: 0 20px 48px rgb(0 0 0 / 60%);
