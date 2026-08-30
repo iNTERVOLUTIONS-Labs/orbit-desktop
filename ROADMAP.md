@@ -41,9 +41,14 @@ catálogo de órdenes y el escapado, con 90 pruebas rápidas y 11 de punta a pun
 contra un `sshd` de verdad. Y la interfaz tiene sus dos pantallas —lista y
 detalle— con 33 pruebas y capturas en los dos temas.
 
-**Falta enganchar las dos mitades**: hoy la interfaz se alimenta de las mismas
-respuestas del servidor falso, no del transporte. Eso es Tauri, y va después de
-`~/.ssh/config`.
+Y las dos mitades ya están enganchadas: `crates/orbit-app` es el envoltorio de
+Tauri —delgado a propósito, sólo declara el catálogo de comandos— y la interfaz
+descubre servidores leyendo los alias de `~/.ssh/config` y preguntándole a
+`ssh -G` qué significan.
+
+Falta el **camino de alta**: hoy se listan todos los alias del fichero, y hace
+falta la pantalla que comprueba cuáles tienen un Orbit detrás y con qué versión
+de contrato hablan.
 
 Se empezó por aquí y no por una pantalla porque es lo que el plan de pruebas
 manda: sin el escapador demostrado, sin el servidor falso y sin el barrido de

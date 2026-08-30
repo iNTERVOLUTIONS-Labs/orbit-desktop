@@ -1,0 +1,25 @@
+[package]
+name = "orbit-app"
+description = "El envoltorio de escritorio: la ventana y el puente hacia el núcleo."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Esta caja es DELGADA a propósito: declara los comandos que la interfaz puede
+# invocar y no hace nada más. Toda la lógica —transporte, contrato, escapado—
+# vive en `orbit-client`, que no sabe que Tauri existe. Así se prueba con
+# `cargo test` sin levantar una ventana, y un cambio de envoltorio no la toca.
+[dependencies]
+orbit-client = { path = "../orbit-client" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+tauri = { version = "2", features = [] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[lib]
+name = "orbit_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]

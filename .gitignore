@@ -28,3 +28,6 @@ __pycache__/
 
 # El impresor de argv de la prueba de propiedad, si queda suelto en /tmp
 orbit-desktop-impresor.sh
+
+# Lo que genera tauri-build en cada compilación.
+crates/orbit-app/gen/

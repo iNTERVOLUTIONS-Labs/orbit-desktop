@@ -1,0 +1,183 @@
+//! El envoltorio de escritorio: la ventana y el puente hacia el núcleo.
+//!
+//! Esta caja es **delgada a propósito**. Declara los comandos que la interfaz
+//! puede invocar y no hace nada más: el transporte, el contrato y el escapado
+//! viven en `orbit-client`, que no sabe que Tauri existe.
+//!
+//! Eso no es orden por orden. Es lo que hace que:
+//!
+//!  · la lógica se pruebe con `cargo test` sin levantar una ventana,
+//!  · un cambio de envoltorio —o de framework de interfaz— no la toque,
+//!  · y el catálogo de lo que la interfaz puede pedirle al servidor siga
+//!    siendo **una lista finita en un fichero**, que es lo que hace auditable
+//!    la regla nº 1: la interfaz sólo invoca `orbit`.
+//!
+//! Y hay una frontera de seguridad además de una de diseño. En Tauri el
+//! renderizador **no tiene Node**: no hay `fs`, ni `child_process`, ni forma de
+//! tocar el disco. Todo lo que la interfaz puede hacer pasa por los comandos
+//! declarados aquí abajo. Si mañana una dependencia de npm se compromete —y
+//! pasa cada pocos meses—, en Electron podría leer `~/.ssh/id_ed25519`; aquí no
+//! puede, porque no hay API para eso salvo la que se le dé.
+//!
+//! **La lista de comandos de este fichero ES la superficie.** Si crece, crece
+//! la superficie, y hay que verlo en un diff.
+
+use orbit_client::comando::Comando;
+use orbit_client::descubrir;
+use orbit_client::transporte::{self, Servidor};
+
+/// Un fallo, ya en palabras que se le pueden enseñar a alguien.
+///
+/// Se traduce aquí y no en la interfaz porque los mensajes son parte del
+/// contrato con el usuario, y repartirlos por las pantallas es cómo acaban
+/// diciendo cosas distintas de lo mismo.
+#[derive(serde::Serialize)]
+pub struct ErrorParaLaInterfaz {
+    /// Un identificador estable, para que la interfaz pueda decidir **sin
+    /// leer el texto**: enseñar la pantalla bloqueante de la clave de host es
+    /// una decisión, y tomarla comparando una cadena traducida es cómo se
+    /// rompe al traducirla.
+    pub clase: &'static str,
+    pub mensaje: String,
+    /// El detalle crudo, para poder copiarlo. En la clave de host cambiada,
+    /// aquí va la huella y la línea del `known_hosts` que hay que quitar.
+    pub detalle: Option<String>,
+}
+
+impl From<transporte::ErrorTransporte> for ErrorParaLaInterfaz {
+    fn from(e: transporte::ErrorTransporte) -> Self {
+        use transporte::ErrorTransporte as E;
+        let clase = match &e {
+            E::Forma(_) => "forma",
+            E::NoSePudoLanzar(_) => "no-se-pudo-lanzar",
+            E::NoLlego { .. } => "no-llego",
+            E::ClaveDeHostCambiada { .. } => "clave-de-host-cambiada",
+            E::OrbitNoEsta { .. } => "orbit-no-esta",
+            E::SudoPideClave => "sudo-pide-clave",
+            E::Orbit { .. } => "orbit",
+            E::Demasiado { .. } => "demasiado",
+            E::Tarde { .. } => "tarde",
+            E::RespuestaSucia(_) => "respuesta-sucia",
+            E::Json(_) => "json",
+        };
+        let detalle = match &e {
+            E::ClaveDeHostCambiada { detalle } => Some(detalle.clone()),
+            E::Orbit { stderr, .. } | E::NoLlego { stderr, .. } => Some(stderr.clone()),
+            _ => None,
+        };
+        Self {
+            clase,
+            mensaje: e.to_string(),
+            detalle,
+        }
+    }
+}
+
+type Resultado = Result<serde_json::Value, ErrorParaLaInterfaz>;
+
+fn servidor(alias: &str, binario: Option<String>) -> Servidor {
+    let mut s = Servidor::nuevo(alias, alias);
+    if let Some(b) = binario {
+        s.binario = b;
+    }
+    s
+}
+
+/// Un comando cualquiera del catálogo, ejecutado y devuelto **sin interpretar**.
+///
+/// La interfaz recibe el objeto tal cual llegó del servidor. No se aplana, no
+/// se renombra y no se rellena nada: los tipos ya están en `contrato.rs` y en
+/// su gemelo de TypeScript, y meter aquí una tercera forma sería inventar un
+/// tercer contrato.
+fn pedir(alias: &str, binario: Option<String>, c: Comando) -> Resultado {
+    let s = servidor(alias, binario);
+    let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
+    let texto = r.objeto()?;
+    serde_json::from_str(texto).map_err(|e| ErrorParaLaInterfaz {
+        clase: "json",
+        mensaje: e.to_string(),
+        detalle: None,
+    })
+}
+
+/// Dónde vive el socket de `ControlMaster`.
+///
+/// En `XDG_RUNTIME_DIR` y no en `/tmp`: es un directorio propio del usuario,
+/// que el sistema limpia al cerrar la sesión. Un socket de control **es una
+/// sesión root guardada en un fichero** —con él abierto se puede abrir un canal
+/// sin la clave, comprobado— así que dónde vive y con qué permisos no es un
+/// detalle de higiene.
+fn dir_control() -> Option<String> {
+    let base = std::env::var_os("XDG_RUNTIME_DIR")?;
+    let d = std::path::Path::new(&base).join("orbit-desktop");
+    std::fs::create_dir_all(&d).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).ok()?;
+    }
+    Some(d.to_string_lossy().into_owned())
+}
+
+// ── el catálogo, y nada más ────────────────────────────────────────────────
+
+#[tauri::command]
+fn version(alias: String, binario: Option<String>) -> Resultado {
+    pedir(&alias, binario, Comando::Version)
+}
+
+/// La portada se alimenta de **esto** y no de `list`.
+///
+/// `status --json` trae el array de apps completo e **idéntico** al de
+/// `list --json` —comprobado comparando los dos objetos— así que una llamada de
+/// 389 ms sustituye a dos que suman 695. Un 44 % menos en la carga que forma la
+/// primera impresión, y no cuesta nada: es elegir bien qué comando se pide.
+#[tauri::command]
+fn portada(alias: String, binario: Option<String>) -> Resultado {
+    pedir(&alias, binario, Comando::Estado)
+}
+
+#[tauri::command]
+fn lista(alias: String, binario: Option<String>) -> Resultado {
+    pedir(&alias, binario, Comando::Lista)
+}
+
+#[tauri::command]
+fn info(alias: String, app: String, binario: Option<String>) -> Resultado {
+    pedir(&alias, binario, Comando::Info { app })
+}
+
+#[tauri::command]
+fn doctor(alias: String, binario: Option<String>) -> Resultado {
+    pedir(&alias, binario, Comando::Doctor)
+}
+
+/// Los alias de `~/.ssh/config`, para poder importarlos.
+///
+/// **No conecta con ninguno**: enumerar no es visitar. Saber si en un alias hay
+/// un Orbit es otra pregunta, se hace después y de una en una, porque abrir una
+/// pantalla no puede significar abrir cuarenta sesiones SSH.
+#[tauri::command]
+fn servidores_del_config() -> Result<Vec<descubrir::AliasSsh>, ErrorParaLaInterfaz> {
+    let ruta = descubrir::ruta_por_defecto().ok_or(ErrorParaLaInterfaz {
+        clase: "sin-home",
+        mensaje: "no sé dónde está tu carpeta personal".into(),
+        detalle: None,
+    })?;
+    Ok(descubrir::descubrir(&ruta))
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn ejecutar() {
+    tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            version,
+            portada,
+            lista,
+            info,
+            doctor,
+            servidores_del_config,
+        ])
+        .run(tauri::generate_context!())
+        .expect("no he podido abrir la ventana");
+}
