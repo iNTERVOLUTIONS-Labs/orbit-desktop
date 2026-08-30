@@ -1,0 +1,1 @@
+{"schema":1,"backups":[{"file":"/tmp/bpr/backups/mi-web-20260829-031500.tar.gz","kind":"app","app":"mi-web","ok":false,"message":"le falta manifest y app.conf: 'orbit restore' la rechazaría"},{"file":"/tmp/bpr/backups/_orbit-conf-20260829-031500.tar.gz","kind":"config","app":null,"ok":true,"message":"configuración global"}],"total":2,"good":1,"bad":1,"ok":false}

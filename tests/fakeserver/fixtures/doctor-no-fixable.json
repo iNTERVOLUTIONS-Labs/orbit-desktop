@@ -1,0 +1,1 @@
+{"schema":1,"checks":[{"id":"pnpm","level":"warn","message":"pnpm no está instalado","fix":"sudo npm i -g pnpm","fixable":false},{"id":"default-server","level":"error","message":"falta el servidor por defecto","fix":"orbit doctor --fix lo regenera","fixable":true},{"id":"nginx","level":"ok","message":"nginx OK","fix":null,"fixable":false}],"summary":{"ok":1,"warn":1,"error":1}}

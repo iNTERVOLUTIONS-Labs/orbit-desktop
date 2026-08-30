@@ -69,6 +69,50 @@ jobs:
       - name: El contrato sigue siendo el que documentamos
         run: ./tools/bench/check-contract.py .bench
 
+  nucleo:
+    # El crate del cliente: transporte, contrato y escapado. Vive fuera de la
+    # interfaz a propósito, así que se prueba sin levantar una ventana.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Los cuatro shells, que la prueba de propiedad necesita
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq dash zsh busybox
+
+      - name: Rust, el que ya trae el runner
+        # Sin acción de terceros. La imagen de GitHub ya lleva rustup, así que
+        # una acción aquí sería una dependencia más en la cadena de suministro
+        # —el criterio B-49— a cambio de dos líneas. Y las acciones de terceros
+        # se fijan por SHA, que es un pin más que mantener.
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+          rustc --version && cargo --version
+
+      - name: Formato
+        run: cargo fmt --all -- --check
+
+      - name: Clippy sin avisos
+        # Los avisos se tratan como errores: una regla que se puede ignorar se
+        # ignora, y entonces deja de ser una regla.
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Pruebas
+        run: cargo test --all --all-features -- --nocapture
+
+      - name: Y con una semilla distinta cada vez
+        # Para que el corpus del escapado no se fosilice. La semilla se imprime
+        # siempre, también cuando pasa.
+        run: ORBIT_SEMILLA=$RANDOM ORBIT_CASOS=800 cargo test -p orbit-client --test escapado -- --nocapture
+
+      - name: Auditoría de dependencias
+        # Falla el build en alta y crítica. Es código de terceros ejecutándose en
+        # el proceso que sostiene las credenciales SSH del usuario, que es el
+        # argumento con el que se descartó Electron.
+        run: |
+          cargo install cargo-audit --locked --quiet || true
+          cargo audit --deny warnings
+
   documentacion:
     runs-on: ubuntu-latest
     steps:

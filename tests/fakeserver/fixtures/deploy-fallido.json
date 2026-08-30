@@ -1,0 +1,1 @@
+{"schema":1,"app":"mi-web","ok":false,"release":null,"previous":"20260805-041230","commit":{"sha":"a1b2c3d","subject":"añadir la página de precios","ref":"main"},"rolled_back":false,"recovered":false,"duration_s":47,"failed_step":"build","error":"el build ha fallado: Cannot find module 'sharp'"}

@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/orbit-client"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/iNTERVOLUTIONS-Labs/orbit-desktop"
+rust-version = "1.80"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"

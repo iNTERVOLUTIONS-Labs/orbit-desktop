@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  Un Orbit de mentira, para probar el cliente sin un VPS.
+#
+#  Existe porque un VPS de verdad **no sabe devolver las respuestas
+#  patológicas**, que son justo las que hay que probar: un JSON cortado a
+#  mitad, un contrato de una versión que no conocemos, un servidor que gotea un
+#  byte por minuto, un nombre de app con '</script>' dentro.
+#
+#  Va en bash y no en el lenguaje del cliente, por dos motivos. El primero es
+#  coherencia: el Orbit de verdad escribe su contrato con 'printf' a mano y no
+#  con 'jq', así que un doble que use una librería de JSON produciría una salida
+#  *más limpia* que el original y taparía justo la clase de fallo que buscamos.
+#  El segundo es que así se puede instalar como /usr/local/bin/orbit dentro de
+#  un contenedor con sshd y probar el camino entero.
+#
+#  Se le dice qué contestar con ORBIT_FAKE_CASE. Sin él, se comporta como un
+#  servidor sano.
+#
+#  Y **apunta el argv que recibió** en ORBIT_FAKE_LOG, una línea por invocación
+#  con los argumentos separados por un byte nulo. Ese registro es la aserción de
+#  las pruebas de escapado: ahí no se comprueba lo que devuelve, se comprueba lo
+#  que le llegó — que es la única forma de saber si un nombre de app con una
+#  comilla dentro sobrevivió al viaje.
+# ============================================================================
+set -uo pipefail
+
+CASE="${ORBIT_FAKE_CASE:-sano}"
+FIX="$(dirname "$(readlink -f "$0")")/fixtures"
+
+# El registro va primero, antes de cualquier salida: si el caso pedido es
+# "muérete", el argv tiene que quedar apuntado igualmente.
+if [[ -n "${ORBIT_FAKE_LOG:-}" ]]; then
+  { printf '%s\0' "$@"; printf '\n'; } >> "$ORBIT_FAKE_LOG"
+fi
+
+# El subcomando, para que un caso sano pueda contestar distinto a cada uno. Se
+# salta las banderas globales igual que hace el Orbit de verdad.
+sub=""
+for a in "$@"; do
+  case "$a" in
+    --json|--eva|--progress|--yes|-y) continue ;;
+    --lang) continue ;;
+    -*) continue ;;
+    *) sub="$a"; break ;;
+  esac
+done
+
+emitir() { cat "$FIX/$1"; }
+
+case "$CASE" in
+  # ── el camino feliz ──────────────────────────────────────────────────────
+  sano)
+    case "$sub" in
+      version)  emitir version.json ;;
+      list)     emitir list.json ;;
+      status)   emitir status.json ;;
+      info)     emitir info.json ;;
+      doctor)   emitir doctor.json ;;
+      top)      emitir top.json ;;
+      logs)     emitir logs.ndjson ;;
+      backup)   emitir backup-list.json ;;
+      "")       printf 'orbit 1.3.6\n' ;;
+      *)        printf '  ✗ Comando desconocido: %s\n' "$sub" >&2; exit 1 ;;
+    esac ;;
+
+  # ── P-01 · JSON cortado a mitad de un objeto ─────────────────────────────
+  # No debe parsearse lo que llegó ni pintarse las apps que sí se leyeron.
+  truncado)       emitir list.json | head -c 120 ;;
+
+  # ── P-02 · campos que no conocemos ───────────────────────────────────────
+  # Se ignoran en silencio: los campos se añaden, nunca se renombran.
+  campos-nuevos)  emitir list-campos-nuevos.json ;;
+
+  # ── P-03 · null donde el contrato dice número ────────────────────────────
+  null-en-numero) emitir list-null-releases.json ;;
+
+  # ── P-04 · un schema que no entendemos ───────────────────────────────────
+  schema-2)       emitir schema2.json ;;
+
+  # ── P-05 · contrato más nuevo que el nuestro ─────────────────────────────
+  # Aquí NO hay que negarse a funcionar: se avisa y se degrada.
+  contrato-9)     emitir version-contrato9.json ;;
+
+  # ── P-06 · silencio con código 0 ─────────────────────────────────────────
+  # No es «no hay apps»: es «no ha contestado».
+  vacio)          exit 0 ;;
+
+  # ── P-07 · colección vacía legítima ──────────────────────────────────────
+  sin-apps)       emitir list-vacia.json ;;
+
+  # ── P-08 · error con stdout en blanco ────────────────────────────────────
+  error-mudo)     printf '  ✗ Este comando necesita root. Usa:  sudo orbit list\n' >&2; exit 1 ;;
+
+  # ── P-09 · rc distinto de 0 CON un objeto válido ─────────────────────────
+  # Es el despliegue que falla: hay que leer el objeto, no descartarlo por el rc.
+  fallo-con-objeto) emitir deploy-fallido.json; exit 1 ;;
+
+  # ── P-10 · rc 0 con "ok": false ──────────────────────────────────────────
+  incoherente)    emitir deploy-fallido.json; exit 0 ;;
+
+  # ── P-11 · basura por stderr antes del JSON ──────────────────────────────
+  # El motd, el banner de un .bashrc. stderr no son datos: se ignora.
+  ruido-stderr)
+    printf 'Welcome to Ubuntu 24.04 LTS\n  * Support: https://ubuntu.com/pro\n' >&2
+    emitir list.json ;;
+
+  # ── P-12 · basura por stdout ANTES del JSON ──────────────────────────────
+  # Es un fallo, no algo que recortar: buscar la primera llave es exactamente
+  # cómo se cuela un objeto ajeno delante del legítimo.
+  ruido-stdout)   printf 'Last login: Fri Aug 29\n'; emitir list.json ;;
+
+  # ── P-13 · dos objetos por stdout ────────────────────────────────────────
+  dos-objetos)    emitir version.json; emitir version.json ;;
+
+  # ── P-14 · orbit no está instalado ───────────────────────────────────────
+  no-instalado)   printf 'bash: orbit: command not found\n' >&2; exit 127 ;;
+
+  # ── P-15 · existe pero no se puede ejecutar ──────────────────────────────
+  sin-permiso)    printf 'bash: /usr/local/bin/orbit: Permission denied\n' >&2; exit 126 ;;
+
+  # ── P-16 · sudo pide contraseña y se queda esperando ─────────────────────
+  sudo-pide-clave)
+    printf 'sudo: a terminal is required to read the password; either use the -S option to read from standard input or configure an askpass helper\n' >&2
+    exit 1 ;;
+
+  # ── P-17 · la conexión se corta a mitad ──────────────────────────────────
+  corte)          emitir list.json | head -c 200; exit 255 ;;
+
+  # ── P-19 · lentísimo pero correcto ───────────────────────────────────────
+  lento)          sleep "${ORBIT_FAKE_SLEEP:-5}"; emitir list.json ;;
+
+  # ── P-20 · un flujo que no termina nunca ─────────────────────────────────
+  # Hay que cortarlo por presupuesto y decirlo, no consumir memoria hasta morir.
+  # Sin pausa a propósito: inundando, el cliente tiene que cortar por el
+  # presupuesto de TAMAÑO en menos de un segundo. Con una pausa cortaría por el
+  # de tiempo, que también vale pero deja la suite en treinta segundos — y una
+  # prueba que cuesta treinta segundos acaba siendo una que alguien quiere
+  # quitar. El goteo lento lo cubre el caso 'lento'.
+  infinito)       printf '{"schema":1,"apps":['; while :; do printf '{"name":"x"},'; done ;;
+
+  # ── P-21 · una respuesta enorme ──────────────────────────────────────────
+  enorme)
+    printf '{"schema":1,"apps":[{"name":"grande","type":"static","domain":"x.test","aliases":[],"state":{"service":null,"port":null,"ssl":false,"cert_days":null,"maintenance":false,"served":true,"autodeploy":false,"queue":false,"releases":1,"last_deploy":null,"last_deploy_sha":null}}],"relleno":"'
+    head -c "${ORBIT_FAKE_BYTES:-12000000}" /dev/zero | tr '\0' 'a'
+    printf '"}\n' ;;
+
+  # ── P-22, P-23, P-24 · nombres hostiles ──────────────────────────────────
+  # Marcado, inyección de comandos, y un RIGHT-TO-LEFT OVERRIDE. Ninguno debe
+  # ejecutarse, ni «limpiarse» para operar sobre el nombre limpio.
+  nombre-hostil)  emitir list-nombre-hostil.json ;;
+
+  # ── P-26 · UTF-8 malformado ──────────────────────────────────────────────
+  utf8-roto)
+    printf '{"schema":1,"apps":[{"name":"'; printf '\xc3\x28'; printf '","type":"static","domain":"x.test","aliases":[],"state":{"service":null,"port":null,"ssl":false,"cert_days":null,"maintenance":false,"served":true,"autodeploy":false,"queue":false,"releases":1,"last_deploy":null,"last_deploy_sha":null}}]}\n' ;;
+
+  # ── P-28 · el tipo equivocado: apps es un objeto ─────────────────────────
+  tipo-erroneo)   printf '{"schema":1,"apps":{"no":"soy una lista"}}\n' ;;
+
+  # ── P-29 · números fuera de rango, y un cert_days negativo que ES real ───
+  # Un certificado caducado da días negativos y hay que pintarlo como caducado.
+  numeros-raros)  emitir info-numeros-raros.json ;;
+
+  # ── P-33 · el lote con los seis finales presentes ────────────────────────
+  # Seis recuentos distintos. Agruparlos en «correctas/fallidas» está prohibido.
+  lote-seis)      emitir deploy-all.json ;;
+
+  # ── P-34 · todo inalcanzable ─────────────────────────────────────────────
+  # «No he podido preguntar», nunca «nada que hacer».
+  lote-mudo)      emitir deploy-all-mudo.json ;;
+
+  # ── P-35 · un arreglo descrito que NO es aplicable ───────────────────────
+  # Se enseña el texto SIN botón: 'fixable' existe exactamente para eso.
+  doctor-no-fixable) emitir doctor-no-fixable.json ;;
+
+  # ── P-36, P-37 · served:false y service:null ─────────────────────────────
+  # El primero es un fallo grave; el segundo es «no aplica». No son lo mismo.
+  estados)        emitir list-estados.json ;;
+
+  # ── P-41 · load con menos de tres elementos ──────────────────────────────
+  load-vacio)     emitir status-load-vacio.json ;;
+
+  # ── P-42 · la respuesta de otro comando ──────────────────────────────────
+  respuesta-cruzada) emitir status.json ;;
+
+  # ── P-43 · la respuesta habla de otra app ────────────────────────────────
+  otra-app)       emitir info-otra-app.json ;;
+
+  # ── P-49 · lo que la documentación promete y el binario no da ────────────
+  # Es la clase de fallo que encontramos auditando: 'doctor --fix --json --yes'
+  # documentado y muerto. La fuente de verdad es el binario.
+  documentado-y-roto)
+    printf '  ✗ orbit doctor: no sé qué es «--yes». Sólo acepta --fix y --json.\n' >&2
+    exit 1 ;;
+
+  *) printf 'caso desconocido en el falso: %s\n' "$CASE" >&2; exit 2 ;;
+esac
