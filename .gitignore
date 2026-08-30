@@ -1,0 +1,27 @@
+# El banco de pruebas: se genera con tools/bench/make-bench.sh en un minuto,
+# y lleva dentro una copia de 'orbit' que no es nuestra y que caducaría.
+/.bench/
+
+# Rust
+/target/
+**/*.rs.bk
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Python de las pruebas de escapado
+__pycache__/
+*.pyc
+
+# Sistema
+.DS_Store
+*.log
+*.tmp
+*.swp
+*.local

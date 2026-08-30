@@ -1,0 +1,80 @@
+name: pruebas
+
+# Las acciones van fijadas por SHA de commit y no por etiqueta. Una etiqueta
+# —'@v4'— se puede mover a otro commit; un SHA no. Es el vector del incidente de
+# 'tj-actions' de 2025, y es la mitigación con mejor relación entre coste y daño
+# evitado de todo el CI: quince minutos y un bot que mantenga los pines.
+# Es el criterio B-49 de docs/QA.md, y aplicárnoslo aquí no es ceremonia: un
+# repositorio que documenta una regla y no la cumple enseña a ignorarla.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  escapado:
+    # La pieza de la que depende que el nombre de una app no se convierta en un
+    # comando. Corre contra los cuatro shells a propósito: el shell de login del
+    # usuario remoto no lo elegimos nosotros, y el fallo que esta prueba encontró
+    # la primera vez que se ejecutó sólo se daba en zsh.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Instalar los cuatro shells
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq dash zsh busybox
+
+      - name: Modo estricto — ninguno de los cuatro puede faltar
+        # Una suite que se salta un shell y sale en verde es peor que una roja:
+        # Orbit ya se comió esa lección con 'jq', 'rsync' y 'nginx', y por eso
+        # existe su 'make test-strict'.
+        run: |
+          for s in bash dash zsh busybox; do
+            command -v "$s" >/dev/null || { echo "falta $s: la prueba no está completa"; exit 1; }
+          done
+
+      - name: Prueba de propiedad del escapado
+        run: python3 tests/escaping/prop_test.py 20260830 5000
+
+      - name: Y con semilla aleatoria, para que no se fosilice el corpus
+        # La semilla se imprime siempre, también cuando pasa: un fallo que no se
+        # puede reproducir no es un fallo, es una anécdota.
+        run: python3 tests/escaping/prop_test.py "$RANDOM" 2000
+
+  contrato:
+    # Mide el contrato contra un Orbit de verdad con 40 apps. No es una prueba
+    # de aprobado: es la que impide que las cifras de la documentación se
+    # queden viejas sin que nadie se entere.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Traer Orbit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: iNTERVOLUTIONS-Labs/orbit
+          path: .orbit
+
+      - name: Montar el banco y medir
+        run: |
+          ./tools/bench/make-bench.sh .orbit 40
+          ./tools/bench/measure.sh .bench 5
+
+      - name: El contrato sigue siendo el que documentamos
+        run: ./tools/bench/check-contract.py .bench
+
+  documentacion:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Ningún enlace interno roto
+        run: |
+          rc=0
+          for f in *.md docs/*.md; do
+            d=$(dirname "$f")
+            for l in $(grep -ohE '\]\(([A-Za-z0-9./-]+\.md)\)' "$f" | sed -E 's/.*\((.*)\)/\1/'); do
+              [ -f "$d/$l" ] || { echo "enlace roto en $f -> $l"; rc=1; }
+            done
+          done
+          exit $rc
