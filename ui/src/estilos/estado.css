@@ -135,3 +135,12 @@
    por la misma regla: el aspecto de «esto es grave» se decide en un sitio. */
 .hoja--peligrosa { border-color: var(--st-error); }
 .hoja--peligrosa .confirmar { background: var(--st-error); color: var(--on-solid); }
+
+/* La gráfica. El hueco es NEUTRO y no un color de alarma: «no se sabe» no es un
+   problema, y pintarlo como si lo fuera enseña a ignorar los que sí lo son. */
+.barra { fill: var(--accent-fill); }
+.hueco { fill: var(--st-unknown); }
+
+/* Una tendencia que empeora. Ámbar y no rojo: que el build tarde más no es una
+   avería, es algo que mirar. */
+.tendencia--peor strong { color: var(--st-warn); }

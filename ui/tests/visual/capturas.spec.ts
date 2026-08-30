@@ -74,3 +74,13 @@ for (const tema of ['dark'] as const) {
     await page.screenshot({ path: `capturas/${tema}-monitor.png`, fullPage: true })
   })
 }
+
+test('tráfico y métricas · tema dark', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'pruebas', exact: true }).click()
+  await page.getByRole('button', { name: /parada/ }).click()
+  await page.getByRole('button', { name: 'tráfico', exact: true }).click()
+  await expect(page.locator('.cifras').first()).toBeVisible()
+  await page.screenshot({ path: 'capturas/dark-trafico.png', fullPage: true })
+})
