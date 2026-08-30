@@ -434,6 +434,200 @@ pub fn ejecutar_local(
     ejecutar_proceso(cmd, tope_de_tiempo(comando), binario)
 }
 
+/// Un despliegue en curso, para poder cancelarlo.
+///
+/// Cancelar **mata el proceso remoto**, y lo que eso deja detrás depende del
+/// paso en el que estuviera. Por eso el que llama tiene que saber cuál era: no
+/// es lo mismo interrumpir un build —la release nueva se descarta y `current`
+/// ni se ha movido, así que no queda nada roto— que interrumpir `service` o
+/// `nginx`, donde sí puede quedar trabajo a medias.
+///
+/// El modelo de despliegues de Orbit ayuda: todo lo destructivo ocurre lo más
+/// tarde posible y el symlink se mueve al final. Pero eso no convierte la
+/// cancelación en gratis, y decir que lo es sería mentir.
+/// **Lo crea quien llama, ANTES de llamar.** La primera versión lo devolvía la
+/// función al terminar, y eso lo hacía inútil: para cuando lo tenías, no había
+/// nada que cancelar. Lo destapó escribir la prueba, no revisar el diseño.
+#[derive(Clone, Default)]
+pub struct EnCurso {
+    cancelar: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl EnCurso {
+    pub fn nuevo() -> Self {
+        Self::default()
+    }
+
+    /// Pide que el proceso muera. Lo que deja detrás depende del paso en curso,
+    /// y eso lo sabe quien mira la pantalla, no esto.
+    pub fn cancelar(&self) {
+        self.cancelar
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn cancelado(&self) -> bool {
+        self.cancelar.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// Ejecuta una orden **sirviendo el progreso mientras ocurre**.
+///
+/// Existe porque `deploy --progress` emite un suceso por línea por **stderr**
+/// mientras stdout espera al objeto final, y leerlo entero al terminar
+/// convertiría tres minutos de información en un bloque de texto que llega
+/// cuando ya no sirve.
+///
+/// `al_llegar` recibe cada línea de stderr **según llega**, no al final. Se
+/// llama desde el hilo que lee stderr, así que tiene que ser barata: lo que
+/// haga cosas caras que lo encole.
+///
+/// Lo que este camino **no** hace, y es lo importante:
+///
+///  · **No decide que un despliegue ha fallado por perder el contacto.** Si la
+///    conexión se corta, el despliegue **sigue en el servidor** y el cliente ya
+///    no sabe qué pasó. Devolver «falló» sería afirmar algo que no se sabe. El
+///    error dice que se perdió el contacto, que es incómodo y verdadero.
+///  · **No reintenta solo.** Un `deploy` reintentado sobre uno en curso es, en
+///    el mejor caso, dos releases; en el peor, dos builds peleándose por la
+///    caché de git.
+pub fn ejecutar_en_vivo(
+    servidor: &Servidor,
+    comando: &Comando,
+    dir_control: Option<&str>,
+    entorno: &[(&str, &str)],
+    en_curso: EnCurso,
+    al_llegar: impl FnMut(String) + Send + 'static,
+) -> Result<Respuesta, ErrorTransporte> {
+    let argv = comando
+        .argv(&servidor.binario)
+        .map_err(ErrorTransporte::Forma)?;
+    let linea = crate::shquote::build(&argv)
+        .map_err(|e| ErrorTransporte::Forma(ErrorForma::Escapado(e)))?;
+
+    let mut cmd = Command::new("ssh");
+    cmd.args(servidor.opciones_ssh(dir_control));
+    cmd.arg(&servidor.destino);
+    cmd.arg(&linea);
+    for (k, v) in entorno {
+        cmd.env(k, v);
+    }
+    ejecutar_sirviendo(
+        cmd,
+        tope_de_tiempo(comando),
+        &servidor.binario,
+        en_curso,
+        al_llegar,
+    )
+}
+
+/// El mismo camino sin `ssh`, para las pruebas.
+pub fn ejecutar_en_vivo_local(
+    binario: &str,
+    comando: &Comando,
+    entorno: &[(&str, &str)],
+    en_curso: EnCurso,
+    al_llegar: impl FnMut(String) + Send + 'static,
+) -> Result<Respuesta, ErrorTransporte> {
+    let argv = comando.argv(binario).map_err(ErrorTransporte::Forma)?;
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..]);
+    for (k, v) in entorno {
+        cmd.env(k, v);
+    }
+    ejecutar_sirviendo(cmd, tope_de_tiempo(comando), binario, en_curso, al_llegar)
+}
+
+fn ejecutar_sirviendo(
+    mut cmd: Command,
+    tope: Duration,
+    binario: &str,
+    en_curso: EnCurso,
+    mut al_llegar: impl FnMut(String) + Send + 'static,
+) -> Result<Respuesta, ErrorTransporte> {
+    use std::io::BufRead;
+    use std::sync::Arc;
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut hijo = cmd.spawn().map_err(ErrorTransporte::NoSePudoLanzar)?;
+
+    let so = hijo.stdout.take().unwrap();
+    let se = hijo.stderr.take().unwrap();
+
+    // stdout se acumula: ahí va el objeto final y no se puede servir a trozos.
+    let h_out = std::thread::spawn(move || leer_hasta(so, TOPE_RESPUESTA));
+
+    // stderr se sirve línea a línea. Los dos hilos siguen siendo dos: leerlos
+    // en serie es un bloqueo mutuo en cuanto el que no se lee llena su tubería.
+    let acumulado = Arc::new(std::sync::Mutex::new(String::new()));
+    let acc = Arc::clone(&acumulado);
+    let h_err = std::thread::spawn(move || {
+        let lector = std::io::BufReader::new(se);
+        for linea in lector.lines() {
+            let l = match linea {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            if let Ok(mut a) = acc.lock() {
+                // El presupuesto también aplica aquí: un servidor que gotee por
+                // stderr para siempre no puede llenarnos la memoria.
+                if a.len() < TOPE_RESPUESTA {
+                    a.push_str(&l);
+                    a.push('\n');
+                }
+            }
+            al_llegar(l);
+        }
+    });
+
+    let inicio = std::time::Instant::now();
+    let mut cancelado = false;
+
+    let estado = loop {
+        match hijo.try_wait().map_err(ErrorTransporte::NoSePudoLanzar)? {
+            Some(e) => break e,
+            None => {
+                if en_curso.cancelado() {
+                    cancelado = true;
+                    let _ = hijo.kill();
+                    let _ = hijo.wait();
+                    break hijo.wait().map_err(ErrorTransporte::NoSePudoLanzar)?;
+                }
+                if tope != Duration::MAX && inicio.elapsed() > tope {
+                    let _ = hijo.kill();
+                    let _ = hijo.wait();
+                    return Err(ErrorTransporte::Tarde { tope });
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    };
+
+    let (stdout, corto) = h_out.join().unwrap()?;
+    let _ = h_err.join();
+    if corto {
+        return Err(ErrorTransporte::Demasiado {
+            tope: TOPE_RESPUESTA,
+        });
+    }
+    let stderr = acumulado.lock().map(|a| a.clone()).unwrap_or_default();
+    let codigo = estado.code().unwrap_or(-1);
+
+    let r = Respuesta {
+        stdout,
+        stderr,
+        codigo,
+    };
+    if cancelado {
+        // Cancelado NO es fallido, y no se puede clasificar como tal: el
+        // proceso remoto puede haber terminado su paso antes de morir, y decir
+        // «ha fallado» sería afirmar algo que no se sabe.
+        return Ok(r);
+    }
+    clasificar(r, binario)
+}
+
 fn ejecutar_proceso(
     mut cmd: Command,
     tope: Duration,

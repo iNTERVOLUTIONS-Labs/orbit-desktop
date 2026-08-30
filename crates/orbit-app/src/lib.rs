@@ -24,7 +24,10 @@
 
 use orbit_client::comando::Comando;
 use orbit_client::descubrir;
-use orbit_client::transporte::{self, Servidor};
+use orbit_client::transporte::{self, EnCurso, Servidor};
+use std::collections::HashMap;
+use std::sync::Mutex;
+use tauri::Emitter;
 
 /// Un fallo, ya en palabras que se le pueden enseñar a alguien.
 ///
@@ -192,6 +195,98 @@ fn doctor_arreglar(alias: String, binario: Option<String>) -> Resultado {
     pedir(&alias, binario, Comando::DoctorArreglar)
 }
 
+/// Los despliegues vivos, para poder cancelarlos.
+///
+/// Se pueden lanzar **varios a la vez**, en apps distintas y en servidores
+/// distintos: cada uno es un proceso SSH independiente y nada en el servidor
+/// los coordina, ni falta. La clave es `servidor:app` y no la app sola, porque
+/// `tienda` existe en tres servidores y son tres despliegues distintos.
+#[derive(Default)]
+pub struct Vivos(Mutex<HashMap<String, EnCurso>>);
+
+/// Despliega **sirviendo el progreso mientras ocurre**.
+///
+/// Cada línea de `--progress` sale como un evento `orbit://progreso` en cuanto
+/// llega. Leerlo entero al terminar convertiría tres minutos de información en
+/// un bloque de texto que llega cuando ya no sirve.
+///
+/// Lo que **no** hace, y es lo que importa: si el contacto se pierde, no dice
+/// que el despliegue haya fallado. **No lo sabe.** El proceso sigue en el
+/// servidor y la respuesta honesta es «he perdido el contacto; el estado es
+/// desconocido», con `orbit info` como forma de averiguarlo. Y no reintenta
+/// solo: un `deploy` reintentado sobre uno en curso es, en el mejor caso, dos
+/// releases.
+#[tauri::command]
+async fn desplegar(
+    ventana: tauri::Window,
+    vivos: tauri::State<'_, Vivos>,
+    alias: String,
+    app: String,
+    binario: Option<String>,
+) -> Resultado {
+    let clave = format!("{alias}:{app}");
+    let mando = EnCurso::nuevo();
+    vivos.0.lock().unwrap().insert(clave.clone(), mando.clone());
+
+    let s = servidor(&alias, binario);
+    let c = Comando::Desplegar {
+        app: app.clone(),
+        progreso: true,
+    };
+    let ctrl = dir_control();
+    let clave_ev = clave.clone();
+
+    // En un hilo aparte: la llamada bloquea minutos, y bloquear el hilo de la
+    // interfaz durante un build es la diferencia entre una ventana viva y una
+    // que Windows marca como «no responde».
+    let r = tauri::async_runtime::spawn_blocking(move || {
+        transporte::ejecutar_en_vivo(&s, &c, ctrl.as_deref(), &[], mando, move |linea| {
+            // El evento lleva la clave para poder atribuirlo: con varios
+            // despliegues a la vez, una línea sin dueño no vale para nada.
+            let _ = ventana.emit("orbit://progreso", (clave_ev.clone(), linea));
+        })
+    })
+    .await;
+
+    vivos.0.lock().unwrap().remove(&clave);
+
+    let r = match r {
+        Ok(v) => v?,
+        Err(e) => {
+            return Err(ErrorParaLaInterfaz {
+                clase: "hilo",
+                mensaje: format!("el despliegue se ha interrumpido: {e}"),
+                detalle: None,
+            })
+        }
+    };
+    let texto = r.objeto()?;
+    serde_json::from_str(texto).map_err(|e| ErrorParaLaInterfaz {
+        clase: "json",
+        mensaje: e.to_string(),
+        detalle: None,
+    })
+}
+
+/// Cancela un despliegue en curso.
+///
+/// Mata el proceso, y lo que eso deja detrás **depende del paso**: interrumpir
+/// un build no deja nada roto —la release nueva se descarta y `current` ni se
+/// ha movido— pero interrumpir `service` o `nginx` sí puede dejar trabajo a
+/// medias. Quien lo pulsa tiene que saber en cuál está, y eso lo dice la
+/// pantalla, que es la que ve el paso en curso.
+#[tauri::command]
+fn cancelar(vivos: tauri::State<'_, Vivos>, alias: String, app: String) -> bool {
+    let clave = format!("{alias}:{app}");
+    match vivos.0.lock().unwrap().get(&clave) {
+        Some(m) => {
+            m.cancelar();
+            true
+        }
+        None => false,
+    }
+}
+
 /// Los alias de `~/.ssh/config`, para poder importarlos.
 ///
 /// **No conecta con ninguno**: enumerar no es visitar. Saber si en un alias hay
@@ -210,6 +305,7 @@ fn servidores_del_config() -> Result<Vec<descubrir::AliasSsh>, ErrorParaLaInterf
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn ejecutar() {
     tauri::Builder::default()
+        .manage(Vivos::default())
         .invoke_handler(tauri::generate_handler![
             version,
             portada,
@@ -218,6 +314,8 @@ pub fn ejecutar() {
             doctor,
             doctor_arreglar,
             logs,
+            desplegar,
+            cancelar,
             servidores_del_config,
         ])
         .run(tauri::generate_context!())
