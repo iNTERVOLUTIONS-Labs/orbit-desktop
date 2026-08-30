@@ -40,7 +40,25 @@ fn banco() -> PathBuf {
 /// delegamos, así que probarlo así ejercita justo la decisión: si un día
 /// alguien sustituyera el binario `ssh` por una librería, esta prueba se caería
 /// —que es lo que tiene que pasar—.
+/// Se escribe **una sola vez** por binario de pruebas, y no es una
+/// optimización: cargo corre las pruebas en hilos, así que varias llamaban a la
+/// vez a `fs::write` sobre el mismo fichero y `ssh` llegaba a leerlo truncado.
+/// El síntoma era «Could not resolve hostname banco» —la línea `Host banco` aún
+/// no estaba escrita— y sólo aparecía en CI, porque en local la carrera se
+/// ganaba casi siempre.
+///
+/// Es la segunda vez que el mismo tipo de fallo aparece en este banco: la
+/// primera fue una variable de entorno global. Estado compartido entre pruebas
+/// que corren en paralelo, las dos veces.
+static CONFIG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 fn escribir_config(dir: &Path, puerto: u16) -> String {
+    CONFIG
+        .get_or_init(|| escribir_config_una_vez(dir, puerto))
+        .clone()
+}
+
+fn escribir_config_una_vez(dir: &Path, puerto: u16) -> String {
     let usuario = std::env::var("USER").unwrap_or_else(|_| "ubuntu".into());
     let ruta = dir.join("ssh_config");
     fs::write(
