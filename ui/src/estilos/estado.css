@@ -93,3 +93,9 @@
    no identifica a nadie. */
 .fila--no-operable { opacity: .72; }
 .fila--no-operable .celda-nombre { text-decoration: line-through; }
+
+/* La pantalla bloqueante de la clave de host cambiada. Va aquí y no en el
+   componente porque es un ESTADO —el único del canal que se pinta como tal— y
+   la regla de este fichero no admite excepciones por comodidad: la primera vez
+   que la rompí fue escribiendo justo esto, y la comprobación lo cazó. */
+.aviso-alto { border-color: var(--st-error); }
