@@ -109,3 +109,38 @@ describe('el tema', () => {
     expect(c).toContain(':root[data-theme="dark"]')
   })
 })
+
+describe('los secretos no se guardan en ningún sitio', () => {
+  it('nada de la interfaz escribe en el almacenamiento del navegador', () => {
+    // T-12 del modelo de amenazas: toda aplicación de escritorio moderna guarda
+    // estado sin que nadie lo decida —caché, estado serializado, localStorage—
+    // y cualquiera de esos puede acabar con la salida de `orbit env get`
+    // dentro.
+    //
+    // Esta comprobación se pone AHORA, que no hay nada que guardar. Ponerla
+    // cuando ya se guardan quince cosas es una auditoría; ponerla ahora es una
+    // línea.
+    const malos: string[] = []
+    for (const f of ficheros(SRC, ['.svelte', '.ts'])) {
+      const c = sinComentarios(readFileSync(f, 'utf8'))
+      for (const p of ['localStorage', 'sessionStorage', 'indexedDB', 'document.cookie']) {
+        if (c.includes(p)) malos.push(`${f.replace(SRC, 'src')} usa ${p}`)
+      }
+    }
+    expect(malos, 'antes de persistir algo hay que decidir qué, y añadir el barrido de secretos').toEqual([])
+  })
+
+  it('el valor revelado se borra de la memoria, no sólo de la vista', () => {
+    // Dejarlo en una variable «oculta» es dejarlo en el volcado del día que la
+    // aplicación se caiga.
+    const c = readFileSync(join(SRC, 'componentes', 'Entorno.svelte'), 'utf8')
+    expect(c).toMatch(/function ocultar\(\)[\s\S]*?valor = null/)
+  })
+
+  it('el registro nunca lleva el valor de una variable', () => {
+    // Se hereda de Orbit, que apunta `exec <app>` y nunca el comando: un log no
+    // es sitio para secretos.
+    const c = sinComentarios(readFileSync(join(SRC, 'componentes', 'Entorno.svelte'), 'utf8'))
+    expect(c).not.toMatch(/console\.(log|info|warn|error)/)
+  })
+})

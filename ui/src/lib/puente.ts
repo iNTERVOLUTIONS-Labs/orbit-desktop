@@ -12,7 +12,11 @@
 // falso** que usan las pruebas del núcleo, así que la interfaz y el contrato no
 // pueden divergir.
 
-import { leerLog, type App, type Despliegue, type Doctor, type Lista, type Log } from './contrato'
+import {
+  leerLog,
+  type App, type Despliegue, type Doctor, type Entorno,
+  type Lista, type Log, type Monitor,
+} from './contrato'
 
 import listaSana from './muestras/list.json'
 import listaEstados from './muestras/list-estados.json'
@@ -133,4 +137,37 @@ export async function desplegar(alias: string, app: string): Promise<Despliegue>
 export async function cancelar(alias: string, app: string): Promise<boolean> {
   if (!hayPuente()) return false
   return invocar<boolean>('cancelar', { alias, app })
+}
+
+import entornoMuestra from './muestras/env.json'
+import monitorMuestra from './muestras/top.json'
+
+/** Los **nombres** de las variables. Nunca los valores. */
+export async function entorno(alias: string, app: string): Promise<Entorno> {
+  if (!hayPuente()) return { ...(entornoMuestra as Entorno), app }
+  return invocar<Entorno>('entorno', { alias, app })
+}
+
+/**
+ * **Un** valor, de uno en uno.
+ *
+ * Cuesta una llamada de verdad al servidor, con su latencia, y así debe ser:
+ * pedir un secreto tiene que ser un acto explícito y visible, no un campo que
+ * ya venía en la respuesta anterior.
+ */
+export async function entornoValor(alias: string, app: string, clave: string): Promise<string> {
+  if (!hayPuente()) {
+    // En la muestra no hay secretos que enseñar, y **no se inventa uno que
+    // parezca real**: una contraseña de mentira en una captura de la
+    // documentación acaba pareciendo una de verdad.
+    await new Promise((r) => setTimeout(r, 250))
+    return `(sin servidor: el valor de ${clave} vendría de «orbit env get»)`
+  }
+  return invocar<string>('entorno_valor', { alias, app, clave })
+}
+
+/** El monitor. Tarda ~2,1 s con 40 apps, y no es lentitud. */
+export async function monitor(alias: string): Promise<Monitor> {
+  if (!hayPuente()) return monitorMuestra as Monitor
+  return invocar<Monitor>('monitor', { alias })
 }

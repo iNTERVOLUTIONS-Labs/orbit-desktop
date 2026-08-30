@@ -207,3 +207,25 @@ export function recuentos(l: Lote): Array<{ id: string; glifo: string; texto: st
     n: (l as unknown as Record<string, number>)[f.id] ?? 0,
   }))
 }
+
+/**
+ * Cada cuánto se vuelve a pedir el monitor.
+ *
+ * **Medido: `orbit top --json` cuesta ~2,1 s con 40 apps** (`≈1.053 ms +
+ * 26,6 ms/app`), y no es lentitud — la CPU es la diferencia entre dos lecturas
+ * del cgroup, así que una foto suelta tiene que esperar a la segunda a
+ * propósito.
+ *
+ * O sea que el plan de refrescar cada dos segundos era **físicamente
+ * imposible**: venía de copiar el intervalo del panel en vivo de Orbit sin ver
+ * que ése reutiliza la muestra anterior y no paga esa espera.
+ *
+ * Así que el periodo se adapta a lo que de verdad tardó la última vez, con un
+ * margen. Encadenar peticiones más rápido de lo que contestan no da más
+ * frescura: da una cola.
+ */
+export function periodoDelMonitor(ultimaDuracionMs: number | null): number {
+  if (ultimaDuracionMs === null) return 3
+  const s = (ultimaDuracionMs / 1000) * 1.5
+  return Math.max(3, Math.min(30, Math.ceil(s)))
+}

@@ -287,6 +287,55 @@ fn cancelar(vivos: tauri::State<'_, Vivos>, alias: String, app: String) -> bool 
     }
 }
 
+/// Los **nombres** de las variables de una app. Nunca los valores.
+///
+/// `orbit env list --json` devuelve sólo `keys`, y eso no es una limitación
+/// pendiente de levantar: un panel que enseñe el `.env` entero es un panel que
+/// filtra la contraseña de la base de datos en la primera captura que alguien
+/// pegue en un issue.
+#[tauri::command]
+fn entorno(alias: String, app: String, binario: Option<String>) -> Resultado {
+    pedir(&alias, binario, Comando::EntornoLista { app })
+}
+
+/// **Un** valor, de uno en uno.
+///
+/// Pedir un secreto tiene que ser un acto explícito, y por eso es un comando
+/// aparte y no un campo de la respuesta anterior. Va sin `--json` porque
+/// `orbit env get` imprime el valor pelado, que es lo correcto.
+///
+/// Lo que este camino **no** hace:
+///
+///  · **No lo guarda en ningún sitio.** Ni caché, ni estado serializado, ni
+///    fichero. El valor existe en la memoria del proceso y sólo mientras la
+///    pantalla que lo pidió lo tenga a la vista.
+///  · **No lo escribe en el registro.** Se anota que se pidió un valor de una
+///    app, nunca cuál ni el valor — es exactamente lo que hace Orbit con
+///    `logline "exec $name"`, y por el mismo motivo: un log no es sitio para
+///    secretos.
+#[tauri::command]
+fn entorno_valor(
+    alias: String,
+    app: String,
+    clave: String,
+    binario: Option<String>,
+) -> Result<String, ErrorParaLaInterfaz> {
+    let s = servidor(&alias, binario);
+    let c = Comando::EntornoValor { app, clave };
+    let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
+    // Pelado y sin adornos, que es como lo imprime Orbit. El salto final se
+    // quita porque es del `printf`, no del valor.
+    Ok(r.stdout.trim_end_matches('\n').to_string())
+}
+
+/// El monitor. **Tarda ~2,1 s con 40 apps**, y no es lentitud: la CPU es la
+/// diferencia entre dos lecturas del cgroup, así que una foto suelta tiene que
+/// esperar a la segunda a propósito.
+#[tauri::command]
+fn monitor(alias: String, binario: Option<String>) -> Resultado {
+    pedir(&alias, binario, Comando::Top)
+}
+
 /// Los alias de `~/.ssh/config`, para poder importarlos.
 ///
 /// **No conecta con ninguno**: enumerar no es visitar. Saber si en un alias hay
@@ -314,6 +363,9 @@ pub fn ejecutar() {
             doctor,
             doctor_arreglar,
             logs,
+            entorno,
+            entorno_valor,
+            monitor,
             desplegar,
             cancelar,
             servidores_del_config,
