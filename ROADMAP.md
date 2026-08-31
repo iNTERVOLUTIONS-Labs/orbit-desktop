@@ -149,7 +149,26 @@ y roto sin que nadie lo notara.
 El efecto: esta fase se escribe contra un contrato completo, y el cliente nace
 con **cero líneas que parseen texto**.
 
-## Fase 4 · Administrar 📋
+## Fase 4 · Administrar 🚧
+
+Hechas las dos operaciones que cambian algo de verdad.
+
+**Retirar** son dos entradas y no una casilla —una casilla junto a un botón se
+marca sin leerla— con la que borra datos en un submenú. Y con el inventario de
+lo que se pierde pedido **en ese momento**: «5 releases, el último despliegue y
+5 variables de entorno», no un texto genérico. Escribir el nombre se pide sólo
+ahí, porque **`orbit remove -y --purge` no pregunta nada** y toda la protección
+se traslada a la pantalla.
+
+**Revertir** no pide escribir nada, porque es reversible y la fricción es un
+recurso escaso: gastarla aquí enseña a teclear nombres sin leer, y entonces se
+teclea también en el borrado. La release se elige de una lista, la activa se
+marca y no se ofrece, y los dos avisos van con ella — el de las migraciones
+siempre, y el del autodespliegue cuando está puesto.
+
+Falta el asistente de web nueva y la importación de servidores.
+
+### Lo que había aquí
 
 Multiservidor completo con importación de `~/.ssh/config`. El asistente de web
 nueva. Retirar una app, con la confirmación reforzada que el servidor ya no da:

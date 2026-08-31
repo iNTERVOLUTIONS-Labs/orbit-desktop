@@ -431,6 +431,49 @@ impl From<orbit_client::comando::ErrorForma> for ErrorParaLaInterfaz {
     }
 }
 
+/// El detalle de una app. Es de donde sale el inventario de lo que se pierde
+/// al borrarla, y se pide **en ese momento**: decirle a alguien que va a perder
+/// 3 releases cuando tiene 12 es peor que no decírselo.
+#[tauri::command]
+fn detalle(alias: String, app: String, binario: Option<String>) -> Resultado {
+    pedir(&alias, binario, Comando::Info { app })
+}
+
+/// Retira una app **sin borrar sus datos**. Reversible.
+#[tauri::command]
+fn retirar(alias: String, app: String, binario: Option<String>) -> Resultado {
+    // 'remove' no habla JSON, así que la respuesta es prosa. Se devuelve tal
+    // cual y la interfaz vuelve a preguntar por el estado, que es la regla:
+    // lo que cuenta es cómo queda el servidor, no lo que dijo el comando.
+    let s = servidor(&alias, binario);
+    let c = Comando::Retirar { app };
+    let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
+    Ok(serde_json::json!({ "salida": r.stderr, "codigo": r.codigo }))
+}
+
+/// Retira una app **y borra sus datos**. Irreversible.
+///
+/// Aquí no hay red debajo: `orbit remove -y --purge` no pregunta nada, así que
+/// toda la protección está en la pantalla que llama a esto.
+#[tauri::command]
+fn retirar_y_borrar(alias: String, app: String, binario: Option<String>) -> Resultado {
+    let s = servidor(&alias, binario);
+    let c = Comando::RetirarYBorrar { app };
+    let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
+    Ok(serde_json::json!({ "salida": r.stderr, "codigo": r.codigo }))
+}
+
+/// Vuelve a una release anterior. La release es **obligatoria**: sin ella y sin
+/// terminal, `orbit rollback` aborta — y hace bien, porque el «valor por
+/// defecto» sería la que ya está activa.
+#[tauri::command]
+fn revertir(alias: String, app: String, release: String, binario: Option<String>) -> Resultado {
+    let s = servidor(&alias, binario);
+    let c = Comando::Revertir { app, release };
+    let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
+    Ok(serde_json::json!({ "salida": r.stderr, "codigo": r.codigo }))
+}
+
 /// Los alias de `~/.ssh/config`, para poder importarlos.
 ///
 /// **No conecta con ninguno**: enumerar no es visitar. Saber si en un alias hay
@@ -463,6 +506,10 @@ pub fn ejecutar() {
             monitor,
             trafico,
             metricas,
+            detalle,
+            retirar,
+            retirar_y_borrar,
+            revertir,
             correr,
             desplegar,
             cancelar,

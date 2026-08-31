@@ -441,3 +441,20 @@ export function parecePeligroso(texto: string): string | null {
   ]
   return patrones.find(([p]) => t.includes(p))?.[1] ?? null
 }
+
+// ── el detalle de una app ──────────────────────────────────────────────────
+
+export interface AppInfo {
+  name: string
+  path: string
+  /** El fichero clave a clave, y **por eso todos sus valores son cadenas**: en
+   *  el fichero lo son. Los datos con tipo están en `state`. */
+  config: Record<string, string>
+  state: Estado
+  releases: string[]
+}
+
+export interface Info {
+  schema: number
+  app: AppInfo
+}

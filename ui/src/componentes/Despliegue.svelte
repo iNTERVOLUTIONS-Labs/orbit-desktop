@@ -169,7 +169,7 @@
     margin-top: var(--e-5); padding: var(--e-4);
     border: 1px solid var(--border); border-radius: var(--r-3);
   }
-  .titular { margin: 0; font-size: 15px; font-weight: 600; color: var(--fg); }
+  .titular { margin: 0; font-size: 15px; font-weight: 600; color: var(--titular, var(--fg)); }
   .detalle { margin: var(--e-2) 0 0; font-size: 13px; color: var(--fg-muted); max-width: 68ch; }
   code { font-family: var(--mono); font-size: 12px; }
   pre {
