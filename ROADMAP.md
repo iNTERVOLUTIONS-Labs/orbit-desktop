@@ -172,8 +172,14 @@ código de salida— así que la interfaz **no la interpreta: le vuelve a pregun
 al servidor** con `orbit info --json`, que sí tiene contrato. Cinco de los siete
 son parciales, y cada uno dice qué existe, qué falta y qué se deshace.
 
-Falta el **formulario** del asistente —los cinco pasos, con la detección
-enseñada como resultado editable— y la importación de servidores.
+Y el **alta de servidores**: la lista sale de `~/.ssh/config` **sin hablar con
+ninguno** —enumerar no es visitar, y abrir una pantalla no puede significar
+abrir cuarenta sesiones SSH— y preguntar por uno es un gesto aparte, con siete
+respuestas posibles y cada una diciendo qué hacer. Sin esa clasificación, quien
+añade un servidor ve «error» y no sabe si es su clave, su red o su servidor.
+
+Falta el **formulario** del asistente: los cinco pasos, con la detección
+enseñada como resultado editable junto a su prueba.
 
 ### Lo que había aquí
 

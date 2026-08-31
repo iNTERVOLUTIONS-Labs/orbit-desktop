@@ -118,3 +118,15 @@ test('revertir · tema dark', async ({ page }) => {
   await expect(page.locator('.releases')).toBeVisible()
   await page.screenshot({ path: 'capturas/dark-revertir.png', fullPage: true })
 })
+
+test('alta de servidores · tema dark', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/')
+  await page.getByRole('button', { name: '+ servidores' }).click()
+  await expect(page.locator('.lista li').first()).toBeVisible()
+  // Se comprueba uno, para ver los dos estados a la vez: comprobado y sin
+  // comprobar. Enumerar no visita, y eso tiene que verse.
+  await page.locator('.acciones button').first().click()
+  await expect(page.locator('.saludo').first()).toBeVisible()
+  await page.screenshot({ path: 'capturas/dark-alta.png', fullPage: true })
+})

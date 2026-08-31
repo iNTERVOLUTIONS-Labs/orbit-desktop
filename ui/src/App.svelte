@@ -16,13 +16,14 @@
   import Exec from './componentes/Exec.svelte'
   import Retirar from './componentes/Retirar.svelte'
   import Revertir from './componentes/Revertir.svelte'
+  import AltaServidores from './componentes/AltaServidores.svelte'
   import { periodoDelMonitor } from './lib/despliegue'
-  import type { App, AppInfo, Doctor, Entorno, Log, Metricas, Monitor, Trafico } from './lib/contrato'
+  import type { App, AppInfo, Doctor, Entorno, Log, Metricas, Monitor, Saludo, Trafico } from './lib/contrato'
   import {
     arreglar, cancelar, desplegar, diagnostico, entorno as pedirEntorno,
     entornoValor, hayPuente, log as pedirLog, monitor as pedirMonitor,
     correr, detalle as pedirDetalle, metricas as pedirMetricas, portada,
-    retirar, retirarYBorrar, revertir, servidoresDelConfig, trafico as pedirTrafico,
+    retirar, retirarYBorrar, revertir, saludar, servidoresDelConfig, trafico as pedirTrafico,
     type AliasSsh, type ErrorDelPuente,
   } from './lib/puente'
 
@@ -48,6 +49,24 @@
   let trafico = $state<Trafico | null>(null)
   let metricas = $state<Metricas | null>(null)
   let detalleApp = $state<AppInfo | null>(null)
+
+  // El alta de servidores. Vive en su propia vista porque enumerar y usar son
+  // dos cosas distintas: la lista sale del ~/.ssh/config sin hablar con nadie,
+  // y preguntar por uno es un gesto aparte.
+  let enAlta = $state(false)
+  let saludos = $state<Record<string, Saludo | null>>({})
+  let comprobando = $state<string | null>(null)
+
+  async function comprobar(a: string) {
+    comprobando = a
+    try {
+      saludos = { ...saludos, [a]: await saludar(a) }
+    } catch {
+      saludos = { ...saludos, [a]: null }
+    } finally {
+      comprobando = null
+    }
+  }
   let pestana = $state<'detalle' | 'log' | 'entorno' | 'trafico' | 'exec' | 'retirar' | 'revertir' | 'despliegue'>('detalle')
 
   // La hoja de comando de un despliegue. Se enseña la orden literal ANTES de
@@ -274,6 +293,10 @@
         </li>
       {/each}
     </ul>
+    <button type="button" class="alta" onclick={() => (enAlta = !enAlta)}>
+      {enAlta ? '← volver' : '+ servidores'}
+    </button>
+
     {#if !hayPuente()}
       <p class="aviso">
         Sin envoltorio de escritorio: estás viendo las respuestas de ejemplo del
@@ -285,10 +308,11 @@
   <main>
     <AvisoDeCierre />
     <header class="cabecera">
-      <h1>{alias || '—'}</h1>
-      {#if apps && vista === 'apps'}
+      <h1>{enAlta ? 'Servidores' : alias || '—'}</h1>
+      {#if apps && vista === 'apps' && !enAlta}
         <p class="cuenta">{apps.length} {apps.length === 1 ? 'app' : 'apps'}</p>
       {/if}
+      {#if !enAlta}
       <nav class="vistas" aria-label="Qué mirar de este servidor">
         <button type="button" class:activo={vista === 'apps'} onclick={() => (vista = 'apps')}>
           apps
@@ -300,10 +324,19 @@
           monitor
         </button>
       </nav>
+      {/if}
     </header>
 
     <section class="panel">
-      {#if cargando}
+      {#if enAlta}
+        <AltaServidores
+          alias={servidores}
+          {saludos}
+          {comprobando}
+          alComprobar={comprobar}
+          alUsar={(a) => { enAlta = false; cargar(a) }}
+        />
+      {:else if cargando}
         <Esqueleto />
       {:else if error}
         <Fallo {error} {alias} />
@@ -504,6 +537,13 @@
   .servidor--activo { background: var(--surface-2); color: var(--fg); font-weight: 600; }
   .servidor:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   .salto { font-size: 11px; opacity: .7; }
+  .alta {
+    margin-top: var(--e-3);
+    background: none; border: 0; padding: var(--e-2);
+    font: inherit; font-size: 12px; color: var(--accent-text);
+    cursor: pointer; text-align: left;
+  }
+  .alta:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   .aviso {
     margin-top: auto; padding: var(--e-3) var(--e-2) 0;
     font-size: 11px; line-height: 1.5; color: var(--fg-faint);
