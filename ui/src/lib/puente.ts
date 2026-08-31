@@ -16,7 +16,7 @@ import {
   leerLog,
   type App, type Despliegue, type Doctor, type Entorno,
   type Envoltorio, type Lista, type Log, type Metricas, type Monitor,
-  type SalidaDeExec, type Trafico,
+  type AppInfo, type Info, type SalidaDeExec, type Trafico,
 } from './contrato'
 
 import listaSana from './muestras/list.json'
@@ -222,4 +222,35 @@ export async function correr(
     }
   }
   return invocar<SalidaDeExec>('correr', { alias, app, shell, argumentos })
+}
+
+import infoMuestra from './muestras/info.json'
+
+/** El detalle de una app. De aquí sale el inventario de lo que se pierde al
+ *  borrarla, y se pide **en ese momento**. */
+export async function detalle(alias: string, app: string): Promise<AppInfo> {
+  if (!hayPuente()) return { ...(infoMuestra as Info).app, name: app }
+  return (await invocar<Info>('detalle', { alias, app })).app
+}
+
+export interface Resultado { salida: string; codigo: number }
+
+/** Retira una app **sin borrar sus datos**. Reversible. */
+export async function retirar(alias: string, app: string): Promise<Resultado> {
+  if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
+  return invocar<Resultado>('retirar', { alias, app })
+}
+
+/** Retira una app **y borra sus datos**. Irreversible.
+ *
+ *  Aquí no hay red debajo: `orbit remove -y --purge` no pregunta nada, así que
+ *  toda la protección está en la pantalla que llama a esto. */
+export async function retirarYBorrar(alias: string, app: string): Promise<Resultado> {
+  if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
+  return invocar<Resultado>('retirar_y_borrar', { alias, app })
+}
+
+export async function revertir(alias: string, app: string, release: string): Promise<Resultado> {
+  if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
+  return invocar<Resultado>('revertir', { alias, app, release })
 }

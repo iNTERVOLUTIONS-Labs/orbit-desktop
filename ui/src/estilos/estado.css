@@ -123,18 +123,27 @@
 /* Falló, pero la web sigue en pie — y eso es lo primero que se dice. */
 .final--revertido   { border-color: var(--st-warn); }
 .final--roto        { border-color: var(--st-error); }
-.final--bien       .titular { color: var(--st-ok); }
-.final--recuperado .titular { color: var(--st-warn); }
-.final--revertido  .titular { color: var(--st-ok); }
-.final--roto       .titular { color: var(--st-error); }
+/* Por token y no anidado: una regla `.final--x .titular` y el `.titular` del
+   <style> del componente tienen la misma especificidad, y ahí gana el
+   componente. La variable hereda y no compite. */
+.final--bien       { --titular: var(--st-ok); }
+.final--recuperado { --titular: var(--st-warn); }
+.final--revertido  { --titular: var(--st-ok); }
+.final--roto       { --titular: var(--st-error); }
 .paso--hecho    .glifo { color: var(--st-ok); }
 .paso--haciendo .glifo { color: var(--st-warn); }
 .paso--pendiente .glifo { color: var(--st-unknown); }
 
 /* Una hoja de comando peligrosa. El borde rojo va aquí y no en el componente
    por la misma regla: el aspecto de «esto es grave» se decide en un sitio. */
-.hoja--peligrosa { border-color: var(--st-error); }
-.hoja--peligrosa .confirmar { background: var(--st-error); color: var(--on-solid); }
+.hoja--peligrosa {
+  border-color: var(--st-error);
+  /* Por variable: una regla de aquí y un estilo con ámbito de componente tienen
+     la misma especificidad, y ahí gana el orden de aparición — o sea el
+     componente. Con un token, hereda y no hay pelea. */
+  --confirmar-fondo: var(--st-error);
+  --confirmar-texto: var(--on-solid);
+}
 
 /* La gráfica. El hueco es NEUTRO y no un color de alarma: «no se sabe» no es un
    problema, y pintarlo como si lo fuera enseña a ignorar los que sí lo son. */
@@ -151,3 +160,10 @@
 .peligro strong { color: var(--st-warn); }
 .chorro--err { border-left: 3px solid var(--st-error); }
 .codigo--mal { color: var(--st-error); }
+
+/* El botón que borra datos. Rojo, y el único de la pantalla que lo es. */
+.boton--peligroso { border-color: var(--st-error); color: var(--st-error); }
+
+/* La release que se está sirviendo. Se marca y NO se ofrece: volver a ella
+   reiniciaría el servicio para dejarlo todo exactamente igual. */
+.release--activa { --cual: var(--st-ok); }

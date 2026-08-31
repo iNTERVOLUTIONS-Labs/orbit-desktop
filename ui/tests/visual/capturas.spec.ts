@@ -96,3 +96,25 @@ test('exec · tema dark', async ({ page }) => {
   await expect(page.locator('.peligro')).toBeVisible()
   await page.screenshot({ path: 'capturas/dark-exec.png', fullPage: true })
 })
+
+test('retirar y borrar · tema dark', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'pruebas', exact: true }).click()
+  await page.getByRole('button', { name: /parada/ }).click()
+  await page.getByRole('button', { name: 'retirar', exact: true }).click()
+  await page.getByText('Y borrar también sus datos').click()
+  await page.getByRole('button', { name: 'Retirar y borrar los datos' }).click()
+  await expect(page.locator('.hoja input')).toBeVisible()
+  await page.screenshot({ path: 'capturas/dark-retirar.png', fullPage: true })
+})
+
+test('revertir · tema dark', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'pruebas', exact: true }).click()
+  await page.getByRole('button', { name: /parada/ }).click()
+  await page.getByRole('button', { name: 'revertir', exact: true }).click()
+  await expect(page.locator('.releases')).toBeVisible()
+  await page.screenshot({ path: 'capturas/dark-revertir.png', fullPage: true })
+})

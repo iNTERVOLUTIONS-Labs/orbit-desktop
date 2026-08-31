@@ -7,10 +7,12 @@ export default defineConfig({
   testDir: './tests/visual',
   outputDir: './tests/visual/salida',
   use: {
-    // El Chromium del sistema, no el de Playwright: sus binarios no cubren
-    // Ubuntu 26.04 todavía. Se puede apuntar a otro con CHROMIUM, y en CI se
-    // usa el que trae el runner.
-    launchOptions: { executablePath: process.env.CHROMIUM || '/snap/bin/chromium' },
+    // El Chrome del sistema, no el de Playwright: sus binarios no cubren
+    // Ubuntu 26.04 todavía. Y un Chromium de snap tampoco vale: su
+    // confinamiento se rompe con «cannot find tracking cgroup» en cuanto se
+    // lanzan varias instancias seguidas, que es exactamente lo que hace una
+    // tanda de capturas. Se puede apuntar a otro con CHROMIUM.
+    launchOptions: { executablePath: process.env.CHROMIUM || '/usr/bin/google-chrome' },
     baseURL: 'http://127.0.0.1:5174',
     colorScheme: 'dark',
     viewport: { width: 1280, height: 800 },

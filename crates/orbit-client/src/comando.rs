@@ -224,6 +224,37 @@ pub enum Comando {
         app: String,
         modo: ModoDeExec,
     },
+    /// Retira una app **sin borrar sus datos**. Reversible.
+    ///
+    /// Quita el vhost, la unidad de systemd, el pool de php-fpm y el descriptor
+    /// de `/etc/orbit`. Todo eso se rehace con `orbit new` en un minuto, y por
+    /// eso es una operación distinta de la de abajo — no una casilla al lado.
+    ///
+    /// Lleva `-y` porque el cliente no tiene terminal donde contestar, y **eso
+    /// significa que la pregunta que Orbit hacía la tiene que hacer la
+    /// interfaz**. `-y` quiere decir «acepta el valor por defecto», y el valor
+    /// por defecto del borrado de datos es «no»: por eso esto NO borra nada.
+    Retirar {
+        app: String,
+    },
+    /// Retira una app **y borra sus datos**. Irreversible.
+    ///
+    /// `rm -rf /srv/apps/<app>` se lleva el `.env`, todas las releases y **las
+    /// subidas de los usuarios finales** —que viven en `shared/` precisamente
+    /// para sobrevivir a los despliegues— y con `--purge` también el usuario de
+    /// sistema. Eso no vuelve.
+    ///
+    /// Y aquí está el hallazgo que cambia el diseño de toda la pantalla:
+    /// **`orbit remove -y --purge` no pregunta absolutamente nada**. El «escribe
+    /// el nombre» de Orbit sólo ocurre sin `-y`, y `--purge` cortocircuita la
+    /// segunda pregunta. Como el cliente tiene que pasar `-y`, **toda la
+    /// protección se traslada aquí**:
+    ///
+    /// > Aquí no hay red debajo. Si esa pantalla se equivoca, no hay una segunda
+    /// > pregunta en el servidor que la pare.
+    RetirarYBorrar {
+        app: String,
+    },
     /// La release es obligatoria: sin ella y sin terminal, `rollback` aborta —y
     /// hace bien, porque el «valor por defecto» sería la que ya está activa.
     Revertir {
@@ -406,6 +437,19 @@ impl Comando {
                         v.push(texto.clone());
                     }
                 }
+            }
+            Self::Retirar { app } => {
+                v.push("remove".into());
+                v.push(app_ok(app)?);
+                v.push("-y".into());
+            }
+            Self::RetirarYBorrar { app } => {
+                v.push("remove".into());
+                v.push(app_ok(app)?);
+                // Las dos banderas, y '--purge' aparte de '-y' a propósito: son
+                // daños de categoría distinta y Orbit los separó por eso.
+                v.push("-y".into());
+                v.push("--purge".into());
             }
             Self::Revertir { app, release } => {
                 if !release_valida(release) {
@@ -640,6 +684,39 @@ mod tests {
         assert!(parece_peligroso("php artisan migrate").is_none());
         // Y se salta sin proponérselo, que es justo lo que hay que documentar.
         assert!(parece_peligroso("cd / && rm -rf apps").is_none());
+    }
+
+    #[test]
+    fn retirar_y_borrar_son_dos_ordenes_distintas() {
+        // No son la misma con una bandera: son daños de categoría distinta, y
+        // Orbit los separó por eso. En la interfaz son dos entradas, no una
+        // casilla — una casilla junto a un botón se marca sin leerla.
+        let a = Comando::Retirar {
+            app: "tienda".into(),
+        }
+        .argv(B)
+        .unwrap();
+        let b = Comando::RetirarYBorrar {
+            app: "tienda".into(),
+        }
+        .argv(B)
+        .unwrap();
+        assert_eq!(a, [B, "remove", "tienda", "-y"]);
+        assert_eq!(b, [B, "remove", "tienda", "-y", "--purge"]);
+        assert!(!a.contains(&"--purge".to_string()));
+    }
+
+    #[test]
+    fn retirar_sin_purge_no_puede_borrar_datos() {
+        // '-y' significa «acepta el valor por defecto», y el valor por defecto
+        // del borrado de datos es «no». Si esta prueba se rompiera, una
+        // operación anunciada como reversible habría dejado de serlo.
+        let v = Comando::Retirar {
+            app: "tienda".into(),
+        }
+        .argv(B)
+        .unwrap();
+        assert!(!v.iter().any(|x| x == "--purge"));
     }
 
     #[test]

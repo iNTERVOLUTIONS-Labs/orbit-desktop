@@ -14,12 +14,15 @@
   import TraficoVista from './componentes/TraficoVista.svelte'
   import MetricasVista from './componentes/MetricasVista.svelte'
   import Exec from './componentes/Exec.svelte'
+  import Retirar from './componentes/Retirar.svelte'
+  import Revertir from './componentes/Revertir.svelte'
   import { periodoDelMonitor } from './lib/despliegue'
-  import type { App, Doctor, Entorno, Log, Metricas, Monitor, Trafico } from './lib/contrato'
+  import type { App, AppInfo, Doctor, Entorno, Log, Metricas, Monitor, Trafico } from './lib/contrato'
   import {
     arreglar, cancelar, desplegar, diagnostico, entorno as pedirEntorno,
     entornoValor, hayPuente, log as pedirLog, monitor as pedirMonitor,
-    correr, metricas as pedirMetricas, portada, servidoresDelConfig, trafico as pedirTrafico,
+    correr, detalle as pedirDetalle, metricas as pedirMetricas, portada,
+    retirar, retirarYBorrar, revertir, servidoresDelConfig, trafico as pedirTrafico,
     type AliasSsh, type ErrorDelPuente,
   } from './lib/puente'
 
@@ -44,7 +47,8 @@
   let periodo = $state(3)
   let trafico = $state<Trafico | null>(null)
   let metricas = $state<Metricas | null>(null)
-  let pestana = $state<'detalle' | 'log' | 'entorno' | 'trafico' | 'exec' | 'despliegue'>('detalle')
+  let detalleApp = $state<AppInfo | null>(null)
+  let pestana = $state<'detalle' | 'log' | 'entorno' | 'trafico' | 'exec' | 'retirar' | 'revertir' | 'despliegue'>('detalle')
 
   // La hoja de comando de un despliegue. Se enseña la orden literal ANTES de
   // ejecutarla: es la prueba visible de que esto sólo invoca `orbit`.
@@ -165,6 +169,23 @@
       entorno = await pedirEntorno(alias, a.name)
     } catch (e) {
       error = e as ErrorDelPuente
+    }
+  }
+
+  // El detalle se pide EN EL MOMENTO en que hace falta: es de donde sale el
+  // inventario de lo que se pierde al borrar, y decirle a alguien que va a
+  // perder 3 releases cuando tiene 12 es peor que no decírselo.
+  async function verAdmin(a: App, cual: 'retirar' | 'revertir') {
+    pestana = cual
+    try {
+      const [d, e] = await Promise.all([
+        pedirDetalle(alias, a.name),
+        cual === 'retirar' ? pedirEntorno(alias, a.name) : Promise.resolve(null),
+      ])
+      detalleApp = d
+      if (e) entorno = e
+    } catch (err) {
+      error = err as ErrorDelPuente
     }
   }
 
@@ -311,6 +332,7 @@
             entorno = null
             trafico = null
             metricas = null
+            detalleApp = null
             pestana = 'detalle'
           }}
         />
@@ -334,6 +356,12 @@
           </button>
           <button type="button" class:activo={pestana === 'exec'} onclick={() => (pestana = 'exec')}>
             exec
+          </button>
+          <button type="button" class:activo={pestana === 'revertir'} onclick={() => verAdmin(elegida!, 'revertir')}>
+            revertir
+          </button>
+          <button type="button" class:activo={pestana === 'retirar'} onclick={() => verAdmin(elegida!, 'retirar')}>
+            retirar
           </button>
           {#if vivos.ver(alias, elegida.name)}
             <button type="button" class:activo={pestana === 'despliegue'} onclick={() => (pestana = 'despliegue')}>
@@ -380,6 +408,38 @@
               correr={(shell, args) => correr(alias, elegida!.name, shell, args)}
             />
           </div>
+        {:else if pestana === 'revertir'}
+          {#if detalleApp}
+            <Revertir
+              info={detalleApp}
+              servidor={alias}
+              alRevertir={async (r) => {
+                await revertir(alias, elegida!.name, r)
+                // Lo que cuenta es cómo queda el servidor, no lo que dijo el
+                // comando: se vuelve a preguntar en vez de parchear la fila.
+                apps = null; detalleApp = null; cargar(alias)
+              }}
+            />
+          {:else}
+            <div class="log-envoltorio"><Esqueleto filas={4} /></div>
+          {/if}
+        {:else if pestana === 'retirar'}
+          {#if detalleApp}
+            <Retirar
+              app={elegida.name}
+              servidor={alias}
+              info={detalleApp}
+              {entorno}
+              alCerrar={() => (pestana = 'detalle')}
+              alRetirar={async (borrarDatos) => {
+                if (borrarDatos) await retirarYBorrar(alias, elegida!.name)
+                else await retirar(alias, elegida!.name)
+                elegida = null; apps = null; cargar(alias)
+              }}
+            />
+          {:else}
+            <div class="log-envoltorio"><Esqueleto filas={4} /></div>
+          {/if}
         {:else if pestana === 'despliegue'}
           {@const v = vivos.ver(alias, elegida.name)}
           {#if v}

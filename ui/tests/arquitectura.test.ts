@@ -144,3 +144,51 @@ describe('los secretos no se guardan en ningún sitio', () => {
     expect(c).not.toMatch(/console\.(log|info|warn|error)/)
   })
 })
+
+describe('la capa de estado gana', () => {
+  it('ninguna regla de estado pierde contra el <style> de un componente', () => {
+    // Una regla anidada de `estado.css` —`.a .b { color: … }`— y un estilo con
+    // ámbito de componente sobre `.b` tienen la MISMA especificidad, así que
+    // gana el orden de aparición: el componente. La capa que manda sobre el
+    // estado perdía en silencio, y se vio en una captura con las pruebas en
+    // verde: el botón de borrar no salía rojo.
+    //
+    // La primera versión de esta comprobación **pasaba sin comprobar nada**:
+    // excluía las reglas con `var(--…)`, que son justo todas. Se deja escrito
+    // porque una prueba que pasa sin mirar es peor que no tenerla.
+    //
+    // La forma que no se rompe es el token, porque hereda y no compite.
+    const estado = readFileSync(join(SRC, 'estilos', 'estado.css'), 'utf8')
+    const sinCom = sinComentarios(estado)
+
+    // Qué propiedades pinta `estado.css` sobre qué clase anidada.
+    const anidadas = new Map<string, Set<string>>()
+    for (const m of sinCom.matchAll(/\.[a-z0-9_-]+ +\.([a-z0-9_-]+)\s*\{([^}]*)\}/g)) {
+      const clase = m[1]!
+      const props = [...m[2]!.matchAll(/([a-z-]+)\s*:/g)].map((p) => p[1]!)
+      if (!anidadas.has(clase)) anidadas.set(clase, new Set())
+      props.forEach((p) => anidadas.get(clase)!.add(p))
+    }
+
+    const choques: string[] = []
+    for (const f of ficheros(SRC, ['.svelte'])) {
+      const c = sinComentarios(readFileSync(f, 'utf8'))
+      const estilo = c.split('<style>')[1] ?? ''
+      for (const [clase, props] of anidadas) {
+        // La misma clase, a secas, en el <style> del componente.
+        const re = new RegExp(`\\.${clase}\\s*(,[^{]*)?\\{([^}]*)\\}`, 'g')
+        for (const m of estilo.matchAll(re)) {
+          for (const p of props) {
+            if (new RegExp(`(^|;)\\s*${p}\\s*:`).test(m[2]!)) {
+              choques.push(`${f.replace(SRC, 'src')}: .${clase} { ${p} } pisa a estado.css`)
+            }
+          }
+        }
+      }
+    }
+    expect(
+      [...new Set(choques)],
+      'usa un token que herede en vez de una regla anidada: la anidada pierde',
+    ).toEqual([])
+  })
+})

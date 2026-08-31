@@ -125,7 +125,20 @@
     font: inherit; font-size: 13px; cursor: pointer;
   }
   .secundaria { background: none; color: var(--fg); border: 1px solid var(--border-strong); }
-  .confirmar { background: var(--accent-fill); color: var(--on-accent); border: 0; font-weight: 600; }
+  /* Por variable y no por color directo. Un estilo con ámbito de componente
+     tiene la MISMA especificidad que una regla de `estado.css` y gana por orden
+     de aparición, así que la capa que manda sobre el estado perdía en silencio:
+     la hoja peligrosa se pintaba con el acento normal y el botón de borrar no
+     salía rojo. Se vio en una captura, con las pruebas en verde.
+
+     Las variables heredan, así que no hay pelea de especificidad: `estado.css`
+     redefine el token y esto lo usa. Es el mismo patrón que ya usan los chips
+     con `--chip`. */
+  .confirmar {
+    background: var(--confirmar-fondo, var(--accent-fill));
+    color: var(--confirmar-texto, var(--on-accent));
+    border: 0; font-weight: 600;
+  }
   .confirmar:disabled { opacity: .45; cursor: not-allowed; }
   .secundaria:focus-visible, .confirmar:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 </style>
