@@ -167,3 +167,13 @@
 /* La release que se está sirviendo. Se marca y NO se ofrece: volver a ella
    reiniciaría el servicio para dejarlo todo exactamente igual. */
 .release--activa { --cual: var(--st-ok); }
+
+/* Los siete finales del asistente, con el vocabulario de estados de siempre.
+   Por token, no anidado: una regla anidada pierde contra el <style> del
+   componente, y eso ya costó que el botón de borrar no saliera rojo. */
+.desenlace--bien     { border-color: var(--st-ok);    --desenlace: var(--st-ok); }
+/* Ni verde ni rojo. «Publicada, falta el certificado» NO es un fallo: es el
+   final que el propio Orbit documenta como inevitable, y pintarlo rojo
+   contradiría su decisión de avisar y seguir en vez de morir a mitad. */
+.desenlace--atencion { border-color: var(--st-warn);  --desenlace: var(--st-warn); }
+.desenlace--error    { border-color: var(--st-error); --desenlace: var(--st-error); }

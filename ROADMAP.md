@@ -166,7 +166,14 @@ teclea también en el borrado. La release se elige de una lista, la activa se
 marca y no se ofrece, y los dos avisos van con ella — el de las migraciones
 siempre, y el del autodespliegue cuando está puesto.
 
-Falta el asistente de web nueva y la importación de servidores.
+Y los **siete finales** de una web nueva, que es la parte que el informe de
+diseño señaló como la más frágil. `orbit new` no tiene `--json` —sólo prosa y un
+código de salida— así que la interfaz **no la interpreta: le vuelve a preguntar
+al servidor** con `orbit info --json`, que sí tiene contrato. Cinco de los siete
+son parciales, y cada uno dice qué existe, qué falta y qué se deshace.
+
+Falta el **formulario** del asistente —los cinco pasos, con la detección
+enseñada como resultado editable— y la importación de servidores.
 
 ### Lo que había aquí
 
