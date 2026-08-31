@@ -100,6 +100,24 @@ escriben siempre en `2` (471, 468). No es una convención que se cumpla a mano c
 es estructural, y por eso se puede confiar en ella. Verificado ejecutando `deploy --json`, que es
 el comando que más habla: stdout salió con un único objeto y nada más, incluso fallando.
 
+**Ronda 3 · el corolario que faltaba, y que costó una pantalla muda.** Esa misma línea 447 dice
+algo más de lo que se leyó la primera vez: si `UI_FD` vale 2 **sólo con `--json`**, entonces sin
+`--json` vale 1, y **la prosa sale por stdout**. El cliente servía stderr línea a línea para
+enseñar el progreso en vivo, y contra el resto del catálogo eso es correcto — todo el resto lleva
+`--json`. La única orden larga que no lo lleva es `new`, y ahí servir stderr es servir una tubería
+que se queda muda durante los tres minutos que dura.
+
+No es un caso raro que se pueda dejar para después: `new` es justo la orden en la que alguien más
+necesita ver que algo se mueve. La regla («por qué tubería habla esta orden») **es un hecho de la
+orden y no del sitio desde el que se la invoca**, así que en el cliente se deduce del propio
+`argv` (`Comando::vena_humana`) en vez de pasarse como parámetro: un dato que hay que acordarse de
+pasar bien es un dato que alguien pasará mal.
+
+Lo que **no** se intercambia es dónde acaba cada tubería en la respuesta. Los mensajes por los que
+se reconoce un `command not found`, un `permission denied` o un cambio de clave de host los escribe
+**ssh**, no Orbit, y salen por stderr pase lo que pase; clasificarlos leyendo «la tubería servida»
+sería dejar de reconocerlos precisamente en la orden más larga.
+
 **La latencia.** El comentario de `_app_state_json` (línea 1526) trae los números que Orbit midió
 con `strace` sobre 40 apps: `list --json` pasó de 842 procesos y 630 ms a 242 y 250 ms al dejar de
 capturar los ayudantes JSON en `"$( )"`. Es el dato de diseño más importante del cliente y está en

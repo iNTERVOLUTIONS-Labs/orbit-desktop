@@ -17,6 +17,10 @@
   import Retirar from './componentes/Retirar.svelte'
   import Revertir from './componentes/Revertir.svelte'
   import AltaServidores from './componentes/AltaServidores.svelte'
+  import AsistenteNueva from './componentes/AsistenteNueva.svelte'
+  import LoDetectado from './componentes/LoDetectado.svelte'
+  import Desenlace from './componentes/Desenlace.svelte'
+  import { clasificar, type Borrador, type Desenlace as Final } from './lib/asistente'
   import { periodoDelMonitor } from './lib/despliegue'
   import type { App, AppInfo, Doctor, Entorno, Log, Metricas, Monitor, Saludo, Trafico } from './lib/contrato'
   import {
@@ -24,7 +28,8 @@
     entornoValor, hayPuente, log as pedirLog, monitor as pedirMonitor,
     correr, detalle as pedirDetalle, metricas as pedirMetricas, portada,
     retirar, retirarYBorrar, revertir, saludar, servidoresDelConfig, trafico as pedirTrafico,
-    type AliasSsh, type ErrorDelPuente,
+    crear, resolver,
+    type AliasSsh, type ErrorDelPuente, type Resolucion,
   } from './lib/puente'
 
   let servidores = $state<AliasSsh[]>([])
@@ -56,6 +61,102 @@
   let enAlta = $state(false)
   let saludos = $state<Record<string, Saludo | null>>({})
   let comprobando = $state<string | null>(null)
+
+  // El asistente de web nueva. Vive aquí y no dentro de una pestaña de app
+  // porque todavía no hay app: es la única pantalla que crea al sujeto del que
+  // habla el resto de la interfaz.
+  let enNueva = $state(false)
+  let creando = $state(false)
+  // Las líneas tal como llegan. `orbit new` no tiene `--json`, así que esto es
+  // prosa y se enseña como prosa: fingir una barra de progreso a partir de un
+  // texto que no la lleva sería inventarse el avance.
+  let salidaNueva = $state<string[]>([])
+  let finalNueva = $state<Final | null>(null)
+  let configNueva = $state<Record<string, string> | null>(null)
+  let nombreNueva = $state('')
+  let dns = $state<Resolucion | null>(null)
+  let resolviendoDns = $state(false)
+  let paraDeEscuchar: (() => void) | null = null
+
+  async function comprobarDns(dominio: string) {
+    resolviendoDns = true
+    dns = null
+    try {
+      dns = await resolver(dominio, alias)
+    } catch {
+      // Que no se pueda resolver no es un error de la pantalla: es una de las
+      // respuestas posibles, y la pinta el propio asistente como «no lo sé».
+      dns = { del_dominio: [], del_servidor: [], coinciden: null }
+    } finally {
+      resolviendoDns = false
+    }
+  }
+
+  /**
+   * Crea la web y **le vuelve a preguntar al servidor** qué ha quedado.
+   *
+   * No se lee ni el código de salida ni la prosa: `orbit new` puede terminar en
+   * 1 con la aplicación creada, registrada y con vhost, y su resumen distingue
+   * los casos en castellano. Al acabar se pide `info --json`, que sí tiene
+   * contrato, y de ahí sale el final — que son siete, y cinco parciales.
+   */
+  async function crearWeb(b: Borrador) {
+    creando = true
+    salidaNueva = []
+    finalNueva = null
+    configNueva = null
+    nombreNueva = b.nombre.trim()
+
+    // La prosa llega por el mismo canal que el progreso de un despliegue, con
+    // la clave `alias:nombre`.
+    if (hayPuente()) {
+      const { listen } = await import('@tauri-apps/api/event')
+      const clave = `${alias}:${nombreNueva}`
+      paraDeEscuchar = await listen<[string, string]>('orbit://progreso', (e) => {
+        const [k, linea] = e.payload
+        if (k === clave) salidaNueva = [...salidaNueva, linea]
+      })
+    }
+
+    try {
+      await crear(alias, b)
+    } catch (e) {
+      // Aquí sólo llegan los fallos de transporte: no haber llegado al
+      // servidor, o que la clave de host haya cambiado. Un `new` que termina
+      // regular NO pasa por aquí, porque su código de salida no es informativo.
+      error = e as ErrorDelPuente
+      creando = false
+      paraDeEscuchar?.()
+      return
+    } finally {
+      paraDeEscuchar?.()
+      paraDeEscuchar = null
+    }
+
+    try {
+      const d = await pedirDetalle(alias, nombreNueva)
+      configNueva = d.config
+      finalNueva = clasificar(nombreNueva, d, dns?.coinciden ?? null)
+    } catch {
+      // Que `info` no encuentre la app es el final F6, y es un dato, no un
+      // fallo de la pantalla: quiere decir que no ha llegado a crearse nada.
+      finalNueva = clasificar(nombreNueva, null)
+    }
+    creando = false
+    // La portada ya no dice la verdad: hay una app más, o no la hay.
+    await cargar(alias)
+  }
+
+  function cerrarNueva() {
+    enNueva = false
+    creando = false
+    salidaNueva = []
+    finalNueva = null
+    configNueva = null
+    dns = null
+    paraDeEscuchar?.()
+    paraDeEscuchar = null
+  }
 
   async function comprobar(a: string) {
     comprobando = a
@@ -308,11 +409,11 @@
   <main>
     <AvisoDeCierre />
     <header class="cabecera">
-      <h1>{enAlta ? 'Servidores' : alias || '—'}</h1>
-      {#if apps && vista === 'apps' && !enAlta}
+      <h1>{enAlta ? 'Servidores' : enNueva ? 'Nueva web' : alias || '—'}</h1>
+      {#if apps && vista === 'apps' && !enAlta && !enNueva}
         <p class="cuenta">{apps.length} {apps.length === 1 ? 'app' : 'apps'}</p>
       {/if}
-      {#if !enAlta}
+      {#if !enAlta && !enNueva}
       <nav class="vistas" aria-label="Qué mirar de este servidor">
         <button type="button" class:activo={vista === 'apps'} onclick={() => (vista = 'apps')}>
           apps
@@ -323,12 +424,57 @@
         <button type="button" class:activo={vista === 'monitor'} onclick={verMonitor}>
           monitor
         </button>
+        {#if alias}
+          <button type="button" class="nueva" onclick={() => { enNueva = true; dns = null }}>
+            nueva web
+          </button>
+        {/if}
       </nav>
       {/if}
     </header>
 
     <section class="panel">
-      {#if enAlta}
+      {#if enNueva}
+        {#if finalNueva}
+          <!-- Terminado. El final sale de preguntarle al servidor, no de leer
+               la prosa: son siete y cinco son parciales, y decir «ha fallado»
+               cuando hay una web publicada sin certificado es la peor de las
+               respuestas posibles. -->
+          <div class="acabada">
+            <Desenlace d={finalNueva} app={nombreNueva} />
+            {#if configNueva}
+              <LoDetectado app={nombreNueva} config={configNueva} />
+            {/if}
+            {#if salidaNueva.length > 0}
+              <details>
+                <summary>Lo que dijo el servidor</summary>
+                <pre class="prosa">{salidaNueva.join('\n')}</pre>
+              </details>
+            {/if}
+            <button type="button" class="cerrar-nueva" onclick={cerrarNueva}>Cerrar</button>
+          </div>
+        {:else if creando}
+          <div class="creando">
+            <p class="que">
+              Creando «{nombreNueva}» en {alias}. Clona, instala, compila y
+              despliega: puede tardar unos minutos.
+            </p>
+            <!-- Prosa, y enseñada como prosa. `orbit new` no tiene `--progress`
+                 ni `--json`, así que aquí no hay pasos que contar y una barra
+                 sería un número inventado. -->
+            <pre class="prosa">{salidaNueva.join('\n') || 'esperando al servidor…'}</pre>
+          </div>
+        {:else}
+          <AsistenteNueva
+            servidor={alias}
+            resolucion={dns}
+            resolviendo={resolviendoDns}
+            alResolver={comprobarDns}
+            alCrear={crearWeb}
+            alCerrar={cerrarNueva}
+          />
+        {/if}
+      {:else if enAlta}
         <AltaServidores
           alias={servidores}
           {saludos}
@@ -372,7 +518,7 @@
       {/if}
     </section>
 
-    {#if elegida && vista === 'apps'}
+    {#if elegida && vista === 'apps' && !enNueva}
       <section class="panel panel--detalle">
         <nav class="pestanas" aria-label="Qué mirar de esta app">
           <button type="button" class:activo={pestana === 'detalle'} onclick={() => (pestana = 'detalle')}>
@@ -582,4 +728,20 @@
   .motivo { font-family: var(--mono); }
   .sub { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
          color: var(--fg-faint); margin: var(--e-6) 0 var(--e-3); }
+  .nueva { margin-left: var(--e-3); }
+  .creando, .acabada { display: grid; gap: var(--e-4); }
+  .creando .que { margin: 0; font-size: 13px; color: var(--fg-muted); max-width: 72ch; }
+  .prosa {
+    margin: 0; padding: var(--e-3);
+    background: var(--surface-sunken); border-radius: var(--r-2);
+    font-family: var(--mono); font-size: 12px; color: var(--fg);
+    white-space: pre-wrap; max-height: 24rem; overflow-y: auto;
+  }
+  .acabada summary { font-size: 12px; color: var(--fg-muted); cursor: pointer; }
+  .cerrar-nueva {
+    justify-self: start;
+    background: none; border: 1px solid var(--border-strong); border-radius: var(--r-1);
+    padding: var(--e-2) var(--e-3); font: inherit; font-size: 12px;
+    color: var(--fg-muted); cursor: pointer;
+  }
 </style>

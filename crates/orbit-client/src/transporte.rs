@@ -34,7 +34,7 @@ use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crate::comando::{Comando, ErrorForma};
+use crate::comando::{Comando, ErrorForma, Vena};
 
 /// Cuánto se acepta de una respuesta antes de cortar.
 ///
@@ -515,6 +515,7 @@ pub fn ejecutar_en_vivo(
         cmd,
         tope_de_tiempo(comando),
         &servidor.binario,
+        comando.vena_humana(),
         en_curso,
         al_llegar,
     )
@@ -534,13 +535,21 @@ pub fn ejecutar_en_vivo_local(
     for (k, v) in entorno {
         cmd.env(k, v);
     }
-    ejecutar_sirviendo(cmd, tope_de_tiempo(comando), binario, en_curso, al_llegar)
+    ejecutar_sirviendo(
+        cmd,
+        tope_de_tiempo(comando),
+        binario,
+        comando.vena_humana(),
+        en_curso,
+        al_llegar,
+    )
 }
 
 fn ejecutar_sirviendo(
     mut cmd: Command,
     tope: Duration,
     binario: &str,
+    vena: Vena,
     en_curso: EnCurso,
     mut al_llegar: impl FnMut(String) + Send + 'static,
 ) -> Result<Respuesta, ErrorTransporte> {
@@ -552,26 +561,39 @@ fn ejecutar_sirviendo(
         .stderr(Stdio::piped());
     let mut hijo = cmd.spawn().map_err(ErrorTransporte::NoSePudoLanzar)?;
 
-    let so = hijo.stdout.take().unwrap();
-    let se = hijo.stderr.take().unwrap();
+    let so: Box<dyn std::io::Read + Send> = Box::new(hijo.stdout.take().unwrap());
+    let se: Box<dyn std::io::Read + Send> = Box::new(hijo.stderr.take().unwrap());
 
-    // stdout se acumula: ahí va el objeto final y no se puede servir a trozos.
-    let h_out = std::thread::spawn(move || leer_hasta(so, TOPE_RESPUESTA));
+    // Cuál se sirve a trozos y cuál se acumula lo dice la orden, no la llamada:
+    // con `--json` la prosa va por stderr y stdout guarda el objeto, que no se
+    // puede partir; sin `--json` es al revés y no hay objeto que proteger.
+    //
+    // Lo que NO se intercambia es dónde acaba cada una en la `Respuesta`:
+    // `stdout` sigue siendo stdout. Los mensajes por los que se reconoce un
+    // «command not found» o un cambio de clave de host los escribe ssh, no
+    // Orbit, y salen por stderr pase lo que pase — clasificarlos leyendo «la
+    // tubería servida» sería dejar de reconocerlos justo en la orden más larga.
+    let (servida, guardada) = match vena {
+        Vena::Stderr => (se, so),
+        Vena::Stdout => (so, se),
+    };
 
-    // stderr se sirve línea a línea. Los dos hilos siguen siendo dos: leerlos
+    let h_guardada = std::thread::spawn(move || leer_hasta(guardada, TOPE_RESPUESTA));
+
+    // La otra se sirve línea a línea. Los dos hilos siguen siendo dos: leerlos
     // en serie es un bloqueo mutuo en cuanto el que no se lee llena su tubería.
     let acumulado = Arc::new(std::sync::Mutex::new(String::new()));
     let acc = Arc::clone(&acumulado);
-    let h_err = std::thread::spawn(move || {
-        let lector = std::io::BufReader::new(se);
+    let h_servida = std::thread::spawn(move || {
+        let lector = std::io::BufReader::new(servida);
         for linea in lector.lines() {
             let l = match linea {
                 Ok(l) => l,
                 Err(_) => break,
             };
             if let Ok(mut a) = acc.lock() {
-                // El presupuesto también aplica aquí: un servidor que gotee por
-                // stderr para siempre no puede llenarnos la memoria.
+                // El presupuesto también aplica aquí: un servidor que gotee
+                // para siempre no puede llenarnos la memoria.
                 if a.len() < TOPE_RESPUESTA {
                     a.push_str(&l);
                     a.push('\n');
@@ -604,14 +626,19 @@ fn ejecutar_sirviendo(
         }
     };
 
-    let (stdout, corto) = h_out.join().unwrap()?;
-    let _ = h_err.join();
+    let (guardada, corto) = h_guardada.join().unwrap()?;
+    let _ = h_servida.join();
     if corto {
         return Err(ErrorTransporte::Demasiado {
             tope: TOPE_RESPUESTA,
         });
     }
-    let stderr = acumulado.lock().map(|a| a.clone()).unwrap_or_default();
+    let servida = acumulado.lock().map(|a| a.clone()).unwrap_or_default();
+    // Y aquí se deshace el intercambio: cada una vuelve a su sitio.
+    let (stdout, stderr) = match vena {
+        Vena::Stderr => (guardada, servida),
+        Vena::Stdout => (servida, guardada),
+    };
     let codigo = estado.code().unwrap_or(-1);
 
     let r = Respuesta {

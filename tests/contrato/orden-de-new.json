@@ -1,0 +1,72 @@
+{
+  "_": [
+    "El argv exacto que produce el caso canónico del asistente, sin el binario.",
+    "",
+    "Existe porque la orden se construye DOS veces: en el catálogo de Rust, que",
+    "es la que se ejecuta, y en la interfaz, que la enseña en el repaso antes de",
+    "lanzarla. Enseñar una cosa y ejecutar otra es el peor fallo posible de una",
+    "pantalla cuyo único argumento es «mira lo que va a pasar antes de que pase».",
+    "",
+    "Las dos lo comparan contra este fichero, así que no pueden separarse en",
+    "silencio: cambiar una rompe su prueba, y cambiar las dos obliga a tocar esto",
+    "—que sale en el diff y alguien lo ve.",
+    "",
+    "Se comparan ARGUMENTOS y no la línea escapada: el escapado ya tiene su",
+    "propia prueba de propiedad contra cuatro shells, y meterlo aquí sería",
+    "probarlo dos veces y mal."
+  ],
+
+  "entrada": {
+    "nombre": "tienda",
+    "repo": "usuario/tienda",
+    "rama": "main",
+    "dominio": "tienda.ejemplo.com",
+    "alias": ["www.tienda.ejemplo.com", "tienda.es"],
+    "correo": "avisos@ejemplo.com",
+    "base_de_datos": true,
+    "https": true,
+    "ajustes": {
+      "carpeta": "apps/web",
+      "tipo": null,
+      "build": ["vacia"],
+      "arranque": null,
+      "outdir": null
+    }
+  },
+
+  "argv": [
+    "new", "--yes",
+    "--repo", "usuario/tienda",
+    "--branch", "main",
+    "--name", "tienda",
+    "--domain", "tienda.ejemplo.com",
+    "--aliases", "www.tienda.ejemplo.com tienda.es",
+    "--email", "avisos@ejemplo.com",
+    "--db",
+    "--appdir", "apps/web",
+    "--build", ""
+  ],
+
+  "minimo": {
+    "_": "Y el caso normal: sin alias, sin correo, sin base de datos, sin ajustes.",
+    "entrada": {
+      "nombre": "web",
+      "repo": "usuario/web",
+      "rama": "main",
+      "dominio": "web.ejemplo.com",
+      "alias": [],
+      "correo": null,
+      "base_de_datos": false,
+      "https": true,
+      "ajustes": {}
+    },
+    "argv": [
+      "new", "--yes",
+      "--repo", "usuario/web",
+      "--branch", "main",
+      "--name", "web",
+      "--domain", "web.ejemplo.com",
+      "--aliases", ""
+    ]
+  }
+}

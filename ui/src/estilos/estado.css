@@ -188,3 +188,28 @@
 .saludo--sin-privilegios       { --saludo: var(--st-warn); }
 .saludo--no-se-llega           { --saludo: var(--st-error); }
 .saludo--clave-de-host-cambiada { --saludo: var(--st-error); }
+
+/* El asistente de web nueva. Por token, no anidado, por lo de siempre.
+
+   Tres cosas que aquí son ESTADO y no adorno:
+
+   · Un problema del paso en curso impide seguir, y por eso se pinta como lo que
+     impide y no como una nota al pie.
+   · El aviso del certificado es ámbar y NO rojo: quedarse sin certificado no es
+     un fallo —Orbit avisa y sigue a propósito— y pintarlo rojo contradiría esa
+     decisión igual que la contradiría en el final F2.
+   · El DNS que no coincide también es ámbar, y por el mismo motivo: un servidor
+     detrás de un proxy da direcciones distintas y no está roto. */
+.problema     { --asistente: var(--st-error); }
+.aviso-cert   { --asistente: var(--st-warn); }
+.aviso-dns    { --asistente: var(--st-warn); }
+
+/* «No lo he mirado» no es «no coincide». Se pinta con el color de lo que no se
+   sabe, que es el mismo con el que la portada pinta un certificado sin
+   comprobar, y nunca con el del aviso. */
+.aviso-dns--sin-mirar { --asistente: var(--st-unknown); }
+
+/* Un campo de detección vaciado A PROPÓSITO —«esta app no se compila»— frente a
+   uno que se deja detectar. Son dos respuestas distintas y tienen que verse
+   distintas: un campo de texto en blanco no puede significar las dos cosas. */
+.anulacion--vacia { --anulacion: var(--st-warn); }

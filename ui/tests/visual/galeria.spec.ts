@@ -40,3 +40,33 @@ for (const tema of ['dark', 'light'] as const) {
       .not.toBe(fondoPanel)
   })
 }
+
+// El defecto que sólo se ve mirando: dos estados con el mismo color.
+//
+// «lo detecta Orbit» y «sin build» son dos respuestas distintas —la segunda le
+// dice al servidor que esta app no se compila— y su distinción vive en
+// estado.css, por token. Es exactamente la forma en que ya se rompió una vez:
+// una regla de estado anidada pierde contra el <style> con ámbito de un
+// componente, y el botón de borrar se quedó sin su rojo con el DOM en verde.
+for (const tema of ['dark', 'light'] as const) {
+  test(`un campo vaciado a propósito se distingue del que se detecta · ${tema}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: tema })
+    await page.goto('/galeria.html')
+    await page.waitForSelector('.anulacion--vacia')
+
+    const vacia = page.locator('.anulacion--vacia').first()
+    const detecta = page.locator('.estado-tri:not(.anulacion--vacia)').first()
+    await detecta.waitFor({ state: 'visible' })
+
+    const [cv, cd] = await Promise.all([
+      vacia.evaluate((n) => getComputedStyle(n).color),
+      detecta.evaluate((n) => getComputedStyle(n).color),
+    ])
+    expect(cv, 'si los dos estados son del mismo color, no hay dos estados').not.toBe(cd)
+
+    // Y no sólo por color: el texto también los distingue, que es lo único que
+    // sobrevive al daltonismo.
+    expect(await vacia.textContent()).toContain('sin build')
+    expect(await detecta.textContent()).toContain('lo detecta Orbit')
+  })
+}

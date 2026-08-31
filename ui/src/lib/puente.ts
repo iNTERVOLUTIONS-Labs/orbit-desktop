@@ -12,6 +12,7 @@
 // falso** que usan las pruebas del núcleo, así que la interfaz y el contrato no
 // pueden divergir.
 
+import { listaDeAlias, type Borrador } from './asistente'
 import {
   leerLog,
   type App, type Despliegue, type Doctor, type Entorno,
@@ -253,6 +254,84 @@ export async function retirarYBorrar(alias: string, app: string): Promise<Result
 export async function revertir(alias: string, app: string, release: string): Promise<Resultado> {
   if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
   return invocar<Resultado>('revertir', { alias, app, release })
+}
+
+/** Lo que devuelve `orbit new`: el texto y el código, **sin interpretar
+ *  ninguno de los dos**. */
+export interface Creacion {
+  codigo: number
+  salida: string
+}
+
+/** Crea una web.
+ *
+ *  Es la única llamada del puente que **devuelve un código de salida sin
+ *  clasificarlo**, y no es un descuido: `orbit new` despliega por dentro y
+ *  puede terminar en 1 con la aplicación creada, registrada y con vhost. Leer
+ *  ese 1 como «ha fallado» sería decirle a alguien que no tiene nada cuando
+ *  tiene una web publicada a la que le falta el certificado.
+ *
+ *  Quien llama a esto no mira ni el código ni la prosa: al terminar pregunta
+ *  con `detalle()`, que sí tiene contrato, y clasifica con `clasificar()`. Es
+ *  la única forma que no depende del idioma del servidor.
+ *
+ *  El progreso llega por `orbit://progreso`, igual que el de un despliegue, con
+ *  la clave `alias:nombre`. */
+export async function crear(
+  alias: string,
+  b: Borrador,
+  binario?: string,
+): Promise<Creacion> {
+  if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
+  const a = b.ajustes
+  return invocar<Creacion>('crear', {
+    alias,
+    nombre: b.nombre.trim(),
+    repo: b.repo.trim(),
+    rama: b.rama.trim(),
+    dominio: b.dominio.trim(),
+    aliasDominio: listaDeAlias(b),
+    correo: b.correo.trim() === '' ? null : b.correo.trim(),
+    baseDeDatos: b.baseDeDatos,
+    https: b.https,
+    ajustes: {
+      carpeta: a.carpeta.trim() === '' ? null : a.carpeta.trim(),
+      tipo: a.tipo.trim() === '' ? null : a.tipo.trim(),
+      // La unión etiquetada cruza TAL CUAL, con su `modo` escrito.
+      //
+      // La primera versión mandaba `undefined` para «callar» y `null` para
+      // «vacío a propósito», y no funcionaba: al otro lado serde colapsa las dos
+      // en el mismo valor, así que el `--build \'\'` no llegaba nunca y esta
+      // pantalla habría enseñado en el repaso una orden que el servidor no
+      // recibía. Es exactamente el fallo que el repaso existe para hacer
+      // imposible.
+      build: a.build,
+      arranque: a.arranque,
+      outdir: a.outdir,
+    },
+    binario,
+  })
+}
+
+export interface Resolucion {
+  del_dominio: string[]
+  del_servidor: string[]
+  /** `null` es **no lo sé** —falta una de las dos listas— y no se pinta como
+   *  «no coinciden». */
+  coinciden: boolean | null
+}
+
+/** A dónde apunta un nombre, y a dónde apunta el servidor.
+ *
+ *  Contesta antes de crear la única pregunta del asistente que no sale del
+ *  contrato: una web publicada cuyo dominio no apunta aquí se ve, desde dentro,
+ *  exactamente igual que una que sí. Es el final F7, y descubrirlo después de
+ *  tres minutos de build es descubrirlo tarde.
+ *
+ *  Sin envoltorio no se inventa una respuesta: se dice que no se sabe. */
+export async function resolver(nombre: string, alias: string): Promise<Resolucion> {
+  if (!hayPuente()) return { del_dominio: [], del_servidor: [], coinciden: null }
+  return invocar<Resolucion>('resolver', { nombre, alias })
 }
 
 /**

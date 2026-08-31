@@ -10,7 +10,9 @@
   import LoteVista from './componentes/Lote.svelte'
   import HojaDeComando from './componentes/HojaDeComando.svelte'
   import Desenlace from './componentes/Desenlace.svelte'
-  import { clasificar } from './lib/asistente'
+  import AsistenteNueva from './componentes/AsistenteNueva.svelte'
+  import LoDetectado from './componentes/LoDetectado.svelte'
+  import { borradorNuevo, clasificar, PASOS, type Borrador } from './lib/asistente'
   import type { AppInfo } from './lib/contrato'
   import { leerProgreso } from './lib/despliegue'
   import type { Despliegue as Obj, Lote } from './lib/contrato'
@@ -81,6 +83,28 @@
     },
     releases: rel,
   })
+  // Un borrador a medio llenar, para que cada paso se pueda mirar con datos
+  // dentro. El de la detección va con un ajuste puesto a propósito: es el estado
+  // que cuesta ver, porque el normal es que esté vacío.
+  const BORRADOR: Borrador = {
+    ...borradorNuevo(),
+    repo: 'usuario/tienda',
+    nombre: 'tienda',
+    dominio: 'tienda.ejemplo.com',
+    alias: 'www.tienda.ejemplo.com',
+    ajustes: {
+      ...borradorNuevo().ajustes,
+      carpeta: 'apps/web',
+      build: { modo: 'vacia' },
+    },
+  }
+
+  const DNS = {
+    coincide: { del_dominio: ['10.0.0.5'], del_servidor: ['10.0.0.5'], coinciden: true },
+    no: { del_dominio: ['1.2.3.4'], del_servidor: ['10.0.0.5'], coinciden: false },
+    sinSaber: { del_dominio: [], del_servidor: ['10.0.0.5'], coinciden: null },
+  }
+
   const DESENLACES = [
     clasificar('tienda', infoBase({}), true),
     clasificar('tienda', infoBase({ ssl: false }), true),
@@ -228,6 +252,66 @@
     durante días. Agruparlos está prohibido.
   </p>
   <div class="panel"><LoteVista lote={loteMuestra as Lote} servidor="vps-ovh" /></div>
+
+  <h2>El asistente de web nueva</h2>
+  <p class="nota">
+    Cinco pasos, y el segundo es el que el informe de diseño pedía como
+    «enseña lo detectado junto a su prueba». <strong>Ahí no se puede</strong>:
+    <code>detect_stack</code> lee un directorio, y el directorio no existe hasta
+    que <code>orbit new</code> ha clonado. No hay ninguna orden que mire un
+    repositorio remoto y diga qué stack es. Así que ese paso no promete una
+    conclusión: ofrece adelantarse a ella, y lo detectado se enseña después, ya
+    como hecho.
+  </p>
+  {#each PASOS as p (p)}
+    <h3>{PASOS.indexOf(p) + 1} · {p}</h3>
+    <div class="panel">
+      <AsistenteNueva
+        servidor="vps-ovh"
+        pasoInicial={p}
+        inicial={BORRADOR}
+        correoEnElServidor={false}
+        resolucion={p === 'Dominio' ? DNS.no : null}
+        alResolver={() => {}}
+        alCrear={() => {}}
+        alCerrar={() => {}}
+      />
+    </div>
+  {/each}
+
+  <h3>El DNS, en sus tres respuestas</h3>
+  <p class="nota">
+    «No coincide» y «no lo sé» <strong>no son lo mismo</strong>, y la tercera
+    columna es la que se pinta mal en casi todas las interfaces: sin una de las
+    dos listas no hay comparación que hacer, y decir «no apunta aquí» sería
+    afirmar algo que no se sabe.
+  </p>
+  {#each Object.entries(DNS) as [cual, r] (cual)}
+    <div class="panel">
+      <AsistenteNueva
+        servidor="vps-ovh"
+        pasoInicial="Dominio"
+        inicial={BORRADOR}
+        resolucion={r}
+        alResolver={() => {}}
+        alCrear={() => {}}
+        alCerrar={() => {}}
+      />
+    </div>
+  {/each}
+
+  <h3>Lo que Orbit acabó detectando</h3>
+  <p class="nota">
+    Esto sí sale del contrato: <code>config</code> es el descriptor tal cual. Un
+    campo vacío lleva su etiqueta y nunca un guion — un guion se lee como «no lo
+    sé», y el descriptor sabe perfectamente que ahí no hay nada.
+  </p>
+  <div class="panel">
+    <LoDetectado
+      app="tienda"
+      config={{ type: 'next', appdir: 'apps/web', build: '', start: 'pnpm start', outdir: '', port: '3007' }}
+    />
+  </div>
 
   <h2>Los siete finales de una web nueva</h2>
   <p class="nota">

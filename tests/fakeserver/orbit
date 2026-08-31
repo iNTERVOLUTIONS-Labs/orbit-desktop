@@ -235,6 +235,32 @@ case "$CASE" in
     } >&2
     emitir deploy-ok.json ;;
 
+  # ── `orbit new`, que habla por STDOUT ────────────────────────────────────
+  # Aquí está el motivo de que este caso exista, y es la línea 447 del Orbit de
+  # verdad: '_ui_route' deja UI_FD=1 salvo con --json, y 'new' es la única orden
+  # larga que no lo lleva. Así que su prosa sale por stdout, al revés que la de
+  # todo el resto del catálogo.
+  #
+  # Un doble que escribiera esto por stderr —como hace 'deploy-lento', que sí
+  # lleva --json— haría pasar un cliente que sirve la tubería equivocada, y el
+  # fallo sólo aparecería contra un servidor de verdad: tres minutos de pantalla
+  # muda durante la única orden que de verdad tarda.
+  #
+  # Y termina en 1 **con la aplicación creada**, que es el otro hecho que
+  # cambia el diseño: el código de salida de 'new' no es informativo.
+  new-lento)
+    for linea in \
+      "Clonando usuario/mi-web (rama main)" \
+      "Detectado: next  (package.json trae \"next\": \"15.1.0\")" \
+      "Instalando dependencias" \
+      "Compilando" \
+      "Publicando release 20260830-120000" \
+      "Certificado: no hay LETSENCRYPT_EMAIL configurado, se omite"; do
+      printf '  %s\n' "$linea"
+      sleep "${ORBIT_FAKE_PAUSA:-0.2}"
+    done
+    exit 1 ;;
+
   # ── Un despliegue que no termina nunca, para probar la cancelación ───────
   deploy-eterno)
     printf '{"event":"step","app":"mi-web","step":"build","status":"start","elapsed_s":0}\n' >&2

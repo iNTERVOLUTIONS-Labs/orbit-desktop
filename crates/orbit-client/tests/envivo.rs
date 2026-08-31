@@ -156,3 +156,145 @@ fn se_puede_cancelar_un_despliegue_en_curso() {
         "un despliegue cancelado no trae objeto final, y eso NO se lee como un fallo"
     );
 }
+
+/// La orden más larga del catálogo es la única que habla por stdout, y servir
+/// la tubería equivocada no da un error: da una pantalla muda durante tres
+/// minutos, que es la clase de fallo que sólo aparece en producción.
+///
+/// Esta prueba existe porque el primer transporte servía stderr siempre. Contra
+/// todo el resto del catálogo eso era correcto —`--json` manda la prosa a
+/// stderr— y por eso pasó desapercibido: el único contraejemplo es `new`.
+#[test]
+fn la_prosa_de_new_llega_aunque_salga_por_stdout() {
+    use orbit_client::comando::{AjustesDeteccion, Vena};
+
+    let c = Comando::Nueva(Box::new(orbit_client::comando::WebNueva {
+        nombre: "mi-web".into(),
+        repo: "usuario/mi-web".into(),
+        rama: "main".into(),
+        dominio: "mi-web.ejemplo.com".into(),
+        alias: vec![],
+        correo: None,
+        base_de_datos: false,
+        https: true,
+        ajustes: AjustesDeteccion::default(),
+    }));
+    assert_eq!(
+        c.vena_humana(),
+        Vena::Stdout,
+        "sin --json, _ui_route deja UI_FD=1"
+    );
+
+    let llegadas: Arc<Mutex<Vec<(u128, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let acc = Arc::clone(&llegadas);
+    let t0 = Instant::now();
+
+    let r = ejecutar_en_vivo_local(
+        &falso(),
+        &c,
+        &[
+            ("ORBIT_FAKE_CASE", "new-lento"),
+            ("ORBIT_FAKE_PAUSA", "0.15"),
+        ],
+        EnCurso::nuevo(),
+        move |l| acc.lock().unwrap().push((t0.elapsed().as_millis(), l)),
+    );
+
+    // `new` termina en 1 con la aplicación creada, así que el transporte no
+    // puede tratar ese código como un fallo del que no se saca nada: la prosa
+    // ya ha llegado y el estado real se pregunta después con `info --json`.
+    let salida = match r {
+        Ok(r) => r.stdout,
+        Err(orbit_client::transporte::ErrorTransporte::Orbit { stdout, .. }) => stdout,
+        Err(e) => panic!("no debería ser un fallo de transporte: {e}"),
+    };
+
+    let v = llegadas.lock().unwrap();
+    assert_eq!(v.len(), 6, "seis líneas de prosa, servidas");
+    assert!(
+        v[0].1.contains("Clonando"),
+        "la primera línea es la del clon, y llegó: {:?}",
+        v[0].1
+    );
+
+    // Y llegaron **mientras ocurría**, no de golpe al final.
+    let (primera, ultima) = (v.first().unwrap().0, v.last().unwrap().0);
+    assert!(
+        ultima > primera + 300,
+        "servidas según ocurren: primera a {primera} ms, última a {ultima} ms"
+    );
+
+    // La `Respuesta` no intercambia nada: lo que salió por stdout sigue
+    // estando en `stdout`.
+    assert!(salida.contains("Detectado: next"));
+}
+
+/// El encaminamiento se deduce del propio `argv` y no se apunta a mano en una
+/// lista paralela, así que vale igual para las órdenes que se añadan mañana.
+/// Lo que se comprueba aquí es que la deducción coincide con la regla de
+/// `_ui_route` en los dos sentidos.
+#[test]
+fn quien_lleva_json_habla_por_stderr_y_quien_no_por_stdout() {
+    use orbit_client::comando::{AjustesDeteccion, ModoDeExec, Vena};
+
+    let muestra = [
+        Comando::Version,
+        Comando::Lista,
+        Comando::Estado,
+        Comando::Doctor,
+        Comando::DoctorArreglar,
+        Comando::Top,
+        Comando::Info { app: "web".into() },
+        Comando::Desplegar {
+            app: "web".into(),
+            progreso: true,
+        },
+        Comando::EntornoLista { app: "web".into() },
+        Comando::EntornoValor {
+            app: "web".into(),
+            clave: "PORT".into(),
+        },
+        Comando::Ejecutar {
+            app: "web".into(),
+            modo: ModoDeExec::Argumentos(vec!["ls".into()]),
+        },
+        Comando::Retirar { app: "web".into() },
+        Comando::RetirarYBorrar { app: "web".into() },
+        Comando::Revertir {
+            app: "web".into(),
+            release: "20260830-120000".into(),
+        },
+        Comando::Nueva(Box::new(orbit_client::comando::WebNueva {
+            nombre: "web".into(),
+            repo: "usuario/web".into(),
+            rama: "main".into(),
+            dominio: "web.ejemplo.com".into(),
+            alias: vec![],
+            correo: None,
+            base_de_datos: false,
+            https: true,
+            ajustes: AjustesDeteccion::default(),
+        })),
+    ];
+
+    let mut por_stdout = 0;
+    for c in &muestra {
+        let argv = c.argv("orbit").expect("la muestra es toda válida");
+        let esperada = if argv.iter().any(|a| a == "--json") {
+            Vena::Stderr
+        } else {
+            Vena::Stdout
+        };
+        if esperada == Vena::Stdout {
+            por_stdout += 1;
+        }
+        assert_eq!(c.vena_humana(), esperada, "en {c:?}");
+    }
+
+    // Y que la muestra cubre de verdad los dos lados: una prueba en la que
+    // todas las órdenes cayeran del mismo lado pasaría sin comprobar nada.
+    assert_eq!(
+        por_stdout, 6,
+        "las seis sin --json: env get, exec, remove, remove --purge, rollback y new"
+    );
+}

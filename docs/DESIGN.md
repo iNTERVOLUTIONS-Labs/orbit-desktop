@@ -477,70 +477,157 @@ De 1 y 2 sale la decisión que sostiene todo lo demás:
 #### 2.6.1 Los cinco pasos
 
 ```
-1. Origen      repo (lista de GitHub si `orbit github` está conectado, o URL), rama
-2. Detección   qué ha detectado Orbit, enseñado como resultado EDITABLE
-3. Dominio     dominio, alias, comprobación de DNS en vivo
-4. Extras      base de datos (no por defecto), HTTPS (sí, exige email), autodespliegue
+1. Origen      repo (usuario/repo o URL https), rama, nombre
+2. Detección   qué se le adelanta a la detección — vacío en el caso normal
+3. Dominio     dominio, alias, y a dónde apunta ya ese nombre
+4. Extras      certificado (con su correo) y base de datos
 5. Repaso      la orden literal, y lo que va a pasar, antes de ejecutar
 ```
 
-El paso 2 es nuevo respecto de la ronda 1 y es el que faltaba. Va antes que el dominio a
-propósito: si la detección se equivoca, es mejor enterarse antes de haber contestado tres
-pantallas más.
+El paso 2 va antes que el dominio a propósito: es una pregunta sobre el
+repositorio, y va pegada a la pantalla que pregunta por el repositorio.
 
-#### 2.6.2 Cuando la detección se equivoca, que es el caso normal
+> **Corrección de la ronda 2.** El paso 2 se describía aquí como «qué ha
+> detectado Orbit, enseñado como resultado editable», y **eso no se puede
+> hacer**. `detect_stack` recibe un directorio (`orbit:2862`) y `orbit init`
+> hay que ejecutarlo dentro del proyecto (`orbit:6803`): no existe ninguna
+> orden que mire un repositorio remoto y diga qué stack es, y el clon ocurre
+> **dentro** de `orbit new`. Antes de ejecutar no hay conclusión que enseñar,
+> sólo una promesa — y una promesa puesta junto a un botón «cambiar» se lee
+> como un hecho.
+>
+> Lo que sí se puede, y es lo que hace la pantalla, son dos cosas distintas:
+> **adelantarse** a la detección antes (§2.6.2) y **enseñar lo detectado**
+> después (§2.6.2b), donde ya es un dato del contrato.
 
-Orbit detecta unos veinticinco *stacks* leyendo el `package.json`, los ficheros del
-repositorio y los adaptadores. Acierta mucho, y aun así **equivocarse es el caso normal,
-no el raro**, por tres motivos que no son culpa de la detección: un monorepo donde la app
-está en un subdirectorio, un Astro o un SvelteKit donde el adaptador decide si sale un
+La misma ronda encontró otras dos cosas que este diseño daba por hechas:
+
+**El autodespliegue no es una bandera de `new`.** Es `cmd_autodeploy`
+(`orbit:10463`), una orden aparte que se activa cuando la web ya existe y
+sirve. Estaba en el paso 4 de la ronda 1, y ofrecerlo ahí daría a entender que
+`orbit new` lo configura. Se ha quitado del formulario, y en su sitio hay una
+línea que dice por qué no está: quien lo busque merece saber dónde está, no que
+la pregunta desaparezca.
+
+**`orbit new` habla por stdout, no por stderr.** `_ui_route` (`orbit:447`) deja
+`UI_FD=1` salvo con `--json`, y `new` es la única orden larga que no lo lleva.
+El cliente servía stderr línea a línea en todas: correcto para el resto del
+catálogo y mudo justo en la que tarda tres minutos. Está en §4.5 de
+[CONTRACT.md](CONTRACT.md).
+
+#### 2.6.2 Adelantarse a la detección, que es el paso 2
+
+Orbit detecta unos veinticinco *stacks* leyendo el `package.json`, los ficheros
+del repositorio y los adaptadores. Acierta mucho, y aun así se equivoca en tres
+casos que no son culpa de la detección: un monorepo donde la app está en un
+subdirectorio, un Astro o un SvelteKit donde el adaptador decide si sale un
 sitio estático o un servidor, y un proyecto que arranca con un script propio.
 
-La respuesta de la interfaz **no es un desplegable de tipo**. Es enseñar la conclusión
-junto a la prueba:
+En los tres, **quien lo tiene ya lo sabe**. Ésa es la pregunta que se puede
+hacer antes de clonar, y es la que hace la pantalla:
 
 ```
-┌─ Lo que he detectado ───────────────────────────────────────────────┐
+┌─ Detección ─────────────────────────────────────────────────────────┐
 │                                                                     │
-│   Tipo      next                                       [ cambiar ]  │
-│             porque package.json tiene "next": "15.1.0"              │
-│             y no hay output: 'export' en next.config.mjs            │
+│  Orbit detecta el tipo de proyecto AL CLONARLO, así que todavía no   │
+│  puedo enseñarte qué va a detectar. Casi siempre acierta y este      │
+│  paso se deja en blanco.                                            │
 │                                                                     │
-│   Build     pnpm build                                 [ cambiar ]  │
-│   Arranque  pnpm start                                 [ cambiar ]  │
-│   Puerto    3007  (libre)                              [ cambiar ]  │
-│   Carpeta   /  (raíz del repositorio)                  [ cambiar ]  │
+│  ▸ Ya sé que se va a equivocar                                      │
 │                                                                     │
-│   ⓘ ¿Es un monorepo? Indica la carpeta de la app y vuelvo a mirar.  │
+│  ⓘ Si la detección no encaja nunca —y en un monorepo raro no encaja  │
+│    nunca—, ejecuta `orbit init` en tu repositorio y sube el          │
+│    orbit.json. A partir de entonces manda el fichero.                │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-Cuatro reglas de esta pantalla:
+Plegado, y **vacío es la respuesta correcta a casi todos los repositorios**. Un
+formulario que insinúa que hay que rellenarlo consigue que se rellene mal.
 
-**Cada conclusión va con su porqué, en una línea.** «next **porque** `package.json` tiene
-`"next"`» es verificable de un vistazo; «Tipo: next» hay que creérselo. Y quien vea el
-porqué equivocado sabe exactamente qué cambiar. Esto no cuesta llamadas: la detección ya
-ha mirado esos ficheros.
+Tres reglas del bloque de dentro, que son las de la ronda 1 que sí sobreviven:
 
-**`--appdir` no es un campo más y no se pinta como tal.** Cambiar la carpeta **redirige
-la detección entera**, así que la interfaz lo trata como lo que es: se cambia la carpeta,
-se vuelve a detectar, y se reenseña todo el bloque. Ponerlo en una lista junto a «build»
-y «arranque» daría a entender que es un ajuste más, y es el que invalida a los otros.
+**`--appdir` no es un campo más y no se pinta como tal.** Cambiar la carpeta
+redirige la detección entera: el tipo y el build se leen contra otro
+directorio. Va la primera, con su propia explicación, y no en la lista junto a
+«build» y «arranque» — ponerla ahí daría a entender que es un ajuste al lado de
+los otros, y es el que invalida a los otros.
 
-**«Ninguno» es una respuesta y tiene que poder escribirse.** `--build ''` significa «esta
-app no se compila», y es distinto de no decir nada. En la interfaz son dos estados
-visibles: *detectado* (gris, editable) y *vacío a propósito* (con la etiqueta «sin build»).
-Un campo de texto que se deja en blanco no puede significar las dos cosas.
+**«Ninguno» es una respuesta y tiene que poder escribirse.** `--build ''`
+significa «esta app no se compila», y es distinto de no decir nada. En la
+interfaz son tres estados visibles y no un campo de texto: *lo detecta Orbit*
+(gris), *un valor* (editable) y *sin build* (ámbar). Un campo de texto vacío no
+puede significar las dos primeras cosas a la vez.
 
-**Y la salida de emergencia: `orbit init`.** Cuando la detección se equivoca de forma
-sistemática —y en un monorepo raro se equivoca siempre— la respuesta correcta no es
-pelearse con este formulario cada vez, es **que la configuración viaje con el código**.
-Al pie del bloque, un enlace: «Si esto no encaja, ejecuta `orbit init` en tu repositorio y
-sube el `orbit.json`; a partir de entonces manda el fichero.» Es la única recomendación
-del producto que le dice al usuario que se vaya de la interfaz, y está bien que exista:
-`orbit init` es el reverso exacto de lo que lee el despliegue, y el descriptor manda sobre
-la detección.
+> Esto casi se pierde en el cableado, y de la peor forma. El tri-estado cruzaba
+> el puente como `undefined` / `null` / cadena, dando por hecho que serde
+> distinguiría un campo ausente de un `null` explícito en un
+> `Option<Option<String>>`. **No los distingue**: los colapsa en `None`. El
+> resultado habría sido que el repaso enseñara `--build ''` y el servidor
+> recibiera una orden sin esa bandera — enseñar una cosa y ejecutar otra, en la
+> pantalla cuyo único argumento es que eso no pase. Ahora la etiqueta se
+> escribe (`AnulacionDeLaInterfaz`) y hay una prueba que lo fija.
+
+**Y la salida de emergencia: `orbit init`.** Cuando la detección se equivoca de
+forma sistemática, la respuesta correcta no es pelearse con este formulario cada
+vez, es que la configuración viaje con el código. Al pie del bloque, el enlace.
+Es la única recomendación del producto que le dice al usuario que se vaya de la
+interfaz, y está bien que exista: `orbit init` es el reverso exacto de lo que lee
+el despliegue, y el descriptor manda sobre la detección.
+
+#### 2.6.2b Lo detectado, enseñado cuando ya es un hecho
+
+Después de crear se lee `info --json`, que es la llamada que ya se hacía para
+clasificar el final. Su `config` **es el descriptor tal cual**, así que el tipo,
+la carpeta, el build, el arranque, la salida y el puerto están ahí, escritos por
+el servidor. Esa es la pantalla que la ronda 1 quería, sólo que en el único
+momento en que sus datos existen.
+
+```
+┌─ Lo que Orbit ha detectado en «tienda» ─────────────────────────────┐
+│                                                                     │
+│   Tipo      next                                                    │
+│   Carpeta   apps/web                                                │
+│   Build     está vacío                                              │
+│   Arranque  pnpm start                                              │
+│   Puerto    3007                                                    │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+Dos reglas:
+
+**Un campo vacío lleva su etiqueta, nunca un guion.** El descriptor son cadenas:
+`""` quiere decir que ahí no hay nada, y el servidor lo sabe. Un guion se lee
+como «no lo sé», y es la misma regla con la que la portada no pinta un `null`
+como un cero.
+
+**No se inventa el porqué.** La ronda 1 pedía «tipo `next` **porque**
+`package.json` tiene `"next": "15.1.0"`», y tenía razón en que una conclusión
+con su prueba es verificable de un vistazo. Pero **el descriptor guarda el
+resultado de la detección, no las pruebas que llevaron a él**, y un motivo
+verosímil inventado es peor que ninguno: se comprueba igual de fácil y es
+mentira. Lo que sí se enseña es qué hacer si no encaja, que es lo que se iba a
+buscar con el porqué.
+
+#### 2.6.2c El dominio, y el final F7 convertido en aviso
+
+El paso 3 pregunta a dónde apunta ya el nombre, y lo compara con a dónde va el
+`ssh`. Es la única pregunta del asistente que no sale del contrato, y existe
+porque **una web publicada cuyo dominio no apunta al servidor se ve, desde
+dentro, exactamente igual que una que sí**: es el final F7, y enterarse después
+de tres minutos de build es enterarse tarde.
+
+Tres cosas que la pantalla dice tal cual, porque son ciertas y porque callarlas
+convertiría un aviso en una afirmación:
+
+- **Lo resuelve esta máquina**, con su caché y su `/etc/hosts`. Puede no ser lo
+  que ve el resto del mundo, sobre todo con un registro recién cambiado.
+- **«No lo sé» no es «no coincide».** Sin una de las dos listas no hay
+  comparación que hacer, y se pinta con el color de lo que no se sabe — el mismo
+  con el que la portada pinta un certificado sin comprobar.
+- **Nunca impide seguir.** Un servidor detrás de un proxy o de un CDN da
+  direcciones distintas y no está roto.
 
 #### 2.6.3 Los finales, que son siete y no uno
 

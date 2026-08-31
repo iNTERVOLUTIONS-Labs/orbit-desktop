@@ -44,6 +44,10 @@ pub enum ErrorForma {
     NombreDeApp(String),
     ClaveDeEntorno(String),
     Release(String),
+    Repo(String),
+    Rama(String),
+    Dominio(String),
+    Correo(String),
     /// `orbit exec` sin comando abre un `bash` interactivo. Un cliente sin
     /// terminal no puede con eso, y fingir medio terminal es peor que no
     /// ofrecerlo: lo que se ofrece en su lugar es la orden `ssh` para pegarla
@@ -58,6 +62,13 @@ impl std::fmt::Display for ErrorForma {
             Self::NombreDeApp(s) => write!(f, "«{s}» no tiene forma de nombre de app"),
             Self::ClaveDeEntorno(s) => write!(f, "«{s}» no tiene forma de variable de entorno"),
             Self::Release(s) => write!(f, "«{s}» no tiene forma de release"),
+            Self::Repo(s) => write!(
+                f,
+                "«{s}» no tiene forma de repositorio: se espera «usuario/repo» o una URL https"
+            ),
+            Self::Rama(s) => write!(f, "«{s}» no tiene forma de rama de git"),
+            Self::Dominio(s) => write!(f, "«{s}» no tiene forma de dominio"),
+            Self::Correo(s) => write!(f, "«{s}» no tiene forma de correo"),
             Self::ExecSinComando => write!(
                 f,
                 "«orbit exec» sin comando abre una shell interactiva, y aquí no hay terminal"
@@ -118,6 +129,154 @@ pub fn release_valida(s: &str) -> bool {
     match sufijo {
         None => true,
         Some(s) => !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()),
+    }
+}
+
+/// Un dominio, con la regla que aplica nginx: etiquetas de 1 a 63 caracteres,
+/// separadas por puntos, sin guion al principio ni al final de una etiqueta.
+///
+/// No se acepta un dominio con `_`: nginx lo sirve, pero el certificado no se
+/// puede emitir para él, y una web publicada que nunca podrá tener HTTPS es
+/// justo el final parcial que este asistente existe para evitar.
+pub fn dominio_valido(s: &str) -> bool {
+    if s.is_empty() || s.len() > 253 || s.starts_with('.') || s.ends_with('.') {
+        return false;
+    }
+    // Un dominio sin punto es un nombre de máquina de la red local, no algo a
+    // lo que Let's Encrypt pueda emitir.
+    if !s.contains('.') {
+        return false;
+    }
+    s.split('.').all(|e| {
+        !e.is_empty()
+            && e.len() <= 63
+            && !e.starts_with('-')
+            && !e.ends_with('-')
+            && e.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    })
+}
+
+/// Una rama de git, con las prohibiciones de `git check-ref-format` que de
+/// verdad importan aquí.
+///
+/// El guion inicial va aparte del resto porque no es una cuestión de forma sino
+/// de quién interpreta el argumento: `--branch -X` se lo come el `getopts` del
+/// otro lado antes de que nadie mire si la rama existe.
+pub fn rama_valida(s: &str) -> bool {
+    if s.is_empty() || s.len() > 255 || s.starts_with('-') {
+        return false;
+    }
+    if s.starts_with('/') || s.ends_with('/') || s.contains("//") {
+        return false;
+    }
+    if s.contains("..") || s.ends_with(".lock") || s.ends_with('.') {
+        return false;
+    }
+    !s.chars().any(|c| {
+        c.is_ascii_control() || matches!(c, ' ' | '~' | '^' | ':' | '?' | '*' | '[' | '\\')
+    })
+}
+
+/// El origen: o `usuario/repo`, que es lo que entiende `gh`, o una URL entera.
+///
+/// Se aceptan las dos formas porque Orbit acepta las dos, y reducirlo a una
+/// obligaría a reescribir a mano lo que se acaba de copiar del navegador. Lo
+/// que no se acepta es un `ssh://` ni un `git@…`: esos autentican con la clave
+/// del servidor, y adivinar aquí que existe sería prometer algo que no se ha
+/// mirado.
+pub fn repo_valido(s: &str) -> bool {
+    if s.is_empty() || s.len() > 512 || s.starts_with('-') {
+        return false;
+    }
+    if s.chars().any(|c| c.is_ascii_control() || c == ' ') {
+        return false;
+    }
+    if let Some(resto) = s
+        .strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"))
+    {
+        return !resto.is_empty() && resto.contains('/');
+    }
+    // usuario/repo, exactamente una barra y las dos partes con contenido.
+    match s.split_once('/') {
+        Some((u, r)) => {
+            !u.is_empty()
+                && !r.is_empty()
+                && !r.contains('/')
+                && u.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                && r.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        }
+        None => false,
+    }
+}
+
+/// El correo del certificado. Deliberadamente laxo: quien valida de verdad es
+/// Let's Encrypt, y una expresión regular estricta aquí sólo consigue rechazar
+/// direcciones que existen.
+pub fn correo_valido(s: &str) -> bool {
+    match s.split_once('@') {
+        Some((u, d)) => !u.is_empty() && !s.starts_with('-') && dominio_valido(d),
+        None => false,
+    }
+}
+
+/// Qué hacer con un campo que Orbit sabe detectar solo.
+///
+/// Son tres estados y no dos, y la diferencia no es cosmética: **`--build ''`
+/// significa «esta app no se compila», que no es lo mismo que no decir nada.**
+/// Un campo de texto vacío no puede querer decir las dos cosas, así que aquí
+/// son variantes distintas y en la pantalla son dos estados visibles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Anulacion {
+    /// No se dice nada: manda la detección del servidor.
+    Detectar,
+    /// Se dice explícitamente que no hay valor. Viaja como `--x ''`.
+    Vacia,
+    Valor(String),
+}
+
+impl Anulacion {
+    fn empujar(&self, v: &mut Vec<String>, bandera: &str) {
+        match self {
+            Self::Detectar => {}
+            Self::Vacia => {
+                v.push(bandera.into());
+                v.push(String::new());
+            }
+            Self::Valor(s) => {
+                v.push(bandera.into());
+                v.push(s.clone());
+            }
+        }
+    }
+}
+
+/// Lo que se le adelanta a la detección del servidor.
+///
+/// **Todo esto está vacío en el caso normal, y esa es la forma correcta de
+/// usarlo.** No es un formulario que rellenar: es la respuesta a «ya sé que se
+/// va a equivocar», que ocurre en un monorepo, con un adaptador que decide si
+/// sale sitio estático o servidor, y con un proyecto que arranca con un script
+/// propio.
+///
+/// La carpeta va la primera porque no es un campo más: cambiarla **redirige la
+/// detección entera**, de modo que los otros cuatro se leen contra otro
+/// directorio.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AjustesDeteccion {
+    pub carpeta: Option<String>,
+    pub tipo: Option<String>,
+    pub build: Option<Anulacion>,
+    pub arranque: Option<Anulacion>,
+    pub outdir: Option<Anulacion>,
+}
+
+impl AjustesDeteccion {
+    /// Si no hay nada que adelantar, la orden no lleva ni una bandera de más.
+    pub fn vacios(&self) -> bool {
+        *self == Self::default()
     }
 }
 
@@ -261,6 +420,53 @@ pub enum Comando {
         app: String,
         release: String,
     },
+    /// Crea una web. Es la orden **más larga y la única sin `--json`**, y las
+    /// dos cosas cambian cómo se trata.
+    ///
+    /// Sin `--json`, `_ui_route` deja `UI_FD=1`: **toda la prosa sale por
+    /// stdout**, al revés que en el resto del catálogo. Eso no se decide en la
+    /// llamada sino en [`Comando::vena_humana`], porque es un hecho de la orden
+    /// y no del sitio desde el que se invoca.
+    ///
+    /// Y su código de salida **no es informativo**: `new` despliega por dentro,
+    /// así que puede devolver `1` con la aplicación creada, registrada y con
+    /// vhost. Por eso quien la ejecuta no lee ni el código ni la prosa: vuelve a
+    /// preguntar con `info --json`, que sí tiene contrato y no depende del
+    /// idioma del servidor.
+    ///
+    /// `--yes` es obligatorio y **no quiere decir «que sí a todo»**: quiere
+    /// decir «acepta lo que está por defecto», y por defecto no se crea la base
+    /// de datos ni se abre el editor del `.env`. La base de datos, si se quiere,
+    /// se pide aparte y a la vista.
+    ///
+    /// Va en una caja y no suelta en el enumerado porque tiene diez veces más
+    /// campos que la variante mediana, y un enumerado se copia entero cada vez
+    /// que se pasa: sin la caja, cada `Comando::Lista` de la portada ocuparía lo
+    /// que ocupa la orden más larga del catálogo.
+    Nueva(Box<WebNueva>),
+}
+
+/// Lo que hace falta para crear una web. Fuera del enumerado, en su propia
+/// estructura, por el tamaño — ver [`Comando::Nueva`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebNueva {
+    pub nombre: String,
+    pub repo: String,
+    pub rama: String,
+    pub dominio: String,
+    /// Dominios adicionales. Vacío **no es lo mismo** que no pasar `--aliases`:
+    /// el servidor distingue los dos casos con `aliases_set`, así que aquí la
+    /// lista vacía significa «ninguno, y lo digo yo».
+    pub alias: Vec<String>,
+    /// El correo de Let's Encrypt. Sin él, y sin uno configurado ya en el
+    /// servidor, el certificado no se emite: la web queda publicada por HTTP y
+    /// `new` avisa sin fallar. Es el final F2, y es evitable desde aquí.
+    pub correo: Option<String>,
+    pub base_de_datos: bool,
+    /// `false` añade `--no-ssl`. Es una decisión que se toma, no un ajuste que
+    /// se olvida.
+    pub https: bool,
+    pub ajustes: AjustesDeteccion,
 }
 
 impl Comando {
@@ -459,6 +665,87 @@ impl Comando {
                 v.push(app_ok(app)?);
                 v.push(release.clone());
             }
+            Self::Nueva(n) => {
+                let WebNueva {
+                    nombre,
+                    repo,
+                    rama,
+                    dominio,
+                    alias,
+                    correo,
+                    base_de_datos,
+                    https,
+                    ajustes,
+                } = n.as_ref();
+                // Sin '--json': `new` no lo tiene. Ponerlo no daría un objeto,
+                // daría un error de sintaxis.
+                if !repo_valido(repo) {
+                    return Err(ErrorForma::Repo(repo.clone()));
+                }
+                if !rama_valida(rama) {
+                    return Err(ErrorForma::Rama(rama.clone()));
+                }
+                if !dominio_valido(dominio) {
+                    return Err(ErrorForma::Dominio(dominio.clone()));
+                }
+                for a in alias {
+                    if !dominio_valido(a) {
+                        return Err(ErrorForma::Dominio(a.clone()));
+                    }
+                }
+                if let Some(c) = correo {
+                    if !correo_valido(c) {
+                        return Err(ErrorForma::Correo(c.clone()));
+                    }
+                }
+                v.push("new".into());
+                v.push("--yes".into());
+                v.push("--repo".into());
+                v.push(repo.clone());
+                v.push("--branch".into());
+                v.push(rama.clone());
+                v.push("--name".into());
+                v.push(app_ok(nombre)?);
+                v.push("--domain".into());
+                v.push(dominio.clone());
+                // Separados por ESPACIOS, que es como los lee el servidor:
+                // `for a in $A_ALIASES` y `read -ra`, no por comas. Con comas
+                // llegan como un solo alias con una coma dentro, y eso viaja
+                // hasta el `-d` de certbot.
+                //
+                // La lista vacía se pasa igualmente: para el servidor «sin
+                // alias, y lo digo yo» y «no he dicho nada» son dos casos, y el
+                // segundo le deja inventarse el 'www.'.
+                v.push("--aliases".into());
+                v.push(alias.join(" "));
+                if let Some(c) = correo {
+                    v.push("--email".into());
+                    v.push(c.clone());
+                }
+                if *base_de_datos {
+                    v.push("--db".into());
+                }
+                if !*https {
+                    v.push("--no-ssl".into());
+                }
+                if let Some(c) = &ajustes.carpeta {
+                    v.push("--appdir".into());
+                    v.push(c.clone());
+                }
+                if let Some(t) = &ajustes.tipo {
+                    v.push("--type".into());
+                    v.push(t.clone());
+                }
+                if let Some(b) = &ajustes.build {
+                    b.empujar(&mut v, "--build");
+                }
+                if let Some(a) = &ajustes.arranque {
+                    a.empujar(&mut v, "--start");
+                }
+                if let Some(o) = &ajustes.outdir {
+                    o.empujar(&mut v, "--outdir");
+                }
+            }
         }
         Ok(v)
     }
@@ -475,6 +762,47 @@ impl Comando {
     pub fn es_flujo(&self) -> bool {
         matches!(self, Self::Logs { .. })
     }
+
+    /// Por qué tubería sale lo que está escrito para una persona.
+    ///
+    /// No es un detalle de implementación: es la línea 447 del Orbit real,
+    /// `_ui_route() { [[ "$JSON" == "yes" ]] && UI_FD=2 || UI_FD=1; }`. O sea
+    /// que **el encaminamiento depende de si la orden lleva `--json`**, y sólo
+    /// de eso.
+    ///
+    /// Casi todo el catálogo lleva `--json` y por tanto habla por stderr, que es
+    /// lo que hizo fácil dar por hecho que siempre era así. `new` es la única
+    /// orden larga que no lo lleva, y ahí la prosa sale por stdout: servir
+    /// stderr durante `new` es servir una tubería que se queda muda tres
+    /// minutos.
+    ///
+    /// Se decide aquí, a partir del propio `argv`, y no en cada llamada: un
+    /// dato que hay que acordarse de pasar bien es un dato que alguien pasará
+    /// mal.
+    pub fn vena_humana(&self) -> Vena {
+        match self.argv("orbit") {
+            Ok(v) => {
+                if v.iter().any(|a| a == "--json") {
+                    Vena::Stderr
+                } else {
+                    Vena::Stdout
+                }
+            }
+            // Si no se puede construir el argv no se va a ejecutar nada; el
+            // valor da igual y el del resto del catálogo es el menos raro.
+            Err(_) => Vena::Stderr,
+        }
+    }
+}
+
+/// Cuál de las dos tuberías lleva la prosa, y cuál el resultado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Vena {
+    /// El caso del catálogo: `--json` manda la prosa a stderr y deja stdout
+    /// limpio para el objeto.
+    Stderr,
+    /// Sin `--json` no hay objeto que proteger y la prosa se queda en stdout.
+    Stdout,
 }
 
 /// Los patrones que hacen que la pantalla de `exec` pida una confirmación
@@ -755,5 +1083,168 @@ mod tests {
         // ve — pero la revisión de este fichero sí, y ése es el sitio.
         let c = Comando::Info { app: String::new() };
         assert!(c.argv(B).is_err());
+    }
+
+    // ── `orbit new` ─────────────────────────────────────────────────────────
+
+    fn nueva() -> Comando {
+        Comando::Nueva(Box::new(WebNueva {
+            nombre: "mi-web".into(),
+            repo: "usuario/mi-web".into(),
+            rama: "main".into(),
+            dominio: "mi-web.ejemplo.com".into(),
+            alias: vec![],
+            correo: None,
+            base_de_datos: false,
+            https: true,
+            ajustes: AjustesDeteccion::default(),
+        }))
+    }
+
+    /// Muta la petición de dentro de la caja, para las pruebas de abajo.
+    fn tocar(c: &mut Comando, f: impl FnOnce(&mut WebNueva)) {
+        match c {
+            Comando::Nueva(n) => f(n),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn new_no_lleva_json_porque_no_lo_tiene() {
+        let v = nueva().argv("orbit").unwrap();
+        assert!(
+            !v.contains(&"--json".to_string()),
+            "`orbit new --json` no da un objeto, da un error de sintaxis"
+        );
+        assert_eq!(v[1], "new");
+        assert_eq!(v[2], "--yes");
+    }
+
+    /// La distinción que un campo de texto no puede expresar: «no digas nada y
+    /// deja que lo detecte» y «esta app no se compila» son dos respuestas
+    /// distintas, y la segunda viaja como `--build ''`.
+    #[test]
+    fn no_decir_nada_del_build_y_decir_que_no_hay_build_son_distintos() {
+        let mut callado = nueva();
+        let mut sin_build = nueva();
+        let mut con_build = nueva();
+
+        tocar(&mut callado, |n| n.ajustes.build = None);
+        tocar(&mut sin_build, |n| n.ajustes.build = Some(Anulacion::Vacia));
+        tocar(&mut con_build, |n| {
+            n.ajustes.build = Some(Anulacion::Valor("pnpm build".into()))
+        });
+
+        let a = callado.argv("orbit").unwrap();
+        let b = sin_build.argv("orbit").unwrap();
+        let c = con_build.argv("orbit").unwrap();
+
+        assert!(!a.contains(&"--build".to_string()), "callado no manda nada");
+
+        let i = b.iter().position(|x| x == "--build").expect("--build ''");
+        assert_eq!(b[i + 1], "", "el vacío es explícito y viaja como argumento");
+
+        let j = c.iter().position(|x| x == "--build").unwrap();
+        assert_eq!(c[j + 1], "pnpm build");
+
+        assert_ne!(a, b, "y las tres órdenes son tres órdenes distintas");
+        assert_ne!(b, c);
+    }
+
+    /// El servidor distingue «no he dicho nada de alias» de «ninguno»: con lo
+    /// primero se inventa un `www.`. Como la interfaz siempre tiene una
+    /// respuesta —la casilla está puesta o no—, siempre lo dice.
+    #[test]
+    fn la_lista_de_alias_vacia_se_manda_igual() {
+        let v = nueva().argv("orbit").unwrap();
+        let i = v.iter().position(|x| x == "--aliases").expect("--aliases");
+        assert_eq!(v[i + 1], "");
+    }
+
+    #[test]
+    fn los_alias_van_separados_por_espacio_como_los_lee_el_servidor() {
+        let mut c = nueva();
+        tocar(&mut c, |n| {
+            n.alias = vec!["www.mi-web.ejemplo.com".into(), "mi-web.es".into()]
+        });
+        let v = c.argv("orbit").unwrap();
+        let i = v.iter().position(|x| x == "--aliases").unwrap();
+        assert_eq!(v[i + 1], "www.mi-web.ejemplo.com mi-web.es");
+    }
+
+    /// Una rama que empieza por guion se la come el analizador de opciones del
+    /// otro lado antes de que nadie mire si existe. No es un problema de forma:
+    /// es de quién interpreta el argumento.
+    #[test]
+    fn una_rama_con_guion_delante_no_sale_de_aqui() {
+        let mut c = nueva();
+        tocar(&mut c, |n| n.rama = "--purge".into());
+        assert!(matches!(c.argv("orbit"), Err(ErrorForma::Rama(_))));
+    }
+
+    #[test]
+    fn un_dominio_sin_punto_no_puede_tener_certificado() {
+        assert!(!dominio_valido("localhost"));
+        assert!(!dominio_valido("-mal.ejemplo.com"));
+        assert!(!dominio_valido("mal-.ejemplo.com"));
+        assert!(!dominio_valido("con_guion_bajo.ejemplo.com"));
+        assert!(dominio_valido("mi-web.ejemplo.com"));
+        assert!(dominio_valido("a.b"));
+    }
+
+    #[test]
+    fn un_alias_invalido_para_la_orden_igual_que_el_dominio() {
+        let mut c = nueva();
+        tocar(&mut c, |n| {
+            n.alias = vec!["bien.ejemplo.com".into(), "mal_.ejemplo.com".into()]
+        });
+        assert!(matches!(c.argv("orbit"), Err(ErrorForma::Dominio(_))));
+    }
+
+    #[test]
+    fn el_repo_admite_las_dos_formas_que_admite_orbit_y_no_mas() {
+        assert!(repo_valido("usuario/repo"));
+        assert!(repo_valido("https://github.com/usuario/repo"));
+        assert!(repo_valido("https://github.com/usuario/repo.git"));
+        // Con clave del servidor: no se promete lo que no se ha mirado.
+        assert!(!repo_valido("git@github.com:usuario/repo.git"));
+        assert!(!repo_valido("ssh://git@host/repo"));
+        assert!(!repo_valido("-repo"));
+        assert!(!repo_valido("usuario/repo/de/mas"));
+        assert!(!repo_valido("solorepo"));
+        assert!(!repo_valido("usuario/"));
+    }
+
+    /// `--no-ssl` es lo que se añade, no lo que se quita: la orden por defecto
+    /// emite el certificado, y renunciar a él tiene que ser visible en el argv.
+    #[test]
+    fn renunciar_al_certificado_se_ve_en_la_orden() {
+        let v = nueva().argv("orbit").unwrap();
+        assert!(!v.contains(&"--no-ssl".to_string()));
+
+        let mut c = nueva();
+        tocar(&mut c, |n| n.https = false);
+        assert!(c.argv("orbit").unwrap().contains(&"--no-ssl".to_string()));
+    }
+
+    /// El nombre pasa por el mismo validador que el resto del catálogo: no hay
+    /// una regla de forma para crear y otra para operar.
+    #[test]
+    fn el_nombre_nuevo_usa_la_regla_del_servidor() {
+        let mut c = nueva();
+        tocar(&mut c, |n| n.nombre = "Mi Web".into());
+        assert!(matches!(c.argv("orbit"), Err(ErrorForma::NombreDeApp(_))));
+    }
+
+    /// Y el caso normal no lleva ni una bandera de detección: adelantarse a la
+    /// detección es la excepción, y una orden llena de banderas vacías haría
+    /// creer lo contrario a quien la lea en el repaso.
+    #[test]
+    fn sin_ajustes_la_orden_no_lleva_banderas_de_deteccion() {
+        let v = nueva().argv("orbit").unwrap();
+        for b in ["--type", "--build", "--start", "--outdir", "--appdir"] {
+            assert!(!v.contains(&b.to_string()), "sobra {b}");
+        }
+        assert!(AjustesDeteccion::default().vacios());
     }
 }

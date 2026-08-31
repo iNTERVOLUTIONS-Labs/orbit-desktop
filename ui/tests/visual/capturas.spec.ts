@@ -130,3 +130,18 @@ test('alta de servidores · tema dark', async ({ page }) => {
   await expect(page.locator('.saludo').first()).toBeVisible()
   await page.screenshot({ path: 'capturas/dark-alta.png', fullPage: true })
 })
+
+test('asistente de web nueva · tema dark', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'vps-ovh', exact: true }).click()
+  await page.getByRole('button', { name: 'nueva web' }).click()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Nueva web')
+
+  // Con el primer paso lleno, para que se vea el raíl con un tramo hecho y el
+  // botón habilitado. Un formulario capturado vacío enseña el estado que menos
+  // dice de él.
+  await page.locator('input').first().fill('usuario/tienda')
+  await expect(page.locator('.problema')).toHaveCount(0)
+  await page.screenshot({ path: 'capturas/dark-nueva.png', fullPage: true })
+})

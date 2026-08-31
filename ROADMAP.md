@@ -149,7 +149,7 @@ y roto sin que nadie lo notara.
 El efecto: esta fase se escribe contra un contrato completo, y el cliente nace
 con **cero líneas que parseen texto**.
 
-## Fase 4 · Administrar 🚧
+## Fase 4 · Administrar ✅
 
 Hechas las dos operaciones que cambian algo de verdad.
 
@@ -178,8 +178,35 @@ abrir cuarenta sesiones SSH— y preguntar por uno es un gesto aparte, con siete
 respuestas posibles y cada una diciendo qué hacer. Sin esa clasificación, quien
 añade un servidor ve «error» y no sabe si es su clave, su red o su servidor.
 
-Falta el **formulario** del asistente: los cinco pasos, con la detección
-enseñada como resultado editable junto a su prueba.
+Y el **formulario** del asistente, que cierra la fase: cinco pasos, con la
+orden literal en el último — construida por el mismo código que una prueba
+compara, contra un fichero compartido, con el catálogo que la ejecuta. Enseñar
+una orden y ejecutar otra sería el único fallo que anula por completo a una
+pantalla cuyo argumento entero es «mira lo que va a pasar antes de que pase».
+
+Construirlo obligó a **corregir el diseño en tres sitios**, y las tres
+correcciones son del mismo tipo: cosas que el informe daba por hechas y que el
+servidor no hace.
+
+- El paso 2 iba a enseñar **lo detectado, con su prueba, antes de crear**. No se
+  puede: `detect_stack` recibe un directorio y el clon ocurre dentro de
+  `orbit new`. Antes de ejecutar no hay conclusión, sólo una promesa — y una
+  promesa junto a un botón «cambiar» se lee como un hecho. Se ha partido en dos
+  pantallas honestas: adelantarse a la detección antes, y enseñar lo detectado
+  después, cuando ya sale del descriptor.
+- El **autodespliegue** no es una bandera de `new`, es una orden aparte. Se ha
+  quitado del paso 4, y en su sitio hay una línea que dice dónde está.
+- `orbit new` **habla por stdout**, no por stderr como el resto: `_ui_route`
+  deja `UI_FD=1` sin `--json`. El transporte servía stderr siempre, así que la
+  única orden que de verdad tarda habría pasado tres minutos muda.
+
+Otras dos las cazaron las pruebas, no la lectura. Los **alias** van separados por
+espacios y se estaban mandando con comas, lo que habría llegado hasta el `-d` de
+certbot como un solo dominio con una coma dentro. Y el **tri-estado** de un campo
+de detección —«detéctalo» / «déjalo vacío» / «este valor»— cruzaba el puente como
+`undefined` / `null` / cadena dando por hecho que serde distinguiría el campo
+ausente del `null`: no lo distingue, los colapsa, y `--build ''` no habría
+llegado nunca al servidor.
 
 ### Lo que había aquí
 
