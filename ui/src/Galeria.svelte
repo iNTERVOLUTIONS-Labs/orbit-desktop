@@ -9,6 +9,9 @@
   import Despliegue from './componentes/Despliegue.svelte'
   import LoteVista from './componentes/Lote.svelte'
   import HojaDeComando from './componentes/HojaDeComando.svelte'
+  import Desenlace from './componentes/Desenlace.svelte'
+  import { clasificar } from './lib/asistente'
+  import type { AppInfo } from './lib/contrato'
   import { leerProgreso } from './lib/despliegue'
   import type { Despliegue as Obj, Lote } from './lib/contrato'
   import loteMuestra from './lib/muestras/deploy-all.json'
@@ -67,6 +70,26 @@
     error: 'la app no responde al health check en 30 s',
   }
   const ROTO = falloMuestra as Obj
+
+  const infoBase = (p: Partial<Estado>, rel = ['20260830-120000']): AppInfo => ({
+    name: 'tienda', path: '/srv/apps/tienda', config: {},
+    state: {
+      service: 'active', port: 3001, ssl: true, cert_days: 80,
+      maintenance: false, served: true, autodeploy: false, queue: false,
+      releases: 1, last_deploy: '20260830-120000', last_deploy_sha: 'abc',
+      ...p,
+    },
+    releases: rel,
+  })
+  const DESENLACES = [
+    clasificar('tienda', infoBase({}), true),
+    clasificar('tienda', infoBase({ ssl: false }), true),
+    clasificar('tienda', infoBase({}, []), true),
+    clasificar('tienda', infoBase({ service: 'failed' }), true),
+    clasificar('tienda', infoBase({ served: false }), true),
+    clasificar('tienda', null),
+    clasificar('tienda', infoBase({}), false),
+  ]
 
   const FALLOS = [
     {
@@ -205,6 +228,24 @@
     durante días. Agruparlos está prohibido.
   </p>
   <div class="panel"><LoteVista lote={loteMuestra as Lote} servidor="vps-ovh" /></div>
+
+  <h2>Los siete finales de una web nueva</h2>
+  <p class="nota">
+    <code>orbit new</code> <strong>no tiene <code>--json</code></strong>: sólo
+    devuelve prosa y un código de salida. Así que la interfaz no la interpreta —
+    le vuelve a preguntar al servidor con <code>orbit info --json</code>, que sí
+    tiene contrato. Son 86&nbsp;ms sobre un comando de tres minutos, y es la
+    única forma que no depende del idioma del servidor.
+  </p>
+  <p class="nota">
+    Y son siete, no dos. <strong>Cinco son parciales</strong>: algo existe y algo
+    falta. Tratar «salió bien» y «falló» como los dos únicos finales deja a
+    alguien con una app a medias y sin saberlo.
+  </p>
+  {#each DESENLACES as d (d.final)}
+    <h3>{d.final} · {d.titulo}</h3>
+    <Desenlace {d} app="tienda" />
+  {/each}
 
   <h2>La hoja de comando</h2>
   <p class="nota">
