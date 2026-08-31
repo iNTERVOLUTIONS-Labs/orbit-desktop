@@ -180,6 +180,25 @@ antes de creerte una medición, comprueba qué marca en reposo.
 
 ---
 
+## 3c. Verificar
+
+```bash
+tools/verificar.sh          # todo lo rápido
+tools/verificar.sh --e2e    # y además las capturas
+```
+
+**Sale con 0 o dice qué se rompió.** No imprime números que haya que
+interpretar, y eso no es un capricho de estilo: se escribió después de publicar
+**dos veces** con `clippy` roto por mirar la última línea de su salida —que era
+un «Finished» de otro trabajo— y por leer un recuento de errores al lado de un
+literal que decía «(0 = limpio)».
+
+Un resumen que hay que leer bien es un resumen que se lee mal. Y comprobar que
+un verificador falla cuando debe es parte de escribirlo: se rompió una prueba a
+propósito y se confirmó que sale con 1.
+
+---
+
 ## 4. Las trampas que ya conocemos
 
 Heredadas de Orbit o encontradas auditándolo. Están aquí para no volver a

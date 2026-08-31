@@ -173,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn instalado_a_medias_se_reconoce_por_STDOUT() {
+    fn instalado_a_medias_se_reconoce_por_stdout() {
         // Es el caso que rompe a un cliente descuidado: las dos líneas van por
         // stdout, no por stderr, e ignoran --json. Parsear antes de mirar el
         // código de salida da un error de sintaxis donde la respuesta correcta
@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn el_codigo_de_salida_se_mira_ANTES_que_el_contenido() {
+    fn el_codigo_de_salida_se_mira_antes_que_el_contenido() {
         // Un stdout con prosa y rc distinto de 0 no puede acabar en el parser.
         let s = clasificar(&r(1, "Orbit no está instalado todavía", ""));
         assert!(!matches!(s, Saludo::SinContrato { .. }));
