@@ -474,6 +474,84 @@ fn revertir(alias: String, app: String, release: String, binario: Option<String>
     Ok(serde_json::json!({ "salida": r.stderr, "codigo": r.codigo }))
 }
 
+/// Qué hay al otro lado de un alias, antes de fiarse de nada.
+///
+/// Sin esta clasificación, quien añade un servidor ve «error» y no sabe si es
+/// **su clave, su red o su servidor**. Es la diferencia entre un producto y una
+/// demo, y por eso es un comando propio y no un efecto secundario de la primera
+/// pantalla que se abra.
+#[tauri::command]
+fn saludar(
+    alias: String,
+    binario: Option<String>,
+) -> Result<serde_json::Value, ErrorParaLaInterfaz> {
+    let s = servidor(&alias, binario);
+    let c = Comando::Version;
+    let saludo = match transporte::ejecutar(&s, &c, dir_control().as_deref(), &[]) {
+        Ok(r) => orbit_client::saludo::clasificar(&r),
+        // Un fallo de `orbit` con salida también se clasifica: un Orbit a
+        // medias sale con 1 y su prosa es justamente el dato.
+        Err(transporte::ErrorTransporte::Orbit {
+            codigo,
+            stdout,
+            stderr,
+        }) => orbit_client::saludo::clasificar(&transporte::Respuesta {
+            stdout,
+            stderr,
+            codigo,
+        }),
+        Err(e) => orbit_client::saludo::de_error(&e),
+    };
+    Ok(serde_json::json!({
+        "clase": clase_de(&saludo),
+        "version": version_de(&saludo),
+        "contrato": contrato_de(&saludo),
+        "motivo": motivo_de(&saludo),
+        "puede_operar": saludo.permite_operar(),
+        "puede_leer": saludo.permite_leer(),
+        "orden_de_instalacion": orbit_client::saludo::ORDEN_DE_INSTALACION,
+    }))
+}
+
+fn clase_de(s: &orbit_client::Saludo) -> &'static str {
+    use orbit_client::Saludo as S;
+    match s {
+        S::Ok(_) => "ok",
+        S::MasNuevo(_) => "mas-nuevo",
+        S::SinContrato { .. } => "sin-contrato",
+        S::NoInstalado { .. } => "no-instalado",
+        S::SinPrivilegios => "sin-privilegios",
+        S::NoSeLlega { .. } => "no-se-llega",
+        S::ClaveDeHostCambiada { .. } => "clave-de-host-cambiada",
+    }
+}
+
+fn version_de(s: &orbit_client::Saludo) -> Option<String> {
+    use orbit_client::Saludo as S;
+    match s {
+        S::Ok(v) | S::MasNuevo(v) => Some(v.version.clone()),
+        S::SinContrato { version } => version.clone(),
+        _ => None,
+    }
+}
+
+fn contrato_de(s: &orbit_client::Saludo) -> Option<u32> {
+    use orbit_client::Saludo as S;
+    match s {
+        S::Ok(v) | S::MasNuevo(v) => Some(v.contract),
+        _ => None,
+    }
+}
+
+fn motivo_de(s: &orbit_client::Saludo) -> Option<String> {
+    use orbit_client::Saludo as S;
+    match s {
+        S::NoInstalado { motivo } => Some((*motivo).to_string()),
+        S::NoSeLlega { detalle } | S::ClaveDeHostCambiada { detalle } => Some(detalle.clone()),
+        _ => None,
+    }
+}
+
 /// Los alias de `~/.ssh/config`, para poder importarlos.
 ///
 /// **No conecta con ninguno**: enumerar no es visitar. Saber si en un alias hay
@@ -514,6 +592,7 @@ pub fn ejecutar() {
             desplegar,
             cancelar,
             servidores_del_config,
+            saludar,
         ])
         .run(tauri::generate_context!())
         .expect("no he podido abrir la ventana");

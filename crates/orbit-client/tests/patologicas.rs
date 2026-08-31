@@ -613,3 +613,64 @@ fn el_progreso_va_por_stderr_y_el_objeto_por_stdout() {
         "cada paso lleva su app: sin eso, un paso de un lote no se atribuye"
     );
 }
+
+// ── el saludo: qué hay al otro lado ────────────────────────────────────────
+
+use orbit_client::saludo::{clasificar as saludar, Saludo};
+
+#[test]
+fn un_orbit_a_medias_no_acaba_en_el_parser() {
+    // Las dos líneas van por stdout e ignoran --json. Un cliente que haga
+    // `JSON.parse(stdout)` sin mirar el código de salida explota con un error de
+    // sintaxis donde la respuesta correcta es «tienes Orbit a medias».
+    let r = falso("a-medias", &Comando::Version);
+    let resp = match r {
+        Ok(x) => x,
+        Err(ErrorTransporte::Orbit {
+            codigo,
+            stdout,
+            stderr,
+        }) => orbit_client::transporte::Respuesta {
+            stdout,
+            stderr,
+            codigo,
+        },
+        Err(otro) => panic!("esperaba una respuesta, no {otro:?}"),
+    };
+    match saludar(&resp) {
+        Saludo::NoInstalado { motivo } => assert!(motivo.contains("install.sh")),
+        otro => panic!("esperaba NoInstalado, no {otro:?}"),
+    }
+}
+
+#[test]
+fn un_orbit_anterior_al_contrato_se_reconoce_como_viejo_no_como_roto() {
+    let r = falso("pre-contrato", &Comando::Version);
+    let resp = match r {
+        Ok(x) => x,
+        Err(ErrorTransporte::Orbit {
+            codigo,
+            stdout,
+            stderr,
+        }) => orbit_client::transporte::Respuesta {
+            stdout,
+            stderr,
+            codigo,
+        },
+        Err(otro) => panic!("esperaba una respuesta, no {otro:?}"),
+    };
+    let s = saludar(&resp);
+    assert!(matches!(s, Saludo::SinContrato { .. }));
+    // Cero funcionalidad, no funcionalidad a medias: un cliente que intente
+    // hablar un contrato que no existe acaba parseando tablas.
+    assert!(!s.permite_leer());
+}
+
+#[test]
+fn un_contrato_mas_nuevo_deja_mirar_pero_no_tocar() {
+    let r = falso("contrato-9", &Comando::Version).unwrap();
+    let s = saludar(&r);
+    assert!(matches!(s, Saludo::MasNuevo(_)));
+    assert!(s.permite_leer());
+    assert!(!s.permite_operar());
+}

@@ -458,3 +458,19 @@ export interface Info {
   schema: number
   app: AppInfo
 }
+
+// ── el saludo ──────────────────────────────────────────────────────────────
+
+export type ClaseDeSaludo =
+  | 'ok' | 'mas-nuevo' | 'sin-contrato' | 'no-instalado'
+  | 'sin-privilegios' | 'no-se-llega' | 'clave-de-host-cambiada'
+
+export interface Saludo {
+  clase: ClaseDeSaludo
+  version: string | null
+  contrato: number | null
+  motivo: string | null
+  puede_operar: boolean
+  puede_leer: boolean
+  orden_de_instalacion: string
+}

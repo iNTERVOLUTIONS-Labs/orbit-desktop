@@ -16,7 +16,7 @@ import {
   leerLog,
   type App, type Despliegue, type Doctor, type Entorno,
   type Envoltorio, type Lista, type Log, type Metricas, type Monitor,
-  type AppInfo, type Info, type SalidaDeExec, type Trafico,
+  type AppInfo, type Info, type SalidaDeExec, type Saludo, type Trafico,
 } from './contrato'
 
 import listaSana from './muestras/list.json'
@@ -253,4 +253,28 @@ export async function retirarYBorrar(alias: string, app: string): Promise<Result
 export async function revertir(alias: string, app: string, release: string): Promise<Resultado> {
   if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
   return invocar<Resultado>('revertir', { alias, app, release })
+}
+
+/**
+ * Qué hay al otro lado de un alias.
+ *
+ * **No se llama al enumerar**: enumerar no es visitar, y abrir la pantalla de
+ * servidores no puede significar abrir cuarenta sesiones SSH. Se pregunta por
+ * uno, cuando alguien lo pide.
+ */
+export async function saludar(alias: string): Promise<Saludo> {
+  if (!hayPuente()) {
+    // Sin envoltorio se contesta lo que se sabe de verdad: que no hay servidor.
+    // No se finge un «listo» — un servidor de mentira que dice estar bien es la
+    // clase de respuesta que hace perder media hora buscando el problema donde
+    // no está.
+    await new Promise((r) => setTimeout(r, 300))
+    return {
+      clase: 'no-se-llega', version: null, contrato: null,
+      motivo: 'Sin envoltorio de escritorio no hay SSH: esto no ha preguntado a nadie.',
+      puede_operar: false, puede_leer: false,
+      orden_de_instalacion: 'curl -fsSL https://raw.githubusercontent.com/iNTERVOLUTIONS-Labs/orbit/main/install.sh | sudo bash',
+    }
+  }
+  return invocar<Saludo>('saludar', { alias })
 }

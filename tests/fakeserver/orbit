@@ -240,6 +240,20 @@ case "$CASE" in
     printf '{"event":"step","app":"mi-web","step":"build","status":"start","elapsed_s":0}\n' >&2
     while :; do sleep 1; done ;;
 
+  # ── Un Orbit copiado pero SIN INSTALAR ──────────────────────────────────
+  # Las dos líneas van por **stdout** —no por stderr— e ignoran --json. Es el
+  # caso que rompe a un cliente que parsee antes de mirar el código de salida.
+  a-medias)
+    printf 'Orbit no está instalado todavía (falta /etc/orbit/orbit.conf).\n'
+    printf 'Ejecuta primero:  sudo bash install.sh\n'
+    exit 1 ;;
+
+  # ── Un Orbit anterior a la v1.1: 'version' aún no hablaba JSON ──────────
+  # Un servidor sano y viejo, no un fallo.
+  pre-contrato)
+    printf "  ✗ 'orbit version' no tiene salida JSON\n" >&2
+    exit 1 ;;
+
   # ── P-49 · lo que la documentación promete y el binario no da ────────────
   # Es la clase de fallo que encontramos auditando: 'doctor --fix --json --yes'
   # documentado y muerto. La fuente de verdad es el binario.

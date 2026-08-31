@@ -177,3 +177,14 @@
    contradiría su decisión de avisar y seguir en vez de morir a mitad. */
 .desenlace--atencion { border-color: var(--st-warn);  --desenlace: var(--st-warn); }
 .desenlace--error    { border-color: var(--st-error); --desenlace: var(--st-error); }
+
+/* Qué hay al otro lado de un servidor. Por token, no anidado. */
+.saludo--ok                    { --saludo: var(--st-ok); }
+/* «Más nuevo» no es un fallo: se puede mirar, no operar. */
+.saludo--mas-nuevo             { --saludo: var(--st-warn); }
+/* Ni «demasiado antiguo»: es un servidor sano y viejo. */
+.saludo--sin-contrato          { --saludo: var(--st-warn); }
+.saludo--no-instalado          { --saludo: var(--st-unknown); }
+.saludo--sin-privilegios       { --saludo: var(--st-warn); }
+.saludo--no-se-llega           { --saludo: var(--st-error); }
+.saludo--clave-de-host-cambiada { --saludo: var(--st-error); }
