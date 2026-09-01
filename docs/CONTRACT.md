@@ -627,6 +627,41 @@ Además, hay tres códigos que no vienen de `orbit` sino de debajo y que sí pue
 | `top --json` | 0 | |
 | `ssl <app>` | 0 / 1 | 1 si certbot falló (7494) |
 
+**Ronda 3 · los seis finales no son seis en las dos ramas, y eso cambia lo que
+una pantalla puede prometer.** Leyendo `cmd_deploy_all` (5920-6042) entero, y no
+sólo su objeto de salida:
+
+- `unchanged`, `unreachable` y `gone` salen **los tres** de `_pending_sha`, que
+  sólo se llama dentro de `if [[ "$only_changed" == "yes" ]]` (5957). O sea que
+  **sin `--if-changed` no se le pregunta a ningún remoto**, y una pasada completa
+  sólo puede terminar en `deployed` o en `failed`. Sus otros recuentos son cero
+  *por construcción*, que no es lo mismo que «he mirado y no había nada».
+- `skipped` está aún más restringido: lo produce sólo la rama del `autofail`
+  (5985-5991), que exige `auto == yes`. **Un cliente no puede provocarlo nunca**,
+  porque `--auto` no es una bandera de conveniencia —filtra a las apps con
+  autodespliegue activado y marca la vigilancia como si el disparo viniera del
+  temporizador— y pasarla sería falsificar el origen de la pasada en el
+  historial del servidor.
+
+Un cliente que enseñe los seis recuentos sin decir esto invita a leer cuatro
+ceros como una medida. La pantalla los sigue enseñando —un cero es una
+respuesta, y esconder `unreachable` haría que su aparición pasara desapercibida
+justo el día que importa— pero dice cuáles no podían ser otra cosa, y sólo de
+los que **de hecho** valen cero: si el servidor devolviera uno de ellos con
+contenido, quien manda es el servidor.
+
+**Y `--progress` con `--all` mezcla dos niveles de suceso por el mismo canal.**
+`_dall_prog` (5881) emite `{"event":"app","app":…,"status":…}` con los seis
+finales más un `start`, y el `cmd_deploy` de dentro sigue emitiendo sus
+`{"event":"step"}` — por eso `_dprog` lleva el campo `app` desde que existe el
+lote. Los dos niveles juntos permiten decir a la vez cuántas van y en qué paso
+está la que corre.
+
+Con una trampa: **son dos relojes.** El `elapsed_s` de un `step` cuenta desde
+`DEP_T0`, que se reinicia con cada app; el de un `app` cuenta desde `DALL_T0`,
+que es el de la pasada. Un cliente que tomara el máximo de los dos vería el
+reloj saltar hacia atrás en cada app nueva.
+
 **Regla para el cliente:** el código de salida es un booleano. Toda la información está en el JSON
 de stdout (cuando lo hay) y en stderr (siempre). Diseñar el `OrbitError` a partir de eso, no del
 código. Detalle en §4.6.

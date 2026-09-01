@@ -178,6 +178,25 @@ abrir cuarenta sesiones SSH— y preguntar por uno es un gesto aparte, con siete
 respuestas posibles y cada una diciendo qué hacer. Sin esa clasificación, quien
 añade un servidor ve «error» y no sabe si es su clave, su red o su servidor.
 
+Y la **pasada por todas las apps**, que es la orden más cara que este cliente
+puede lanzar. Estaba en el catálogo y tenía componente desde la fase 3, pero no
+había forma de llegar a ella: los seis finales sólo existían en la galería.
+
+`deploy --all` **significa dos cosas** según lleve `--if-changed` o no —preguntar
+a cada remoto y desplegar lo que se ha movido, o recompilarlo todo— así que son
+dos entradas y nunca una casilla, con la cara en un submenú. Es la misma
+decisión que en la pantalla de retirar y por el mismo motivo: la opción que está
+al lado se elige sin leerla, y aquí la de al lado son cuarenta builds.
+
+Leerlo entero destapó que **los seis finales no son seis en las dos ramas**:
+`unchanged`, `unreachable` y `gone` salen de preguntarle al remoto, y sin
+`--if-changed` no se le pregunta a nadie. Sus recuentos son cero *por
+construcción*, que no es lo mismo que «he mirado y no había nada», así que la
+pantalla lo dice — y sólo de los que de hecho valen cero, porque una predicción
+mía no puede pisar un dato del servidor. `skipped` no puede salir en ninguna de
+las dos: sólo lo produce `--auto`, la bandera del autodespliegue, que este
+cliente no pasa nunca.
+
 Y el **formulario** del asistente, que cierra la fase: cinco pasos, con la
 orden literal en el último — construida por el mismo código que una prueba
 compara, contra un fichero compartido, con el catálogo que la ejecuta. Enseñar
@@ -230,7 +249,6 @@ porque si Apple o Azure tardan, tardan.
 ## Fase 6 y más allá 💭
 
 - 💭 **Comparar dos servidores** — qué tiene uno que no tenga el otro
-- 💭 **Acciones en lote sobre varias apps**
 - 💭 **Gráficas históricas**, que exigirían que el cliente guarde algo. Es una
   decisión aparte y no pequeña: hoy el cliente no persiste ningún dato del
   servidor, y eso es media hoja del modelo de amenazas

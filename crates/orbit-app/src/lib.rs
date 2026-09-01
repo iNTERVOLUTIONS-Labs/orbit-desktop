@@ -424,6 +424,65 @@ impl From<AjustesParaLaInterfaz> for AjustesDeteccion {
     }
 }
 
+/// Una pasada por todas las apps del servidor, sirviendo el progreso.
+///
+/// La clave del registro de cancelables es `alias:*`, y el `*` no es una
+/// convención frágil: **ningún nombre de app puede empezar por `*`** —la regla
+/// del servidor es `^[a-z0-9][a-z0-9._-]{0,39}$`— así que no puede chocar con
+/// la clave de un despliegue suelto. Que se pueda cancelar importa aquí más que
+/// en ningún otro sitio: una pasada sobre cuarenta apps es lo más largo que
+/// este cliente puede lanzar.
+///
+/// Y cancelar una pasada **no deshace lo ya desplegado**: para las apps que ya
+/// terminaron, terminaron. Lo que para es el bucle. Eso lo tiene que decir la
+/// pantalla, porque es lo contrario de lo que sugiere la palabra «cancelar».
+#[tauri::command]
+async fn desplegar_todo(
+    ventana: tauri::Window,
+    vivos: tauri::State<'_, Vivos>,
+    alias: String,
+    solo_si_cambia: bool,
+    binario: Option<String>,
+) -> Resultado {
+    let clave = format!("{alias}:*");
+    let mando = EnCurso::nuevo();
+    vivos.0.lock().unwrap().insert(clave.clone(), mando.clone());
+
+    let s = servidor(&alias, binario);
+    let c = Comando::DesplegarTodo {
+        progreso: true,
+        solo_si_cambia,
+    };
+    let ctrl = dir_control();
+    let clave_ev = clave.clone();
+
+    let r = tauri::async_runtime::spawn_blocking(move || {
+        transporte::ejecutar_en_vivo(&s, &c, ctrl.as_deref(), &[], mando, move |linea| {
+            let _ = ventana.emit("orbit://progreso", (clave_ev.clone(), linea));
+        })
+    })
+    .await;
+
+    vivos.0.lock().unwrap().remove(&clave);
+
+    let r = match r {
+        Ok(v) => v?,
+        Err(e) => {
+            return Err(ErrorParaLaInterfaz {
+                clase: "hilo",
+                mensaje: format!("la pasada se ha interrumpido: {e}"),
+                detalle: None,
+            })
+        }
+    };
+    let texto = r.objeto()?;
+    serde_json::from_str(texto).map_err(|e| ErrorParaLaInterfaz {
+        clase: "json",
+        mensaje: e.to_string(),
+        detalle: None,
+    })
+}
+
 /// A dónde apunta un nombre, y a dónde apunta el servidor.
 ///
 /// Existe para responder **antes de crear** la única pregunta del asistente que
@@ -830,6 +889,7 @@ pub fn ejecutar() {
             revertir,
             correr,
             desplegar,
+            desplegar_todo,
             crear,
             resolver,
             cancelar,
@@ -843,6 +903,22 @@ pub fn ejecutar() {
 #[cfg(test)]
 mod pruebas {
     use super::*;
+
+    /// La clave con la que se registra una pasada es `alias:*`, y que eso no
+    /// pueda chocar con la de un despliegue suelto **no es una convención**:
+    /// es una consecuencia de la regla de forma del servidor, que obliga a que
+    /// un nombre de app empiece por minúscula o dígito.
+    ///
+    /// Se comprueba aquí porque de ello depende que «parar la pasada» no pueda
+    /// parar el despliegue de otra cosa.
+    #[test]
+    fn el_asterisco_de_la_pasada_no_puede_ser_el_nombre_de_una_app() {
+        use orbit_client::comando::nombre_de_app_valido;
+        assert!(!nombre_de_app_valido("*"));
+        for n in ["*", "*x", "a*", "todo *"] {
+            assert!(!nombre_de_app_valido(n), "«{n}» no puede ser una app");
+        }
+    }
 
     /// Los tres estados de una anulación tienen que llegar al núcleo como tres
     /// cosas distintas, y esta prueba existe porque la primera versión no lo

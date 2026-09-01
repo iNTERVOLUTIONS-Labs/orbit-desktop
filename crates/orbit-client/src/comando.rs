@@ -354,8 +354,29 @@ pub enum Comando {
         app: String,
         progreso: bool,
     },
+    /// Una pasada por todas las apps del servidor.
+    ///
+    /// **`solo_si_cambia` no es una opción: es la mitad del significado de la
+    /// orden**, y las dos mitades son operaciones distintas.
+    ///
+    /// * Con él (`--if-changed`), Orbit le pregunta primero al remoto de cada
+    ///   app si hay algo nuevo y sólo despliega las que se han movido. Es lo
+    ///   que se hace a diario, y lo barato: preguntar cuesta un `git ls-remote`
+    ///   por app.
+    /// * Sin él, **se despliega todo, haya cambiado o no**. Con cuarenta apps
+    ///   eso son cuarenta builds completos y cuarenta releases nuevas de un
+    ///   código idéntico. Existe porque hay un caso real en el que hace falta
+    ///   —recompilar todo tras cambiar la versión de Node o un `.env`
+    ///   compartido— y ese caso no se puede expresar de otra forma.
+    ///
+    /// Y tiene una consecuencia que la interfaz **tiene que enseñar**: cuatro de
+    /// los seis finales sólo existen en la primera rama. `unchanged`,
+    /// `unreachable` y `gone` salen de preguntarle al remoto, y sin
+    /// `--if-changed` no se le pregunta a nadie. Una pasada completa sólo puede
+    /// terminar en `deployed` o en `failed`.
     DesplegarTodo {
         progreso: bool,
+        solo_si_cambia: bool,
     },
     /// Ejecuta algo dentro de una app.
     ///
@@ -609,12 +630,23 @@ impl Comando {
                     v.push("--progress".into());
                 }
             }
-            Self::DesplegarTodo { progreso } => {
+            Self::DesplegarTodo {
+                progreso,
+                solo_si_cambia,
+            } => {
                 json(&mut v);
                 v.extend(["deploy".into(), "--all".into()]);
+                if *solo_si_cambia {
+                    v.push("--if-changed".into());
+                }
                 if *progreso {
                     v.push("--progress".into());
                 }
+                // Nunca '--auto'. Esa bandera es la del autodespliegue: filtra a
+                // las apps que lo tienen activado y además marca la vigilancia
+                // como si el disparo hubiera venido del temporizador. Un cliente
+                // que la pasara estaría falsificando el origen de la pasada en
+                // el historial del servidor.
             }
             Self::Ejecutar { app, modo } => {
                 // Sin '--json': la salida de `exec` es la del comando, sin
@@ -1246,5 +1278,66 @@ mod tests {
             assert!(!v.contains(&b.to_string()), "sobra {b}");
         }
         assert!(AjustesDeteccion::default().vacios());
+    }
+
+    // ── La pasada ───────────────────────────────────────────────────────────
+
+    /// Las dos mitades de `deploy --all` son dos órdenes distintas, y por eso en
+    /// la interfaz son dos entradas y no una casilla: `--if-changed` pregunta
+    /// antes y despliega lo que se ha movido; sin él se recompila todo.
+    #[test]
+    fn preguntar_antes_y_recompilarlo_todo_son_dos_ordenes() {
+        let barata = Comando::DesplegarTodo {
+            progreso: true,
+            solo_si_cambia: true,
+        }
+        .argv("orbit")
+        .unwrap();
+        let cara = Comando::DesplegarTodo {
+            progreso: true,
+            solo_si_cambia: false,
+        }
+        .argv("orbit")
+        .unwrap();
+
+        assert!(barata.contains(&"--if-changed".to_string()));
+        assert!(!cara.contains(&"--if-changed".to_string()));
+        assert_ne!(barata, cara);
+    }
+
+    /// `--auto` no sale nunca de aquí. No es una bandera de conveniencia: filtra
+    /// a las apps con autodespliegue activado y marca la vigilancia como si la
+    /// pasada la hubiera lanzado el temporizador. Pasarla sería falsificar el
+    /// origen de la pasada en el historial del servidor.
+    #[test]
+    fn el_cliente_no_finge_ser_el_autodespliegue() {
+        for progreso in [true, false] {
+            for solo_si_cambia in [true, false] {
+                let v = Comando::DesplegarTodo {
+                    progreso,
+                    solo_si_cambia,
+                }
+                .argv("orbit")
+                .unwrap();
+                assert!(!v.contains(&"--auto".to_string()));
+                assert!(!v.contains(&"--quiet".to_string()));
+            }
+        }
+    }
+
+    /// `--progress` sólo tiene sentido con `--json`, y el servidor lo rechaza si
+    /// no lo lleva. Aquí van siempre juntos porque el catálogo pone `--json` en
+    /// todo lo que lo tiene, pero conviene fijarlo: es una regla del otro lado.
+    #[test]
+    fn el_progreso_de_la_pasada_viaja_con_json() {
+        let v = Comando::DesplegarTodo {
+            progreso: true,
+            solo_si_cambia: true,
+        }
+        .argv("orbit")
+        .unwrap();
+        let i = v.iter().position(|x| x == "--progress").unwrap();
+        let j = v.iter().position(|x| x == "--json").unwrap();
+        assert!(j < i, "'--json' va delante del subcomando");
     }
 }

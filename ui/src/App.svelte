@@ -18,17 +18,18 @@
   import Revertir from './componentes/Revertir.svelte'
   import AltaServidores from './componentes/AltaServidores.svelte'
   import AsistenteNueva from './componentes/AsistenteNueva.svelte'
+  import Pasada from './componentes/Pasada.svelte'
   import LoDetectado from './componentes/LoDetectado.svelte'
   import Desenlace from './componentes/Desenlace.svelte'
   import { clasificar, type Borrador, type Desenlace as Final } from './lib/asistente'
   import { periodoDelMonitor } from './lib/despliegue'
-  import type { App, AppInfo, Doctor, Entorno, Log, Metricas, Monitor, Saludo, Trafico } from './lib/contrato'
+  import type { App, AppInfo, Doctor, Entorno, Log, Lote, Metricas, Monitor, Saludo, Trafico } from './lib/contrato'
   import {
     arreglar, cancelar, desplegar, diagnostico, entorno as pedirEntorno,
     entornoValor, hayPuente, log as pedirLog, monitor as pedirMonitor,
     correr, detalle as pedirDetalle, metricas as pedirMetricas, portada,
     retirar, retirarYBorrar, revertir, saludar, servidoresDelConfig, trafico as pedirTrafico,
-    crear, resolver,
+    crear, resolver, desplegarTodo,
     type AliasSsh, type ErrorDelPuente, type Resolucion,
   } from './lib/puente'
 
@@ -145,6 +146,70 @@
     creando = false
     // La portada ya no dice la verdad: hay una app más, o no la hay.
     await cargar(alias)
+  }
+
+  // La pasada por todas las apps. Vive aquí, al lado del asistente, porque las
+  // dos son operaciones del SERVIDOR y no de una app: son las dos únicas cosas
+  // que este cliente hace sin haber elegido antes de qué app se habla.
+  let enPasada = $state(false)
+  let pasando = $state(false)
+  let modoPasada = $state<'si-cambia' | 'todo' | null>(null)
+  let crudoPasada = $state('')
+  let lote = $state<Lote | null>(null)
+  let paraDeEscucharPasada: (() => void) | null = null
+
+  /**
+   * Lanza la pasada.
+   *
+   * `soloSiCambia` es la mitad del significado de la orden, no una opción: sin
+   * ella se recompilan **todas** las apps, hayan cambiado o no. Por eso llega
+   * desde la pantalla como una elección explícita entre dos botones y nunca con
+   * un valor por defecto.
+   */
+  async function lanzarPasada(soloSiCambia: boolean) {
+    pasando = true
+    modoPasada = soloSiCambia ? 'si-cambia' : 'todo'
+    crudoPasada = ''
+    lote = null
+
+    // Misma clave que usa el envoltorio: `alias:*`. El asterisco no puede ser
+    // el nombre de ninguna app —la regla del servidor empieza por [a-z0-9]— así
+    // que no puede chocar con la clave de un despliegue suelto.
+    if (hayPuente()) {
+      const { listen } = await import('@tauri-apps/api/event')
+      const clave = `${alias}:*`
+      paraDeEscucharPasada = await listen<[string, string]>('orbit://progreso', (e) => {
+        const [k, linea] = e.payload
+        if (k === clave) crudoPasada += linea + '\n'
+      })
+    }
+
+    try {
+      lote = await desplegarTodo(alias, soloSiCambia)
+    } catch (e) {
+      error = e as ErrorDelPuente
+    } finally {
+      paraDeEscucharPasada?.()
+      paraDeEscucharPasada = null
+      pasando = false
+    }
+    // La portada ya no dice la verdad: hay releases nuevas y estados nuevos.
+    if (!error) await cargar(alias)
+  }
+
+  function pararPasada() {
+    // El asterisco otra vez: es la app con la que se registró en `Vivos`.
+    void cancelar(alias, '*')
+  }
+
+  function cerrarPasada() {
+    enPasada = false
+    pasando = false
+    modoPasada = null
+    crudoPasada = ''
+    lote = null
+    paraDeEscucharPasada?.()
+    paraDeEscucharPasada = null
   }
 
   function cerrarNueva() {
@@ -409,11 +474,13 @@
   <main>
     <AvisoDeCierre />
     <header class="cabecera">
-      <h1>{enAlta ? 'Servidores' : enNueva ? 'Nueva web' : alias || '—'}</h1>
-      {#if apps && vista === 'apps' && !enAlta && !enNueva}
+      <h1>
+        {enAlta ? 'Servidores' : enNueva ? 'Nueva web' : enPasada ? 'Desplegar todo' : alias || '—'}
+      </h1>
+      {#if apps && vista === 'apps' && !enAlta && !enNueva && !enPasada}
         <p class="cuenta">{apps.length} {apps.length === 1 ? 'app' : 'apps'}</p>
       {/if}
-      {#if !enAlta && !enNueva}
+      {#if !enAlta && !enNueva && !enPasada}
       <nav class="vistas" aria-label="Qué mirar de este servidor">
         <button type="button" class:activo={vista === 'apps'} onclick={() => (vista = 'apps')}>
           apps
@@ -428,13 +495,26 @@
           <button type="button" class="nueva" onclick={() => { enNueva = true; dns = null }}>
             nueva web
           </button>
+          <button type="button" onclick={() => (enPasada = true)}>desplegar todo</button>
         {/if}
       </nav>
       {/if}
     </header>
 
     <section class="panel">
-      {#if enNueva}
+      {#if enPasada}
+        <Pasada
+          servidor={alias}
+          apps={apps ?? []}
+          crudo={crudoPasada}
+          resultado={lote}
+          corriendo={pasando}
+          modo={modoPasada}
+          alLanzar={lanzarPasada}
+          alCancelar={pararPasada}
+          alCerrar={cerrarPasada}
+        />
+      {:else if enNueva}
         {#if finalNueva}
           <!-- Terminado. El final sale de preguntarle al servidor, no de leer
                la prosa: son siete y cinco son parciales, y decir «ha fallado»
@@ -518,7 +598,7 @@
       {/if}
     </section>
 
-    {#if elegida && vista === 'apps' && !enNueva}
+    {#if elegida && vista === 'apps' && !enNueva && !enPasada}
       <section class="panel panel--detalle">
         <nav class="pestanas" aria-label="Qué mirar de esta app">
           <button type="button" class:activo={pestana === 'detalle'} onclick={() => (pestana = 'detalle')}>

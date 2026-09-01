@@ -364,7 +364,14 @@ fn p29_un_certificado_caducado_da_dias_negativos_y_eso_es_real() {
 
 #[test]
 fn p33_los_seis_finales_se_cuentan_por_separado() {
-    let r = falso("lote-seis", &Comando::DesplegarTodo { progreso: false }).unwrap();
+    let r = falso(
+        "lote-seis",
+        &Comando::DesplegarTodo {
+            progreso: false,
+            solo_si_cambia: true,
+        },
+    )
+    .unwrap();
     let l: Lote = r.leer().unwrap();
     assert_eq!(l.total, 8);
     assert_eq!(l.deployed, 2);
@@ -382,7 +389,14 @@ fn p33_los_seis_finales_se_cuentan_por_separado() {
 
 #[test]
 fn p33_dentro_de_cada_app_va_el_objeto_de_deploy_sin_recortar() {
-    let r = falso("lote-seis", &Comando::DesplegarTodo { progreso: false }).unwrap();
+    let r = falso(
+        "lote-seis",
+        &Comando::DesplegarTodo {
+            progreso: false,
+            solo_si_cambia: true,
+        },
+    )
+    .unwrap();
     let l: Lote = r.leer().unwrap();
     let revertida = l.apps.iter().find(|a| a.app == "revertida").unwrap();
     let d = revertida
@@ -406,7 +420,14 @@ fn p33_dentro_de_cada_app_va_el_objeto_de_deploy_sin_recortar() {
 fn p34_no_he_podido_preguntar_no_es_nada_que_hacer() {
     // El bug real: un remoto caído anunciado como «nada que hacer» cada cinco
     // minutos. El contrato tiene seis finales para que no se repita.
-    let r = falso("lote-mudo", &Comando::DesplegarTodo { progreso: false }).unwrap();
+    let r = falso(
+        "lote-mudo",
+        &Comando::DesplegarTodo {
+            progreso: false,
+            solo_si_cambia: true,
+        },
+    )
+    .unwrap();
     let l: Lote = r.leer().unwrap();
     assert_eq!(l.unreachable, 3);
     assert_eq!(

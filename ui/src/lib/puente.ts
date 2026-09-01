@@ -16,7 +16,7 @@ import { listaDeAlias, type Borrador } from './asistente'
 import {
   leerLog,
   type App, type Despliegue, type Doctor, type Entorno,
-  type Envoltorio, type Lista, type Log, type Metricas, type Monitor,
+  type Envoltorio, type Lista, type Log, type Lote, type Metricas, type Monitor,
   type AppInfo, type Info, type SalidaDeExec, type Saludo, type Trafico,
 } from './contrato'
 
@@ -254,6 +254,22 @@ export async function retirarYBorrar(alias: string, app: string): Promise<Result
 export async function revertir(alias: string, app: string, release: string): Promise<Resultado> {
   if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
   return invocar<Resultado>('revertir', { alias, app, release })
+}
+
+/**
+ * Una pasada por todas las apps del servidor.
+ *
+ * `soloSiCambia` **no es una opción, es la mitad del significado**: con él se le
+ * pregunta primero al remoto de cada app y sólo se despliega lo que se ha
+ * movido; sin él se recompila todo, haya cambiado o no. Con cuarenta apps eso
+ * son cuarenta builds y cuarenta releases nuevas de un código idéntico, así que
+ * en la interfaz son dos entradas y nunca una casilla.
+ *
+ * El progreso llega por `orbit://progreso` con la clave `alias:*`.
+ */
+export async function desplegarTodo(alias: string, soloSiCambia: boolean): Promise<Lote> {
+  if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
+  return invocar<Lote>('desplegar_todo', { alias, soloSiCambia })
 }
 
 /** Lo que devuelve `orbit new`: el texto y el código, **sin interpretar

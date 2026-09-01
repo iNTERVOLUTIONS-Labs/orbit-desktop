@@ -208,6 +208,132 @@ export function recuentos(l: Lote): Array<{ id: string; glifo: string; texto: st
   }))
 }
 
+// ── La pasada por todas las apps ────────────────────────────────────────────
+
+/** Una app dentro de una pasada, mientras la pasada ocurre. */
+export interface AppEnPasada {
+  app: string
+  /** El final, cuando lo tiene. `null` mientras está en curso.
+   *
+   *  Es la cadena tal cual la manda el servidor y **no se traduce a un
+   *  enumerado**: un final que no conozcamos tiene que poder llegar a la
+   *  pantalla, y un analizador que sólo admita seis valores es un cliente que
+   *  se rompe el día que Orbit añada el séptimo. */
+  final: string | null
+  /** En qué paso va, si está desplegando. Sale de los sucesos `step`, que
+   *  llegan **mezclados** con los de la pasada por el mismo canal. */
+  paso: string | null
+}
+
+export interface Pasada {
+  apps: AppEnPasada[]
+  /** Cuál se está desplegando ahora. `null` entre una y otra, y al terminar. */
+  enCurso: string | null
+  terminadas: number
+  /** Segundos desde que arrancó la pasada.
+   *
+   *  Sale **sólo** de los sucesos `app`. Los sucesos `step` traen su propio
+   *  `elapsed_s`, que cuenta desde que empezó **esa app** (`DEP_T0`) y no desde
+   *  que empezó la pasada (`DALL_T0`): mezclarlos haría que el reloj saltara
+   *  hacia atrás en cada app nueva. */
+  transcurrido: number
+  rotas: number
+}
+
+/**
+ * Lee el progreso de `deploy --all --progress`.
+ *
+ * Por el mismo canal llegan **dos niveles de suceso** —`{"event":"app"}` para
+ * el principio y el final de cada app, `{"event":"step"}` para los seis pasos
+ * de dentro— y los dos traen `app`, que es el campo que Orbit añadió justo para
+ * que se puedan atribuir. Eso permite decir a la vez cuántas van y en qué paso
+ * está la que corre, que es bastante más útil que una ruedecita.
+ *
+ * Misma regla de siempre: **una línea rota no tumba una pasada**, y un `event`
+ * que no conozcamos se ignora sin contarse como rota.
+ */
+export function leerPasada(texto: string): Pasada {
+  const apps: AppEnPasada[] = []
+  const indice = new Map<string, AppEnPasada>()
+  let enCurso: string | null = null
+  let transcurrido = 0
+  let rotas = 0
+
+  const dame = (nombre: string): AppEnPasada => {
+    let a = indice.get(nombre)
+    if (!a) {
+      a = { app: nombre, final: null, paso: null }
+      indice.set(nombre, a)
+      // En el orden en que el servidor las va tocando, que es el orden en que
+      // ocurren. Ordenarlas alfabéticamente escondería cuál va ahora.
+      apps.push(a)
+    }
+    return a
+  }
+
+  for (const cruda of texto.split('\n')) {
+    const t = cruda.trim()
+    // Por stderr va también todo lo que Orbit le cuenta a una persona. Lo que
+    // no empieza por llave es prosa, no una línea rota.
+    if (!t.startsWith('{')) continue
+    let s: SucesoDeProgreso
+    try {
+      s = JSON.parse(t)
+    } catch {
+      rotas += 1
+      continue
+    }
+    if (!s.app) continue
+
+    if (s.event === 'app') {
+      if (typeof s.elapsed_s === 'number') transcurrido = Math.max(transcurrido, s.elapsed_s)
+      const a = dame(s.app)
+      if (s.status === 'start') {
+        enCurso = s.app
+        a.final = null
+      } else if (s.status) {
+        a.final = s.status
+        a.paso = null
+        if (enCurso === s.app) enCurso = null
+      }
+    } else if (s.event === 'step' && s.step) {
+      // Un paso de dentro. No mueve el reloj de la pasada — ver `transcurrido`.
+      const a = dame(s.app)
+      if (a.final === null) a.paso = s.step
+      // Y un paso implica que esa app está corriendo, aunque su «start» de nivel
+      // de app se hubiera perdido: el canal puede llegar cortado por arriba si
+      // alguien abre la pantalla a mitad.
+      if (a.final === null) enCurso = s.app
+    }
+  }
+
+  return {
+    apps,
+    enCurso,
+    terminadas: apps.filter((a) => a.final !== null).length,
+    transcurrido,
+    rotas,
+  }
+}
+
+/**
+ * Qué finales puede dar una pasada, según cómo se lance.
+ *
+ * **No es una curiosidad: cambia lo que la pantalla puede prometer.** Los
+ * cuatro finales baratos salen de preguntarle al remoto de cada app, y sin
+ * `--if-changed` no se le pregunta a nadie — así que una pasada completa sólo
+ * puede terminar en `deployed` o en `failed`, y sus otros cuatro recuentos
+ * serán cero por construcción y no porque no haya pasado nada.
+ *
+ * `skipped` no aparece en ninguna de las dos: sólo lo produce `--auto`, que es
+ * la bandera del autodespliegue y que este cliente no pasa nunca.
+ */
+export function finalesPosibles(soloSiCambia: boolean): string[] {
+  return soloSiCambia
+    ? ['deployed', 'failed', 'unchanged', 'unreachable', 'gone']
+    : ['deployed', 'failed']
+}
+
 /**
  * Cada cuánto se vuelve a pedir el monitor.
  *

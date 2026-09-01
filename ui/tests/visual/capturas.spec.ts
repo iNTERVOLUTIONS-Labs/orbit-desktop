@@ -145,3 +145,17 @@ test('asistente de web nueva · tema dark', async ({ page }) => {
   await expect(page.locator('.problema')).toHaveCount(0)
   await page.screenshot({ path: 'capturas/dark-nueva.png', fullPage: true })
 })
+
+test('la pasada por todas las apps · tema dark', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'vps-ovh', exact: true }).click()
+  await page.getByRole('button', { name: 'desplegar todo' }).click()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Desplegar todo')
+
+  // Con el submenú abierto: la opción cara es la que hay que poder mirar, y
+  // cerrada la captura enseñaría justo lo que no cuesta nada.
+  await page.locator('.cara summary').click()
+  await expect(page.locator('.cara .boton')).toBeVisible()
+  await page.screenshot({ path: 'capturas/dark-pasada.png', fullPage: true })
+})

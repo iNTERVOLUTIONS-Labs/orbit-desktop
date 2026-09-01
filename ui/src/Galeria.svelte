@@ -8,6 +8,7 @@
   import VisorLog from './componentes/VisorLog.svelte'
   import Despliegue from './componentes/Despliegue.svelte'
   import LoteVista from './componentes/Lote.svelte'
+  import Pasada from './componentes/Pasada.svelte'
   import HojaDeComando from './componentes/HojaDeComando.svelte'
   import Desenlace from './componentes/Desenlace.svelte'
   import AsistenteNueva from './componentes/AsistenteNueva.svelte'
@@ -22,8 +23,9 @@
   import { leerLog, type Doctor } from './lib/contrato'
   import doctorMuestra from './lib/muestras/doctor.json'
   import logCrudo from './lib/muestras/logs.ndjson?raw'
-  import type { App, Estado } from './lib/contrato'
+  import type { App, Estado, Lista } from './lib/contrato'
   import listaHostil from './lib/muestras/list-nombre-hostil.json'
+  import listaSana from './lib/muestras/list.json'
 
   const BASE: Estado = {
     service: null, port: null, ssl: false, cert_days: null,
@@ -104,6 +106,19 @@
     no: { del_dominio: ['1.2.3.4'], del_servidor: ['10.0.0.5'], coinciden: false },
     sinSaber: { del_dominio: [], del_servidor: ['10.0.0.5'], coinciden: null },
   }
+
+  // El progreso de una pasada a mitad: una hecha, otra compilando y una tercera
+  // que ni ha empezado. Es el estado que hay que mirar, porque el de antes y el
+  // de después son fáciles.
+  const CRUDO_PASADA = [
+    '{"event":"app","app":"tienda","status":"start","elapsed_s":0}',
+    '{"event":"step","app":"tienda","step":"build","status":"start","elapsed_s":4}',
+    '{"event":"app","app":"tienda","status":"deployed","elapsed_s":97}',
+    '{"event":"app","app":"blog","status":"start","elapsed_s":97}',
+    '{"event":"step","app":"blog","step":"code","status":"ok","elapsed_s":2}',
+    '{"event":"step","app":"blog","step":"build","status":"start","elapsed_s":3}',
+    '{"event":"app","app":"api","status":"unreachable","elapsed_s":98}',
+  ].join('\n')
 
   const DESENLACES = [
     clasificar('tienda', infoBase({}), true),
@@ -244,6 +259,89 @@
       <Despliegue app="tienda" servidor="vps-ovh" progreso={leerProgreso('')} resultado={r as Obj} />
     </div>
   {/each}
+
+  <h2>La pasada por todas las apps</h2>
+  <p class="nota">
+    <code>deploy --all</code> significa <strong>dos cosas distintas</strong>
+    según lleve <code>--if-changed</code> o no: con él le pregunta al remoto de
+    cada app y despliega sólo lo que se ha movido; sin él recompila todas, hayan
+    cambiado o no. Con cuarenta apps eso son cuarenta builds y cuarenta releases
+    nuevas de un código idéntico, así que en la interfaz son
+    <strong>dos entradas y nunca una casilla</strong> — la misma decisión que en
+    la pantalla de retirar, y por el mismo motivo: la opción que está al lado se
+    elige sin leerla.
+  </p>
+  <h3>Antes</h3>
+  <div class="panel">
+    <Pasada
+      servidor="vps-ovh"
+      apps={(listaSana as Lista).apps.slice(0, 12)}
+      alLanzar={() => {}}
+      alCancelar={() => {}}
+      alCerrar={() => {}}
+    />
+  </div>
+
+  <h3>A mitad</h3>
+  <p class="nota">
+    La lista <strong>es</strong> el progreso, y por eso no hay barra: el servidor
+    salta las apps sin repositorio y eso no sale en <code>list</code>, así que
+    una fracción sería un denominador inventado. Y «parar» no deshace nada — lo
+    dice donde está el botón, no después.
+  </p>
+  <div class="panel">
+    <Pasada
+      servidor="vps-ovh"
+      apps={(listaSana as Lista).apps.slice(0, 12)}
+      crudo={CRUDO_PASADA}
+      corriendo={true}
+      modo="si-cambia"
+      alLanzar={() => {}}
+      alCancelar={() => {}}
+      alCerrar={() => {}}
+    />
+  </div>
+
+  <h3>Después de preguntar a cada remoto</h3>
+  <p class="nota">
+    Los seis recuentos, cada uno en su celda. <strong>Agruparlos está
+    prohibido</strong>: confundir «al día» con «sin contacto» costó un fallo
+    real, un remoto caído anunciado como «nada que hacer» cada cinco minutos
+    durante días.
+  </p>
+  <div class="panel">
+    <Pasada
+      servidor="vps-ovh"
+      apps={(listaSana as Lista).apps.slice(0, 12)}
+      resultado={loteMuestra as Lote}
+      modo="si-cambia"
+      alLanzar={() => {}}
+      alCancelar={() => {}}
+      alCerrar={() => {}}
+    />
+  </div>
+
+  <h3>Y después de NO preguntar a ninguno</h3>
+  <p class="nota">
+    Un cero que <strong>no podía ser otra cosa</strong> no es la misma
+    información que un cero que sí podía. Sin <code>--if-changed</code> los
+    finales baratos son cero por construcción, y dejarlos ahí sin decirlo
+    invitaría a leerlos como «he mirado y no había nada».
+  </p>
+  <div class="panel">
+    <Pasada
+      servidor="vps-ovh"
+      apps={(listaSana as Lista).apps.slice(0, 12)}
+      resultado={{ ...(loteMuestra as Lote), total: 4, deployed: 2, failed: 2,
+                   unchanged: 0, unreachable: 0, gone: 0, skipped: 0, ok: false,
+                   apps: (loteMuestra as Lote).apps.filter(
+                     (a) => a.status === 'deployed' || a.status === 'failed') }}
+      modo="todo"
+      alLanzar={() => {}}
+      alCancelar={() => {}}
+      alCerrar={() => {}}
+    />
+  </div>
 
   <h2>El lote, con sus seis finales</h2>
   <p class="nota">
