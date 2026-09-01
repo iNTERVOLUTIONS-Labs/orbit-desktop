@@ -24,7 +24,10 @@
 
 use orbit_client::comando::{AjustesDeteccion, Anulacion, Comando, ModoDeExec, WebNueva};
 use orbit_client::descubrir;
-use orbit_client::transporte::{self, EnCurso, Servidor};
+// `dir_control` viene del núcleo: dónde viven los sockets de ControlMaster
+// es política del transporte, y compartirlo con el cliente de terminal es
+// justo lo que hace que el segundo reutilice la conexión del primero.
+use orbit_client::transporte::{self, dir_control, EnCurso, Servidor};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::Emitter;
@@ -101,25 +104,6 @@ fn pedir(alias: &str, binario: Option<String>, c: Comando) -> Resultado {
         mensaje: e.to_string(),
         detalle: None,
     })
-}
-
-/// Dónde vive el socket de `ControlMaster`.
-///
-/// En `XDG_RUNTIME_DIR` y no en `/tmp`: es un directorio propio del usuario,
-/// que el sistema limpia al cerrar la sesión. Un socket de control **es una
-/// sesión root guardada en un fichero** —con él abierto se puede abrir un canal
-/// sin la clave, comprobado— así que dónde vive y con qué permisos no es un
-/// detalle de higiene.
-fn dir_control() -> Option<String> {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")?;
-    let d = std::path::Path::new(&base).join("orbit-desktop");
-    std::fs::create_dir_all(&d).ok()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).ok()?;
-    }
-    Some(d.to_string_lossy().into_owned())
 }
 
 // ── el catálogo, y nada más ────────────────────────────────────────────────

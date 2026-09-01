@@ -136,6 +136,115 @@ pub enum Salud {
     Desconocida(&'static str),
 }
 
+impl Salud {
+    /// El identificador estable, que es con lo que se decide **sin leer el
+    /// texto**. Es el mismo que usa la hoja de estilos de la interfaz.
+    pub fn id(&self) -> &'static str {
+        match self {
+            Self::SinVhost => "sin-vhost",
+            Self::Mantenimiento => "mantenimiento",
+            Self::SinProceso => "no-aplica",
+            Self::Activa => "activo",
+            Self::Parada => "parado",
+            Self::Desconocida(_) => "desconocido",
+        }
+    }
+
+    /// El símbolo. **Nunca va solo**: es lo que sobrevive a una captura en
+    /// blanco y negro y al daltonismo, pero no dice qué hacer.
+    pub fn glifo(&self) -> &'static str {
+        VOCABULARIO[self.indice()].1
+    }
+
+    /// Lo que se pinta al lado del glifo. En los dos estados neutros **es** el
+    /// glifo: pintar los dos dejaba una fila que decía «— —».
+    pub fn texto(&self) -> &'static str {
+        VOCABULARIO[self.indice()].2
+    }
+
+    /// Lo que se anuncia y lo que se lee en voz alta. «raya» no es «no aplica»,
+    /// así que los neutros tienen aquí su palabra entera.
+    pub fn voz(&self) -> &'static str {
+        VOCABULARIO[self.indice()].3
+    }
+
+    /// Qué hacer. El color sin la frase no dice nada.
+    pub fn frase(&self) -> &'static str {
+        VOCABULARIO[self.indice()].4
+    }
+
+    /// Glifo y texto juntos, **sin repetirse**.
+    ///
+    /// En los dos estados neutros el texto ES el glifo, así que pintar los dos
+    /// deja una fila que dice «— —». La ventana ya se comió ese defecto y lo
+    /// cazó **mirando una captura, no una prueba**: el DOM era correcto y la
+    /// pantalla, absurda.
+    ///
+    /// Que el cliente de terminal lo cometiera otra vez, por su cuenta y a la
+    /// primera, es el argumento entero de que esto viva en el núcleo: la regla
+    /// no es de una interfaz, es del vocabulario.
+    pub fn rotulo(&self) -> String {
+        if self.texto() == self.glifo() {
+            self.glifo().to_string()
+        } else {
+            format!("{} {}", self.glifo(), self.texto())
+        }
+    }
+
+    fn indice(&self) -> usize {
+        match self {
+            Self::SinVhost => 0,
+            Self::Mantenimiento => 1,
+            Self::SinProceso => 2,
+            Self::Activa => 3,
+            Self::Parada => 4,
+            Self::Desconocida(_) => 5,
+        }
+    }
+}
+
+/// El vocabulario, en el orden de `tests/contrato/vocabulario.json`.
+///
+/// **Vive aquí y no en la interfaz** porque hay dos interfaces —la ventana y el
+/// terminal— y basta con que una diga «parado» donde la otra dice «no aplica»
+/// para que la distinción entre «no hay proceso» y «el proceso se ha caído»
+/// deje de existir. Esa distinción es la razón de ser de la tabla.
+///
+/// Una prueba lo compara contra el fichero compartido, y otra igual en la
+/// interfaz hace lo mismo con el suyo.
+const VOCABULARIO: [(&str, &str, &str, &str, &str); 6] = [
+    (
+        "sin-vhost",
+        "⊘",
+        "sin vhost",
+        "sin vhost",
+        "nginx no tiene el vhost. La conexión se cierra: ni 404 ni 502.",
+    ),
+    (
+        "mantenimiento",
+        "▲",
+        "mantenimiento",
+        "mantenimiento",
+        "nginx devuelve 503 con tu página de «volvemos enseguida».",
+    ),
+    (
+        "no-aplica",
+        "—",
+        "—",
+        "no aplica",
+        "Web estática: no hay ningún proceso que arrancar. Esto no es un fallo.",
+    ),
+    ("activo", "●", "activo", "activo", "El servicio responde."),
+    (
+        "parado",
+        "✕",
+        "parado",
+        "parado",
+        "El servicio existe y no está corriendo.",
+    ),
+    ("desconocido", "·", "·", "no se sabe", "No se sabe todavía."),
+];
+
 impl Estado {
     pub fn salud(&self) -> Salud {
         if !self.served {

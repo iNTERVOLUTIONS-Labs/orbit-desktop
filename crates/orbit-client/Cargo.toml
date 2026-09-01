@@ -9,7 +9,14 @@ rust-version.workspace = true
 
 # Vive aparte de la interfaz a propósito (ARCHITECTURE §4.3): así se prueba con
 # 'cargo test' sin levantar una ventana, un cambio de framework no lo toca, y
-# una TUI podría reutilizarlo sin duplicar nada.
+# una TUI puede reutilizarlo sin duplicar nada.
+#
+# Esa última frase estuvo aquí sin comprobar hasta que se escribió el cliente de
+# terminal (crates/orbit-tui). Salió cierta —cero dependencias nuevas— y con dos
+# excepciones que estaban en el sitio equivocado y ahora están aquí: el
+# VOCABULARIO de estados, que vivía sólo en la interfaz, y el directorio de los
+# sockets de ControlMaster, que vivía en el envoltorio de escritorio. Las dos se
+# habrían quedado ahí para siempre de no haber existido una segunda interfaz.
 #
 # Las dependencias se cuentan: cada una es código de terceros ejecutándose en el
 # proceso que sostiene las credenciales SSH del usuario, que es el argumento con

@@ -332,13 +332,71 @@ salen al otro lado. Si no hay `jq`, falla en vez de saltarse: es la lección del
 `make test-strict` de Orbit, que ya se comió que una suite se saltara `jq`,
 `rsync` y `nginx` y saliera en verde.
 
+## Fase 6c · El mismo núcleo en un terminal, y lo que eso destapó ✅
+
+El `Cargo.toml` del núcleo llevaba desde el primer día una afirmación **sin
+comprobar**: *«una TUI podría reutilizarlo sin duplicar nada»*. Este programa es
+lo que había que escribir para saber si era verdad.
+
+**No es una interfaz de pantalla completa**, y no por falta de tiempo: no hay
+modo crudo, ni teclas, ni redibujado. Imprime y termina. Eso es lo que la hace
+utilizable donde de verdad hace falta un cliente de terminal, que es dentro de
+otro `ssh`, en un `watch` o en la salida de un script.
+
+Y **sólo hace lo que `orbit` no puede hacer**. La pregunta que decidió su forma
+fue: ¿qué da esto que no dé `ssh servidor orbit list`? Si la respuesta hubiera
+sido «nada», lo honesto era no escribirlo. La respuesta es **el abanico**:
+`orbit list` corre en un servidor, y esto le pregunta a los diez a la vez —con
+las conexiones multiplexadas por el mismo `ControlMaster` que ya tiene abierto la
+ventana— y pone las respuestas en una tabla. Un servidor que no contesta sale
+diciendo que no contesta, **nunca con cero apps**. Todo lo demás —una app suelta,
+un log, un `exec`— se hace mejor con `orbit` por `ssh`, y por eso no está.
+
+### La afirmación era verdad a medias
+
+**Cero dependencias nuevas.** Ni librería de terminal, ni analizador de
+argumentos, ni runtime asíncrono: el color se apaga solo con `IsTerminal`, que es
+de la biblioteca estándar, y el abanico son N hilos esperando a un `ssh`, que es
+justo para lo que existe `std::thread::scope`. El transporte, el contrato, el
+escapado, el descubrimiento de servidores y **la precedencia de estados** se
+reutilizaron tal cual. Por ahí la afirmación se sostiene entera.
+
+**Y era falsa en dos sitios**, los dos por el mismo motivo: con una sola interfaz
+no se notaba dónde estaba la frontera.
+
+- **El vocabulario de estados vivía sólo en la interfaz.** La precedencia estaba
+  en el núcleo desde el principio —`Estado::salud()`, con su orden escrito— pero
+  las palabras, los glifos y las frases estaban en `contrato.ts`. Con dos
+  interfaces eso es la forma exacta en que se disuelve el activo más valioso del
+  producto: basta con que una diga «parado» donde la otra dice «no aplica» para
+  que la distinción entre «no hay proceso» y «el proceso se ha caído» deje de
+  existir. Ahora está en el núcleo y las dos se comparan contra
+  `tests/contrato/vocabulario.json`.
+- **El directorio de los sockets de `ControlMaster`** estaba en el envoltorio de
+  escritorio, y es política del transporte. Compartirlo es además lo que se
+  quiere: el terminal reutiliza la conexión que ya abrió la ventana, que es la
+  diferencia medida entre 246 ms y 13 ms de saludo.
+
+### Y un defecto cometido dos veces
+
+La primera versión de la tabla pintaba **`— —`** en las filas de «no aplica»:
+en los dos estados neutros el texto *es* el glifo, así que pintar los dos deja
+una fila absurda. Es **exactamente** el defecto que la ventana ya se había comido
+—y que allí se cazó mirando una captura, con el DOM en verde— cometido otra vez,
+por su cuenta y a la primera, en la segunda interfaz.
+
+Eso no es mala suerte: es la prueba de que la regla no era de una interfaz sino
+del vocabulario. Ahora es `Salud::rotulo()`, en el núcleo, con su prueba.
+
+La suite de punta a punta corre contra el mismo sshd del banco y **con tres
+servidores a propósito**: con uno el abanico no existe y la prueba pasaría sin
+comprobar nada.
+
 ## Fase 7 y más allá 💭
 
 - 💭 **Gráficas históricas**, que exigirían que el cliente guarde algo. Es una
   decisión aparte y no pequeña: hoy el cliente no persiste ningún dato del
   servidor, y eso es media hoja del modelo de amenazas
-- 💭 **Una TUI** que reutilice el mismo núcleo. Es gratis si el núcleo vive en un
-  crate aparte de la interfaz, y por eso vive así
 
 ---
 

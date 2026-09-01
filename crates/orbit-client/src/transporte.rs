@@ -521,6 +521,33 @@ pub fn ejecutar_en_vivo(
     )
 }
 
+/// Dónde viven los sockets de `ControlMaster`.
+///
+/// Vive en el núcleo y no en el envoltorio porque **es política del transporte**:
+/// quien decide multiplexar es esto, y el directorio es parte de esa decisión.
+/// Estaba en la aplicación de escritorio, y ahí sólo servía mientras hubiera una
+/// sola interfaz.
+///
+/// Que la ventana y el terminal compartan directorio **es lo que se quiere**: el
+/// segundo reutiliza la conexión que ya abrió el primero, que es la diferencia
+/// medida entre 246 ms y 13 ms de saludo.
+///
+/// `0700`, y sin plan B si no se puede: un socket de control es una sesión SSH
+/// abierta con las credenciales de quien la abrió, así que un directorio que no
+/// se puede cerrar es un directorio en el que no se pone nada. Devolver `None`
+/// significa «sin multiplexar», que es más lento y correcto.
+pub fn dir_control() -> Option<String> {
+    let base = std::env::var_os("XDG_RUNTIME_DIR")?;
+    let d = std::path::Path::new(&base).join("orbit-desktop");
+    std::fs::create_dir_all(&d).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).ok()?;
+    }
+    Some(d.to_string_lossy().into_owned())
+}
+
 /// El mismo camino sin `ssh`, para las pruebas.
 pub fn ejecutar_en_vivo_local(
     binario: &str,

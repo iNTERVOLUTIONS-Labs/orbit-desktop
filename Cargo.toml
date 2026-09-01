@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/orbit-client", "crates/orbit-app"]
+members = ["crates/orbit-client", "crates/orbit-app", "crates/orbit-tui"]
 
 [workspace.package]
 version = "0.1.0"

@@ -172,6 +172,14 @@ jobs:
           ORBIT_E2E: ${{ runner.temp }}/e2e
         run: cargo test -p orbit-client --test e2e_sshd -- --ignored --nocapture
 
+      - name: El abanico del cliente de terminal
+        # Contra el mismo sshd, y con TRES servidores a propósito: con uno el
+        # abanico no existe y la prueba pasaría sin comprobar nada. Es lo único
+        # que ese programa hace y que `ssh servidor orbit list` no puede.
+        run: |
+          cargo build -p orbit-tui
+          tests/e2e/tui.sh "$RUNNER_TEMP/e2e"
+
       - name: Parar el sshd
         # Siempre, también si la tanda falla: un sshd huérfano escuchando hace
         # que la siguiente falle por un motivo que no tiene nada que ver.

@@ -1,0 +1,69 @@
+{
+  "_": [
+    "El vocabulario de estados, en un solo sitio.",
+    "",
+    "La PRECEDENCIA ya vivía en el núcleo —`Estado::salud()`, con su orden",
+    "escrito— pero las PALABRAS no: estaban sólo en la interfaz. Mientras hubo",
+    "una interfaz eso no se notaba. Con dos —la ventana y el terminal— es la",
+    "forma exacta en que se disuelve el activo más valioso del producto: basta",
+    "que una diga «parado» donde la otra dice «no aplica» para que la",
+    "distinción entre «no hay proceso» y «el proceso se ha caído» deje de",
+    "existir, y esa distinción es la razón de ser de la tabla.",
+    "",
+    "Así que las palabras se declaran aquí y las dos implementaciones se",
+    "comparan contra este fichero. Cambiar una rompe su prueba; cambiar las dos",
+    "obliga a tocar esto, que sale en el diff y alguien lo ve.",
+    "",
+    "· glifo  el símbolo. Nunca va solo: el color tampoco es la señal.",
+    "· texto  lo que se pinta al lado. En los dos neutros ES el glifo, porque",
+    "         pintar «— —» en una fila salía absurdo. Se vio en una captura.",
+    "· voz    lo que se anuncia y lo que se lee en voz alta. «raya» no es «no",
+    "         aplica», así que los neutros tienen aquí su palabra entera.",
+    "· frase  qué hacer. El color sin la frase no dice nada."
+  ],
+
+  "estados": [
+    {
+      "id": "sin-vhost",
+      "glifo": "⊘",
+      "texto": "sin vhost",
+      "voz": "sin vhost",
+      "frase": "nginx no tiene el vhost. La conexión se cierra: ni 404 ni 502."
+    },
+    {
+      "id": "mantenimiento",
+      "glifo": "▲",
+      "texto": "mantenimiento",
+      "voz": "mantenimiento",
+      "frase": "nginx devuelve 503 con tu página de «volvemos enseguida»."
+    },
+    {
+      "id": "no-aplica",
+      "glifo": "—",
+      "texto": "—",
+      "voz": "no aplica",
+      "frase": "Web estática: no hay ningún proceso que arrancar. Esto no es un fallo."
+    },
+    {
+      "id": "activo",
+      "glifo": "●",
+      "texto": "activo",
+      "voz": "activo",
+      "frase": "El servicio responde."
+    },
+    {
+      "id": "parado",
+      "glifo": "✕",
+      "texto": "parado",
+      "voz": "parado",
+      "frase": "El servicio existe y no está corriendo."
+    },
+    {
+      "id": "desconocido",
+      "glifo": "·",
+      "texto": "·",
+      "voz": "no se sabe",
+      "frase": "No se sabe todavía."
+    }
+  ]
+}

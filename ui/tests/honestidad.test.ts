@@ -10,13 +10,14 @@
  * Por eso estas pruebas comprueban el DOM y no el estado interno: lo que
  * importa es lo que acaba delante de los ojos de alguien.
  */
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 
 import ChipEstado from '../src/componentes/ChipEstado.svelte'
 import FacetaSsl from '../src/componentes/FacetaSsl.svelte'
 import ListaApps from '../src/componentes/ListaApps.svelte'
-import { salud, nombreOperable, marcarInvisibles, num, type Estado, type App } from '../src/lib/contrato'
+import { PRESENTACION, salud, nombreOperable, marcarInvisibles, num, type Estado, type App } from '../src/lib/contrato'
 
 import listaEstados from '../src/lib/muestras/list-estados.json'
 import listaHostil from '../src/lib/muestras/list-nombre-hostil.json'
@@ -254,5 +255,42 @@ describe('lo que sólo se vio mirando una captura', () => {
     // «raya» no es «no aplica».
     const { container } = render(ChipEstado, { estado: e({ service: null }) })
     expect(container.querySelector('.chip')!.getAttribute('aria-label')).toContain('no aplica')
+  })
+})
+
+describe('el vocabulario es el mismo en las dos interfaces', () => {
+  // La precedencia vivía en el núcleo desde el principio; las palabras estaban
+  // sólo aquí. Con una interfaz eso no se notaba. Con dos —la ventana y el
+  // terminal— es la forma exacta en que se disuelve el activo más valioso del
+  // producto: basta con que una diga «parado» donde la otra dice «no aplica».
+  //
+  // La prueba gemela está en `crates/orbit-client/tests/vocabulario.rs` y lee
+  // este mismo fichero.
+  const vocabulario = JSON.parse(
+    readFileSync('../tests/contrato/vocabulario.json', 'utf8'),
+  ) as { estados: { id: string; glifo: string; texto: string; voz: string; frase: string }[] }
+
+  it('glifo, texto y frase salen del fichero compartido', () => {
+    for (const e of vocabulario.estados) {
+      const p = PRESENTACION[e.id as keyof typeof PRESENTACION]
+      expect(p, `falta la presentación de ${e.id}`).toBeDefined()
+      expect(p.glifo, `glifo de ${e.id}`).toBe(e.glifo)
+      expect(p.texto, `texto de ${e.id}`).toBe(e.texto)
+      expect(p.frase, `frase de ${e.id}`).toBe(e.frase)
+    }
+  })
+
+  it('y no hay ningún estado de más en la interfaz', () => {
+    expect(Object.keys(PRESENTACION).sort()).toEqual(vocabulario.estados.map((e) => e.id).sort())
+  })
+
+  it('lo que se anuncia por voz es la palabra, no el glifo', () => {
+    // `—` se lee «raya», y eso no es «no aplica». Se comprueba sobre el DOM,
+    // que es donde acaba el aria-label.
+    for (const e of vocabulario.estados) {
+      if (e.texto === e.glifo) {
+        expect(e.voz, `${e.id} necesita una palabra para anunciarse`).not.toBe(e.glifo)
+      }
+    }
   })
 })

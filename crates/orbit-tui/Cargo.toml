@@ -1,0 +1,33 @@
+[package]
+name = "orbit-tui"
+description = "El mismo núcleo, en un terminal. Su razón de ser es preguntar a varios servidores a la vez."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "orbit-desktop"
+path = "src/main.rs"
+
+# **Ninguna dependencia propia**, y eso es el resultado del experimento y no una
+# aspiración: el Cargo.toml del núcleo llevaba desde el principio la afirmación
+# de que «una TUI podría reutilizarlo sin duplicar nada», y esto es lo que había
+# que escribir para saber si era verdad.
+#
+# Lo que se ha evitado, y por qué:
+#
+#   · Ninguna librería de terminal (ratatui, crossterm). Esto NO es una
+#     interfaz de pantalla completa —ver la cabecera de main.rs— así que no
+#     hace falta modo crudo, y sin modo crudo no hace falta termios. El color
+#     se apaga solo con `IsTerminal`, que es de la biblioteca estándar.
+#   · Ningún analizador de argumentos (clap). Son cuatro órdenes.
+#   · Ningún runtime asíncrono (tokio). El abanico son N hilos que esperan a un
+#     `ssh`, que es exactamente para lo que sirve `std::thread::scope`.
+#
+# Cada una habría sido código de terceros ejecutándose en el proceso que sostiene
+# las credenciales SSH del usuario, que es el argumento con el que se descartó
+# Electron. La regla no cambia porque la ventana sea un terminal.
+[dependencies]
+orbit-client = { path = "../orbit-client" }
