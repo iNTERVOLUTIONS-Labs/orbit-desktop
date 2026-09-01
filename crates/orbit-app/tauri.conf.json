@@ -5,9 +5,7 @@
   "identifier": "com.intervolutions.orbit-desktop",
   "build": {
     "frontendDist": "../../ui/dist",
-    "devUrl": "http://127.0.0.1:5174",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "devUrl": "http://127.0.0.1:5174"
   },
   "app": {
     "windows": [

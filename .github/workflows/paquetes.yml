@@ -56,23 +56,21 @@ jobs:
           sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev \
             libayatana-appindicator3-dev librsvg2-dev libssl-dev pkg-config
 
-      - name: Las dependencias de la interfaz
-        # Sólo instalarlas: compilarla la lanza el propio `tauri build` con su
-        # `beforeBuildCommand`, y hacerlo dos veces sería pagar el build dos
-        # veces para acabar en el mismo sitio.
-        run: npm --prefix ui ci --no-audit --no-fund
+      - name: La interfaz
+        # A mano y no por `beforeBuildCommand`. Esa comodidad estuvo puesta y era
+        # una trampa: Tauri ejecuta ese comando desde el directorio donde deduce
+        # que está el frontend, y aquí el `package.json` vive en `ui/` y no en la
+        # raíz, así que la deducción salía **distinta en esta máquina que en un
+        # runner limpio** —`ui/` en una, `crates/` en el otro— y la ruta relativa
+        # apuntaba a un sitio u otro. Está contado en crates/orbit-app/COMPILAR.md.
+        run: |
+          npm --prefix ui ci --no-audit --no-fund
+          npm --prefix ui run build
 
       - name: El paquete
-        # Desde el crate, y sin `--config`. Lo aprendido ejecutándolo, que es la
-        # única forma de saberlo: en este fichero conviven TRES reglas distintas
-        # sobre desde dónde se resuelve cada ruta.
-        #
-        #   · `frontendDist` es relativa al fichero de configuración
-        #   · `beforeBuildCommand` se ejecuta desde el directorio del frontend
-        #     que Tauri detecta —aquí `ui/`, porque ahí está el package.json—
-        #   · y `--config` es para MEZCLAR configuración, no para señalar la
-        #     principal: pasándole la principal, el comando se ejecutaba desde
-        #     la raíz y `../../ui` apuntaba fuera del repositorio
+        # Desde el crate, y sin `--config`: esa bandera sirve para MEZCLAR
+        # configuración, no para señalar la principal, y pasándole la principal
+        # el comando se ejecutaba desde la raíz.
         #
         # `--no-bundle` NO: el bundle es justo lo que hay que probar. Lo que se
         # omite es la firma, que es lo que no se puede hacer todavía.
