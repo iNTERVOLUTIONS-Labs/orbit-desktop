@@ -246,9 +246,45 @@ producto terminado permite además probar una actualización de verdad en vez de
 con una app vacía. La excepción: **las cuentas de firma se piden en la fase 1**,
 porque si Apple o Azure tardan, tardan.
 
-## Fase 6 y más allá 💭
+## Fase 6 · Mirar dos servidores a la vez ✅
 
-- 💭 **Comparar dos servidores** — qué tiene uno que no tenga el otro
+**Comparar dos servidores**: qué hay en uno que no esté en el otro, y en qué se
+diferencian las que están en los dos. Dos lecturas, no escribe nada — y aun así
+es la pantalla más peligrosa del cliente, porque es la única en la que dos
+servidores están a la misma altura.
+
+De ahí salen sus dos reglas, que son las dos que el producto ya tenía por
+separado y que se rompen justo aquí:
+
+**La clave es `servidor:app` y nunca la app sola.** «tienda» existe en tres
+servidores y son tres apps distintas; el accidente más caro de un cliente
+multiservidor no es un ataque, es confundir dos. Así que el alias va escrito en
+la cabecera de cada columna y en cada lista, siempre, también cuando parece
+obvio. El color es el refuerzo; la señal es el nombre.
+
+**Media comparación no es una comparación.** Si el otro servidor no contesta, no
+se compara nada — no se enseña la lista del que sí con los huecos del otro en
+blanco. Eso sacaría todas sus apps como «sólo en produccion», que invita a
+crearlas otra vez en un servidor donde puede que ya existan. Es confundir «no he
+podido preguntar» con «no lo tiene», el mismo error que costó que un remoto
+caído se anunciara como «nada que hacer» durante días, y aquí con peores
+consecuencias.
+
+Y dos cosas que la pantalla dice de sí misma, porque callarlas haría creer de
+más. **La rama y el repositorio no salen en `list --json`**, así que dos apps sin
+diferencias podrían venir de repositorios distintos. Y **que dos apps se llamen
+igual no las hace la misma app**: si el nombre coincide y el dominio no, se
+enseña la duda y no una conclusión, porque quien mira sabe cuál de las dos cosas
+es y esta pantalla no.
+
+Lo que cambia solo —el proceso, el puerto, el número de releases, la fecha del
+último despliegue— **no se compara a propósito**: difiere casi siempre entre dos
+servidores y no dice nada, y una lista de diferencias con ruido es una lista que
+se deja de leer. `cert_days` tampoco se puede comparar aunque se quisiera: es
+`null` en `list` y en `status` siempre, y sólo lo calcula `info`.
+
+## Fase 7 y más allá 💭
+
 - 💭 **Gráficas históricas**, que exigirían que el cliente guarde algo. Es una
   decisión aparte y no pequeña: hoy el cliente no persiste ningún dato del
   servidor, y eso es media hoja del modelo de amenazas

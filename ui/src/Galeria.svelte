@@ -9,6 +9,7 @@
   import Despliegue from './componentes/Despliegue.svelte'
   import LoteVista from './componentes/Lote.svelte'
   import Pasada from './componentes/Pasada.svelte'
+  import Comparar from './componentes/Comparar.svelte'
   import HojaDeComando from './componentes/HojaDeComando.svelte'
   import Desenlace from './componentes/Desenlace.svelte'
   import AsistenteNueva from './componentes/AsistenteNueva.svelte'
@@ -110,6 +111,16 @@
   // El progreso de una pasada a mitad: una hecha, otra compilando y una tercera
   // que ni ha empezado. Es el estado que hay que mirar, porque el de antes y el
   // de después son fáciles.
+  // Dos servidores que se parecen y no son iguales: mismo nombre de app con
+  // otro commit, el autodespliegue puesto sólo en uno, y una app de más en cada
+  // lado. Es el caso que hay que poder leer de un vistazo.
+  const LADO_A: App[] = (listaSana as Lista).apps.slice(0, 3)
+  const LADO_B: App[] = [
+    { ...LADO_A[0]!, state: { ...LADO_A[0]!.state, last_deploy_sha: 'f00ba7c0ffee', autodeploy: true } },
+    { ...LADO_A[1]! },
+    { ...LADO_A[2]!, name: 'solo-en-staging', domain: 'pruebas.ejemplo.com' },
+  ]
+
   const CRUDO_PASADA = [
     '{"event":"app","app":"tienda","status":"start","elapsed_s":0}',
     '{"event":"step","app":"tienda","step":"build","status":"start","elapsed_s":4}',
@@ -259,6 +270,47 @@
       <Despliegue app="tienda" servidor="vps-ovh" progreso={leerProgreso('')} resultado={r as Obj} />
     </div>
   {/each}
+
+  <h2>Comparar dos servidores</h2>
+  <p class="nota">
+    La regla que sostiene esta pantalla es la del cliente multiservidor: la clave
+    es <code>servidor:app</code> y <strong>nunca la app sola</strong>, porque
+    «tienda» existe en tres servidores y son tres apps distintas. Aquí se ponen
+    dos a la misma altura a propósito, así que el alias va escrito en la cabecera
+    de cada columna y no se quita nunca — el color es el refuerzo, no la señal.
+  </p>
+  <div class="panel">
+    <Comparar
+      a="produccion"
+      b="staging"
+      appsA={LADO_A}
+      appsB={LADO_B}
+      candidatos={['staging']}
+      alElegir={() => {}}
+      alCerrar={() => {}}
+    />
+  </div>
+
+  <h3>Cuando el otro no contesta</h3>
+  <p class="nota">
+    <strong>Media comparación no es una comparación.</strong> Si se enseñara la
+    lista del que sí contestó con los huecos del otro en blanco, todas sus apps
+    saldrían como «sólo en produccion» — y eso invita a crearlas otra vez en un
+    servidor donde puede que ya existan. Es el mismo error que confundir «al día»
+    con «sin contacto», con peores consecuencias.
+  </p>
+  <div class="panel">
+    <Comparar
+      a="produccion"
+      b="staging"
+      appsA={LADO_A}
+      appsB={null}
+      fallo={{ clase: 'no-llego', mensaje: 'ssh: connect to host staging port 22: Connection timed out' }}
+      candidatos={['staging']}
+      alElegir={() => {}}
+      alCerrar={() => {}}
+    />
+  </div>
 
   <h2>La pasada por todas las apps</h2>
   <p class="nota">

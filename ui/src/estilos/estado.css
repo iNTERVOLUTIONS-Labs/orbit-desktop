@@ -213,3 +213,13 @@
    uno que se deja detectar. Son dos respuestas distintas y tienen que verse
    distintas: un campo de texto en blanco no puede significar las dos cosas. */
 .anulacion--vacia { --anulacion: var(--st-warn); }
+
+/* Los dos lados de una comparación.
+
+   Va aquí porque «de qué servidor es esta celda» es la distinción más cara de
+   perder de todo el cliente multiservidor: la clave es `servidor:app` y nunca
+   la app sola, y esta pantalla pone dos servidores a la misma altura a
+   propósito. El color es el refuerzo, no la señal — la señal es el alias
+   escrito en la cabecera de cada columna, que no se quita nunca. */
+.lado--a { --comparado-a: var(--accent-text); }
+.lado--b { --comparado-b: var(--st-warn); }

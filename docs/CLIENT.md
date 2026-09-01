@@ -3325,9 +3325,16 @@ la 5. Es lo único de la fase 5 que se adelanta.
 
 ### Fase 6+ · lo que queda, sin fecha
 
-Diferencias entre servidores (comparar dos), acciones en lote sobre varias apps, gráficas
-históricas (que exigirían guardar algo en el cliente, lo cual es una decisión aparte), integración
-con el `orbit.json` de `orbit init`, y el `orbit-desktop-tui` del §2.4.
+Las diferencias entre servidores y las acciones en lote **ya están hechas** —ver `ROADMAP.md`— y
+las dos salieron con el mismo hallazgo debajo, que es el que este documento ya nombraba como el
+más valioso del producto: la diferencia entre *no hay nada* y *no he podido preguntar*. En el lote
+son dos de los seis finales; en la comparación es la decisión de no comparar nada cuando uno de los
+dos lados no contesta.
+
+Queda: gráficas históricas (que exigirían guardar algo en el cliente, lo cual es una decisión
+aparte y no pequeña: hoy el cliente no persiste ningún dato del servidor, y eso es media hoja del
+modelo de amenazas), integración con el `orbit.json` de `orbit init`, y el `orbit-desktop-tui` del
+§2.4.
 
 ---
 

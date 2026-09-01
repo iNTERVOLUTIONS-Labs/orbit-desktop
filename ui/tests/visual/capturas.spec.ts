@@ -159,3 +159,14 @@ test('la pasada por todas las apps · tema dark', async ({ page }) => {
   await expect(page.locator('.cara .boton')).toBeVisible()
   await page.screenshot({ path: 'capturas/dark-pasada.png', fullPage: true })
 })
+
+test('comparar dos servidores · tema dark', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'vps-ovh', exact: true }).click()
+  await page.getByRole('button', { name: 'comparar' }).click()
+  // Elegir el otro es un gesto aparte: abrir la pantalla no habla con nadie.
+  await page.locator('.elegir button', { hasText: 'pruebas' }).click()
+  await expect(page.locator('.resumen')).toBeVisible()
+  await page.screenshot({ path: 'capturas/dark-comparar.png', fullPage: true })
+})

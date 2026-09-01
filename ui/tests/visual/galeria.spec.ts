@@ -70,3 +70,27 @@ for (const tema of ['dark', 'light'] as const) {
     expect(await detecta.textContent()).toContain('lo detecta Orbit')
   })
 }
+
+// Los dos lados de una comparación tienen que verse distintos, y además
+// llevarlo escrito. Misma comprobación que la del campo vaciado a propósito, y
+// por el mismo motivo: una regla de estado anidada pierde contra el <style> con
+// ámbito de un componente, y eso ya costó que un botón no saliera rojo.
+for (const tema of ['dark', 'light'] as const) {
+  test(`los dos lados de una comparación no se confunden · ${tema}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: tema })
+    await page.goto('/galeria.html')
+    await page.waitForSelector('.comparar .tabla')
+
+    const a = page.locator('.comparar th.lado--a').first()
+    const b = page.locator('.comparar th.lado--b').first()
+    const [ca, cb] = await Promise.all([
+      a.evaluate((n) => getComputedStyle(n).color),
+      b.evaluate((n) => getComputedStyle(n).color),
+    ])
+    expect(ca, 'dos servidores del mismo color son un servidor').not.toBe(cb)
+
+    // Y el color no es la señal: el alias va escrito en las dos cabeceras.
+    expect((await a.textContent())?.trim()).toBe('produccion')
+    expect((await b.textContent())?.trim()).toBe('staging')
+  })
+}

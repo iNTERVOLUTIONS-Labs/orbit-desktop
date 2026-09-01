@@ -19,6 +19,7 @@
   import AltaServidores from './componentes/AltaServidores.svelte'
   import AsistenteNueva from './componentes/AsistenteNueva.svelte'
   import Pasada from './componentes/Pasada.svelte'
+  import Comparar from './componentes/Comparar.svelte'
   import LoDetectado from './componentes/LoDetectado.svelte'
   import Desenlace from './componentes/Desenlace.svelte'
   import { clasificar, type Borrador, type Desenlace as Final } from './lib/asistente'
@@ -200,6 +201,43 @@
   function pararPasada() {
     // El asterisco otra vez: es la app con la que se registró en `Vivos`.
     void cancelar(alias, '*')
+  }
+
+  // Comparar con otro servidor. Los dos lados se guardan por separado y con su
+  // alias al lado: la clave de este cliente es `servidor:app` y nunca la app
+  // sola, y ésta es la única pantalla donde dos servidores están a la misma
+  // altura.
+  let enComparar = $state(false)
+  let otro = $state<string | null>(null)
+  let appsOtro = $state<App[] | null>(null)
+  let falloOtro = $state<ErrorDelPuente | null>(null)
+  let comparando = $state(false)
+
+  async function compararCon(x: string) {
+    otro = x
+    // A null y no a []: mientras no conteste no se sabe lo que tiene, y una
+    // lista vacía querría decir «no tiene ninguna app».
+    appsOtro = null
+    falloOtro = null
+    comparando = true
+    try {
+      appsOtro = (await portada(x)).apps
+    } catch (e) {
+      // El fallo se guarda **aparte** del error general de la aplicación: que
+      // el otro servidor no conteste no rompe la pantalla del que sí, y la
+      // comparación tiene que poder decir exactamente eso.
+      falloOtro = e as ErrorDelPuente
+    } finally {
+      comparando = false
+    }
+  }
+
+  function cerrarComparar() {
+    enComparar = false
+    otro = null
+    appsOtro = null
+    falloOtro = null
+    comparando = false
   }
 
   function cerrarPasada() {
@@ -475,12 +513,20 @@
     <AvisoDeCierre />
     <header class="cabecera">
       <h1>
-        {enAlta ? 'Servidores' : enNueva ? 'Nueva web' : enPasada ? 'Desplegar todo' : alias || '—'}
+        {enAlta
+          ? 'Servidores'
+          : enNueva
+            ? 'Nueva web'
+            : enPasada
+              ? 'Desplegar todo'
+              : enComparar
+                ? 'Comparar'
+                : alias || '—'}
       </h1>
-      {#if apps && vista === 'apps' && !enAlta && !enNueva && !enPasada}
+      {#if apps && vista === 'apps' && !enAlta && !enNueva && !enPasada && !enComparar}
         <p class="cuenta">{apps.length} {apps.length === 1 ? 'app' : 'apps'}</p>
       {/if}
-      {#if !enAlta && !enNueva && !enPasada}
+      {#if !enAlta && !enNueva && !enPasada && !enComparar}
       <nav class="vistas" aria-label="Qué mirar de este servidor">
         <button type="button" class:activo={vista === 'apps'} onclick={() => (vista = 'apps')}>
           apps
@@ -496,13 +542,28 @@
             nueva web
           </button>
           <button type="button" onclick={() => (enPasada = true)}>desplegar todo</button>
+          {#if servidores.length > 1}
+            <button type="button" onclick={() => (enComparar = true)}>comparar</button>
+          {/if}
         {/if}
       </nav>
       {/if}
     </header>
 
     <section class="panel">
-      {#if enPasada}
+      {#if enComparar}
+        <Comparar
+          a={alias}
+          b={otro}
+          appsA={apps ?? []}
+          appsB={appsOtro}
+          fallo={falloOtro}
+          cargando={comparando}
+          candidatos={servidores.map((x) => x.alias).filter((x) => x !== alias)}
+          alElegir={compararCon}
+          alCerrar={cerrarComparar}
+        />
+      {:else if enPasada}
         <Pasada
           servidor={alias}
           apps={apps ?? []}
@@ -598,7 +659,7 @@
       {/if}
     </section>
 
-    {#if elegida && vista === 'apps' && !enNueva && !enPasada}
+    {#if elegida && vista === 'apps' && !enNueva && !enPasada && !enComparar}
       <section class="panel panel--detalle">
         <nav class="pestanas" aria-label="Qué mirar de esta app">
           <button type="button" class:activo={pestana === 'detalle'} onclick={() => (pestana = 'detalle')}>
