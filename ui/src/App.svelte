@@ -20,6 +20,7 @@
   import AsistenteNueva from './componentes/AsistenteNueva.svelte'
   import Pasada from './componentes/Pasada.svelte'
   import Comparar from './componentes/Comparar.svelte'
+  import OrbitJson from './componentes/OrbitJson.svelte'
   import LoDetectado from './componentes/LoDetectado.svelte'
   import Desenlace from './componentes/Desenlace.svelte'
   import { clasificar, type Borrador, type Desenlace as Final } from './lib/asistente'
@@ -271,7 +272,7 @@
       comprobando = null
     }
   }
-  let pestana = $state<'detalle' | 'log' | 'entorno' | 'trafico' | 'exec' | 'retirar' | 'revertir' | 'despliegue'>('detalle')
+  let pestana = $state<'detalle' | 'log' | 'entorno' | 'trafico' | 'exec' | 'retirar' | 'revertir' | 'despliegue' | 'descriptor'>('detalle')
 
   // La hoja de comando de un despliegue. Se enseña la orden literal ANTES de
   // ejecutarla: es la prueba visible de que esto sólo invoca `orbit`.
@@ -404,6 +405,33 @@
       const [d, e] = await Promise.all([
         pedirDetalle(alias, a.name),
         cual === 'retirar' ? pedirEntorno(alias, a.name) : Promise.resolve(null),
+      ])
+      detalleApp = d
+      if (e) entorno = e
+    } catch (err) {
+      error = err as ErrorDelPuente
+    }
+  }
+
+  /**
+   * El descriptor, para poder generar el `orbit.json` de una app que ya
+   * funciona.
+   *
+   * Pide las dos cosas a la vez porque las dos hacen falta y son de la misma
+   * app: `info` trae la configuración y `env list` los **nombres** de las
+   * variables. Los valores no se piden, y no por prudencia: el contrato no los
+   * deja pasar.
+   *
+   * Si `env list` falla, el descriptor se enseña igual y el fichero sale sin su
+   * bloque `env`, diciendo que falta. Media respuesta es mejor que ninguna
+   * mientras se sepa cuál es la mitad que falta.
+   */
+  async function verDescriptor(a: App) {
+    pestana = 'descriptor'
+    try {
+      const [d, e] = await Promise.all([
+        detalleApp?.name === a.name ? Promise.resolve(detalleApp) : pedirDetalle(alias, a.name),
+        entorno?.app === a.name ? Promise.resolve(entorno) : pedirEntorno(alias, a.name).catch(() => null),
       ])
       detalleApp = d
       if (e) entorno = e
@@ -674,6 +702,9 @@
           <button type="button" class:activo={pestana === 'trafico'} onclick={() => verTrafico(elegida!)}>
             tráfico
           </button>
+          <button type="button" class:activo={pestana === 'descriptor'} onclick={() => verDescriptor(elegida!)}>
+            orbit.json
+          </button>
           <button type="button" class:activo={pestana === 'exec'} onclick={() => (pestana = 'exec')}>
             exec
           </button>
@@ -694,6 +725,8 @@
         </nav>
         {#if pestana === 'detalle'}
           <DetalleApp app={elegida} servidor={alias} />
+        {:else if pestana === 'descriptor'}
+          <OrbitJson app={elegida.name} info={detalleApp} {entorno} />
         {:else if pestana === 'entorno'}
           {#if entorno}
             <div class="log-envoltorio">

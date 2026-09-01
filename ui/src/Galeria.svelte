@@ -10,12 +10,14 @@
   import LoteVista from './componentes/Lote.svelte'
   import Pasada from './componentes/Pasada.svelte'
   import Comparar from './componentes/Comparar.svelte'
+  import OrbitJson from './componentes/OrbitJson.svelte'
   import HojaDeComando from './componentes/HojaDeComando.svelte'
   import Desenlace from './componentes/Desenlace.svelte'
   import AsistenteNueva from './componentes/AsistenteNueva.svelte'
   import LoDetectado from './componentes/LoDetectado.svelte'
   import { borradorNuevo, clasificar, PASOS, type Borrador } from './lib/asistente'
-  import type { AppInfo } from './lib/contrato'
+  import type { AppInfo, Info } from './lib/contrato'
+  import infoMuestra from './lib/muestras/info.json'
   import { leerProgreso } from './lib/despliegue'
   import type { Despliegue as Obj, Lote } from './lib/contrato'
   import loteMuestra from './lib/muestras/deploy-all.json'
@@ -114,6 +116,33 @@
   // Dos servidores que se parecen y no son iguales: mismo nombre de app con
   // otro commit, el autodespliegue puesto sólo en uno, y una app de más en cada
   // lado. Es el caso que hay que poder leer de un vistazo.
+  // Una app con todo lo que el descriptor puede traer: un monorepo, cosas que
+  // la app escribe en marcha, y una especificación de variables que ya existía.
+  // Es el caso que hay que poder mirar, porque el mínimo se lee solo.
+  const INFO_RICA: AppInfo = {
+    name: 'tienda',
+    path: '/srv/apps/tienda',
+    config: {
+      type: 'laravel',
+      appdir: 'apps/web',
+      build: 'composer install --no-dev && npm ci && npm run build',
+      start: '',
+      outdir: '',
+      docroot: 'public',
+      spa: '',
+      php: 'yes',
+      shared: 'storage/app storage/logs public/uploads',
+      env_file: '.env',
+      env_spec: [
+        'APP_KEY\tgenerate\t32\tsecret\tClave de cifrado de Laravel',
+        'DB_PASSWORD\tprompt\tContraseña de la base de datos\tsecret\t',
+        'APP_ENV\tprompt\tEntorno (production, staging…)\tplain\t',
+      ].join('\n'),
+    },
+    state: (infoMuestra as Info).app.state,
+    releases: ['20260830-120000'],
+  }
+
   const LADO_A: App[] = (listaSana as Lista).apps.slice(0, 3)
   const LADO_B: App[] = [
     { ...LADO_A[0]!, state: { ...LADO_A[0]!.state, last_deploy_sha: 'f00ba7c0ffee', autodeploy: true } },
@@ -270,6 +299,44 @@
       <Despliegue app="tienda" servidor="vps-ovh" progreso={leerProgreso('')} resultado={r as Obj} />
     </div>
   {/each}
+
+  <h2>El orbit.json de una app que ya funciona</h2>
+  <p class="nota">
+    <code>orbit init</code> escribe este fichero <strong>volviendo a
+    detectar</strong> sobre el repositorio, o sea haciendo exactamente lo mismo
+    que se equivocó la primera vez. Esto no detecta nada: lee el descriptor de
+    una app que está desplegada y sirviendo, incluidos los campos que alguien
+    arregló a mano.
+  </p>
+  <p class="nota">
+    El bloque <code>env</code> lleva <strong>nombres y no valores</strong>, y no
+    por prudencia: el contrato sólo deja pasar los nombres. Y una especificación
+    que ya existía se reproduce en vez de aplanarse — donde había
+    <code>generate</code> no puede quedar <code>prompt</code>, porque eso cambia
+    el significado en silencio.
+  </p>
+  <div class="panel">
+    <OrbitJson
+      app="tienda"
+      info={INFO_RICA}
+      entorno={{ schema: 1, app: 'tienda', keys: ['APP_KEY', 'DB_PASSWORD', 'APP_ENV', 'MAIL_FROM'] }}
+    />
+  </div>
+
+  <h3>Cuando el descriptor no dice el tipo</h3>
+  <p class="nota">
+    <strong>Sin <code>type</code>, Orbit ignora el fichero entero</strong> y
+    vuelve a detectar como si no existiera. El fichero se ve igual de bien, se
+    sube tal cual, y el hueco aparece tres despliegues más tarde — así que se
+    dice aquí.
+  </p>
+  <div class="panel">
+    <OrbitJson
+      app="tienda"
+      info={{ ...INFO_RICA, config: { ...INFO_RICA.config, type: '' } }}
+      entorno={null}
+    />
+  </div>
 
   <h2>Comparar dos servidores</h2>
   <p class="nota">

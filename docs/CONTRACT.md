@@ -1090,5 +1090,56 @@ que diga el código de salida. Es más fiable que parsear `_new_undeployed`, es 
 300 ms sobre un comando que ha tardado tres minutos, y **es la única forma que no depende del
 idioma**.
 
+
+### 1.15 El `orbit.json`, y por qué el cliente lo puede escribir mejor que `orbit init`
+
+`_read_descriptor` (1808-1842) y `_read_env_block` (1844-1862). Es el fichero que un repositorio
+lleva dentro para que su configuración de despliegue viaje con el código, y **manda sobre la
+detección**.
+
+**Las claves que lee, y ninguna más:** `type`, `appdir`, `build`, `start`, `outdir`, `spa`,
+`docroot`, `php`, `shared`, y el bloque `env`. Las tres rutas —`appdir`, `outdir`, `docroot`— pasan
+por `_dpath`, o sea por `_safe_relpath`; el resto son cadenas y valen tal cual.
+
+**Tiene tres formas de ignorarlo en silencio, y las tres importan a un cliente que lo genere:**
+
+1. **Sin `type` se descarta el fichero entero** (última línea de `_read_descriptor`). Un
+   `orbit.json` con `build` y `start` pero sin `type` se sube, se ve perfecto y no hace nada.
+2. **Sin `jq` no se abre** (1810). Avisa y sigue con la detección; no falla.
+3. **Una ruta que no pasa `_safe_relpath` se salta con un aviso** (1820), no se corrige. La regla
+   es `^[A-Za-z0-9._][A-Za-z0-9._-]*(/…)*$`, sin absolutas y sin `..` — el guion inicial está
+   descartado a propósito, porque una carpeta llamada `-rf` convierte el `cd` del build en un
+   puñado de opciones.
+
+**Y una asimetría que no es evidente: el descriptor puede contener rutas que el `orbit.json` no
+admite.** `--appdir` sí se valida al crear la app (7017), pero `--outdir` y `--docroot` no pasan
+por `_safe_relpath` en `cmd_new`, y la detección escribe lo que encuentra. O sea que una app
+**desplegada y sirviendo** puede tener un `outdir` que, copiado a un `orbit.json`, el despliegue
+descartaría. Un cliente que reproduzca el descriptor tiene que aplicar la regla del fichero y no la
+del descriptor, o produce un fichero que se ve bien y publica otra carpeta.
+
+**El bloque `env` es una especificación, no un almacén.** `.env.vars.CLAVE` declara `generate`
+(longitud del secreto), `prompt` (qué preguntar), `secret` y `desc`; Orbit lo convierte en un TSV
+—`CLAVE⇥modo⇥argumento⇥secreto⇥descripción`— que guarda en el descriptor como `env_spec`. **Ahí no
+hay valores en ningún momento**, y por eso es el único sitio del producto donde un cliente puede
+ayudar con las variables de entorno sin romper §13.2: los **nombres** cruzan el contrato
+(`env list --json`), los valores no.
+
+Dos consecuencias para el cliente:
+
+- **Puede generar el `orbit.json` de una app que ya funciona**, leyendo `info --json`. Y eso es
+  estrictamente mejor que `orbit init`, que vuelve a correr la detección sobre el repositorio: si
+  la detección se equivocó al crear la app, se equivoca otra vez igual. El descriptor de una app
+  desplegada tiene además los campos que alguien arregló a mano, que es justo lo que `orbit init`
+  no puede saber.
+- **No puede aplanar una especificación que ya existía.** Si `env_spec` trae `generate`, escribir
+  `prompt` en su lugar cambia el significado en silencio: donde había «esto se genera solo» queda
+  «pregúntaselo a alguien». Se lee el TSV y se reproduce.
+
+Un detalle del TSV que cuesta un rato encontrar: **`@tsv` no pone tabulador detrás del último
+campo**, así que una fila cuya descripción está vacía sale con cuatro columnas y no con cinco. El
+servidor no lo nota porque `$( )` recorta saltos y no tabuladores, y porque su lector usa `read -r`
+con `IFS=$'\t'`; un cliente que haga `trimEnd()` sobre esa salida sí lo nota, y de la peor forma:
+pierde el último campo de la última variable.
 ---
 

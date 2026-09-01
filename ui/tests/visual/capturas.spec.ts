@@ -170,3 +170,13 @@ test('comparar dos servidores · tema dark', async ({ page }) => {
   await expect(page.locator('.resumen')).toBeVisible()
   await page.screenshot({ path: 'capturas/dark-comparar.png', fullPage: true })
 })
+
+test('el orbit.json de una app · tema dark', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'vps-ovh', exact: true }).click()
+  await page.locator('.celda-nombre .enlace').first().click()
+  await page.getByRole('button', { name: 'orbit.json' }).click()
+  await expect(page.locator('.fichero')).toBeVisible()
+  await page.screenshot({ path: 'capturas/dark-orbitjson.png', fullPage: true })
+})

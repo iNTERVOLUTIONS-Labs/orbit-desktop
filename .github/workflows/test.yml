@@ -198,6 +198,15 @@ jobs:
       - name: Node
         run: node --version && npm --version
 
+      - name: jq, que una de las pruebas necesita de verdad
+        # La prueba del `orbit.json` generado no comprueba que el objeto tenga
+        # las claves que yo creo: ejecuta **las expresiones literales de
+        # `_read_descriptor`** contra el fichero. Sin jq no comprueba nada, y por
+        # eso falla en vez de saltarse — la lección del `make test-strict` de
+        # Orbit, que ya se comió que una suite se saltara `jq`, `rsync` y
+        # `nginx` y saliera en verde.
+        run: jq --version || (sudo apt-get update -qq && sudo apt-get install -y -qq jq)
+
       - name: Dependencias, con el lockfile congelado
         # Un build que resuelve versiones es un build que puede traer otra cosa
         # hoy que ayer.

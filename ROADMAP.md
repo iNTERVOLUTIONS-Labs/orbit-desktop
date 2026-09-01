@@ -283,12 +283,60 @@ servidores y no dice nada, y una lista de diferencias con ruido es una lista que
 se deja de leer. `cert_days` tampoco se puede comparar aunque se quisiera: es
 `null` en `list` y en `status` siempre, y sólo lo calcula `info`.
 
+## Fase 6b · El `orbit.json`, escrito desde lo que ya funciona ✅
+
+`orbit init` escribe ese fichero **volviendo a detectar** sobre el repositorio,
+en el portátil de quien lo ejecuta. Y ahí está su límite: la detección se
+equivoca en un monorepo, con un adaptador o con un arranque propio, y `orbit
+init` se equivoca **otra vez igual**, porque hace exactamente lo mismo.
+
+El cliente puede hacerlo al revés, y es la única ventaja que tiene sobre esa
+orden: leer el descriptor de una app **que está desplegada y sirviendo**, o sea
+la configuración que de verdad funciona, incluidos los campos que alguien
+arregló a mano después de que la detección fallara. Eso no lo puede saber un
+comando que corre sobre un directorio.
+
+No escribe nada: genera el texto y se copia. Ni en el servidor ni en el
+repositorio de nadie — la misma regla que la orden de instalación de la pantalla
+de servidores.
+
+**El bloque `env` lleva nombres y no valores**, y no por prudencia: es que el
+bloque `env` de un `orbit.json` es una *especificación* —qué variables hacen
+falta y cómo obtenerlas— y no un almacén. Es el único sitio del producto donde
+un cliente puede ayudar con las variables de entorno sin romper la regla de los
+secretos, porque los nombres sí cruzan el contrato y los valores no. El fichero
+generado se puede subir a un repositorio público sin pensárselo.
+
+Lo que costó encontrar, y lo que la pantalla dice por eso:
+
+**El lector tiene tres formas de ignorar el fichero en silencio.** Sin `type` lo
+descarta entero; sin `jq` no lo abre; y una ruta que no pasa `_safe_relpath` la
+salta con un aviso. Las tres se avisan donde se decide subirlo, porque quien lo
+pegue en su repositorio ya no está mirando esta pantalla.
+
+**El descriptor puede contener rutas que el `orbit.json` no admite.** `--appdir`
+se valida al crear la app, pero `--outdir` y `--docroot` no. O sea que una app
+desplegada y sirviendo puede tener un `outdir` que, copiado al fichero, el
+despliegue descartaría. Así que esas claves se validan con la regla **del
+fichero** y, si no pasan, no se emiten y se dice cuál era: emitirla sería lo peor
+de las tres opciones, porque el fichero se ve bien, se sube, y la carpeta que
+publica no es la que pone ahí.
+
+**Una especificación que ya existía no se aplana.** Si `env_spec` trae
+`generate`, poner `prompt` en su lugar cambia el significado en silencio.
+
+Y la prueba que sostiene todo lo anterior **no comprueba que el objeto tenga las
+claves que yo creo**: ejecuta las expresiones literales de `_read_descriptor` y
+`_read_env_block` —con `jq`, contra el fichero generado— y mira qué valores
+salen al otro lado. Si no hay `jq`, falla en vez de saltarse: es la lección del
+`make test-strict` de Orbit, que ya se comió que una suite se saltara `jq`,
+`rsync` y `nginx` y saliera en verde.
+
 ## Fase 7 y más allá 💭
 
 - 💭 **Gráficas históricas**, que exigirían que el cliente guarde algo. Es una
   decisión aparte y no pequeña: hoy el cliente no persiste ningún dato del
   servidor, y eso es media hoja del modelo de amenazas
-- 💭 **Integración con el `orbit.json` de `orbit init`**
 - 💭 **Una TUI** que reutilice el mismo núcleo. Es gratis si el núcleo vive en un
   crate aparte de la interfaz, y por eso vive así
 
