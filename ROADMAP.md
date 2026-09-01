@@ -235,10 +235,27 @@ nueva. Retirar una app, con la confirmación reforzada que el servidor ya no da:
 terminal que este cliente sustituye. Certificados, redirecciones, bases de datos,
 copias, colas y vigilancia.
 
-## Fase 5 · Distribuir 📋
+## Fase 5 · Distribuir 🚧
 
 Firma en las tres plataformas, notarización, y el actualizador con verificación
 de firma y la clave pública empotrada en el binario.
+
+**Partida en dos, y sólo una mitad se puede hacer hoy.** Compilar en las tres
+plataformas sí: está en `.github/workflows/paquetes.yml`, con sus paquetes y sus
+dependencias declaradas —un `.deb` sin `libwebkit2gtk` instala y deja la ventana
+en blanco, que parece un defecto de la aplicación y es una dependencia que falta.
+
+Firmar, notarizar y actualizar **no**, y no está escrito a medias a propósito. Un
+workflow con tres secretos vacíos y un `continue-on-error` no es media solución:
+es una que sale en verde sin haber hecho nada, y el día que existan las
+credenciales nadie comprobaría que funciona porque «ya estaba puesto». Lo mismo
+con el actualizador: enchufar el plugin hoy sería añadir una dependencia **al
+proceso que sostiene las claves SSH del usuario** —el argumento con el que se
+descartó Electron— configurada con una clave pública que no existe y apuntando a
+un endpoint que tampoco. Se añade cuando haya clave.
+
+Qué hace falta, secreto a secreto, y en qué orden conviene pedirlo, está en
+[docs/DISTRIBUCION.md](docs/DISTRIBUCION.md).
 
 **Va al final, con una excepción.** Firmar y notarizar es un trabajo que no se
 paraleliza y que no aporta nada mientras no haya producto; hacerlo con el

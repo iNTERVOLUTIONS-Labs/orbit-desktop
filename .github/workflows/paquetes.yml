@@ -1,0 +1,115 @@
+name: paquetes
+
+# Compilar en las tres plataformas, que es la mitad de la fase 5 que **se puede
+# comprobar sin credenciales de firma**.
+#
+# La otra mitad —firmar, notarizar, publicar el actualizador— necesita cuentas de
+# Apple y de Microsoft y una clave de minisign que no existen todavía, y está
+# documentada en docs/DISTRIBUCION.md en vez de escrita a medias aquí. Un
+# workflow con tres secretos vacíos y un `continue-on-error` no es media
+# solución: es una que sale en verde sin haber hecho nada.
+#
+# Lo que sí se sabe hoy, y sólo se sabe ejecutándolo, es si el código compila en
+# macOS y en Windows. Nunca se ha compilado ahí. Averiguarlo cuesta una tanda y
+# evita descubrirlo el día que haya prisa por publicar.
+
+on:
+  # No en cada push: son tres runners y dos de ellos cuestan varias veces lo que
+  # un ubuntu. Se lanza a mano, y automáticamente al etiquetar una versión.
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  compilar:
+    name: ${{ matrix.nombre }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Sin `fail-fast`: si Windows falla, se quiere saber igualmente si macOS
+      # compila. Cancelar los otros dos convierte tres respuestas en una.
+      fail-fast: false
+      matrix:
+        include:
+          - nombre: Linux (deb + AppImage)
+            runner: ubuntu-latest
+          - nombre: macOS (Apple Silicon)
+            runner: macos-latest
+          - nombre: Windows (NSIS)
+            runner: windows-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      - name: Lo que Tauri necesita en Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libssl-dev pkg-config
+
+      - name: La interfaz
+        run: |
+          npm --prefix ui ci --no-audit --no-fund
+          npm --prefix ui run build
+
+      - name: El paquete
+        # `--no-bundle` NO: el bundle es justo lo que hay que probar. Lo que se
+        # omite es la firma, que es lo que no se puede hacer todavía.
+        run: |
+          cargo install tauri-cli --version "^2" --locked
+          cargo tauri build --config crates/orbit-app/tauri.conf.json
+
+      - name: Qué ha salido
+        shell: bash
+        run: |
+          echo "### ${{ matrix.nombre }}" >> "$GITHUB_STEP_SUMMARY"
+          find target -path '*release/bundle/*' -type f \
+            \( -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.exe' \) \
+            -printf '%f  %s bytes\n' 2>/dev/null \
+            || find target -path '*release/bundle/*' -type f \
+                 \( -name '*.dmg' -o -name '*.exe' \) -exec ls -l {} \; 2>/dev/null \
+            || echo "(sin paquetes: mira el log del paso anterior)"
+          {
+            echo '```'
+            find target -path '*release/bundle/*' -type f | sed 's|.*/||' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: paquetes-${{ runner.os }}
+          path: |
+            target/release/bundle/**/*.deb
+            target/release/bundle/**/*.AppImage
+            target/release/bundle/**/*.dmg
+            target/release/bundle/**/*.exe
+          if-no-files-found: warn
+
+  terminal:
+    # El cliente de terminal se compila aparte y en los tres sitios: no depende
+    # de Tauri ni de WebKitGTK, así que su matriz es mucho más barata y su fallo
+    # diría algo distinto — sería del núcleo, no del envoltorio.
+    name: terminal · ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - run: cargo build -p orbit-tui --release
+      - name: Y arranca
+        # Que compile no es que arranque. `ayuda` no toca la red ni el disco, así
+        # que vale en cualquier runner.
+        run: cargo run -p orbit-tui --release -- ayuda

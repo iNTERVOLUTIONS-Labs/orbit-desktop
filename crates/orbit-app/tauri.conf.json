@@ -25,7 +25,37 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "appimage"],
-    "icon": ["icons/icon.png"]
+    "targets": [
+      "deb",
+      "appimage",
+      "dmg",
+      "app",
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.png"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "Un cliente de escritorio para Orbit",
+    "longDescription": "Ver, desplegar y operar las webs de tus servidores Orbit desde una ventana. Habla con ellos por el `ssh` del sistema y por el contrato `--json` de Orbit: no instala nada en el servidor y no abre ningún puerto.",
+    "copyright": "© INTERVOLUTIONS",
+    "publisher": "INTERVOLUTIONS",
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "openssh-client"
+        ]
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   }
 }
