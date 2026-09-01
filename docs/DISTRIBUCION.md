@@ -41,6 +41,33 @@ Produce, sin firmar:
 El cliente de terminal se compila en una matriz aparte, y su fallo diría algo
 distinto: no depende de Tauri ni de WebKitGTK, así que si rompe es del núcleo.
 
+### Lo que pesan, medido
+
+| Paquete | Tamaño |
+|---|---|
+| `Orbit Desktop_0.1.0_amd64.deb` | **1,8 MB** |
+| `Orbit Desktop_0.1.0_aarch64.dmg` | **1,9 MB** |
+| `Orbit Desktop_0.1.0_x64-setup.exe` | **1,4 MB** |
+| `Orbit Desktop_0.1.0_amd64.AppImage` | 78 MB |
+
+**Ése es el argumento con el que se eligió Tauri sobre Electron, por fin
+medido.** Los tres primeros pesan lo que pesan porque usan el motor web **del
+sistema** —WebView2, WKWebView, WebKitGTK— en vez de llevarse uno dentro; una
+aplicación de Electron equivalente ronda los 85 MB *por plataforma*. El AppImage
+es el único grande, y por definición: existe justo para no depender de nada de
+la máquina.
+
+### Dos huecos conocidos
+
+**El `.dmg` es sólo para Apple Silicon.** `macos-latest` es ARM, así que un Mac
+con Intel no tiene paquete. Se arregla con un `--target universal-apple-darwin`
+y compilando las dos arquitecturas, y cuesta tiempo de runner: conviene decidirlo
+sabiendo a quién se reparte.
+
+**El instalador de Windows no trae WebView2.** Lo instala si falta, descargándolo
+—que es lo que hace su modo por defecto— así que una máquina sin conexión y sin
+WebView2 se queda a medias. La alternativa es empotrarlo, y son unos 150 MB.
+
 ## 2. Lo que falta, secreto a secreto
 
 ### 2.1 macOS · firma y notarización

@@ -254,8 +254,19 @@ proceso que sostiene las claves SSH del usuario** —el argumento con el que se
 descartó Electron— configurada con una clave pública que no existe y apuntando a
 un endpoint que tampoco. Se añade cuando haya clave.
 
-Qué hace falta, secreto a secreto, y en qué orden conviene pedirlo, está en
-[docs/DISTRIBUCION.md](docs/DISTRIBUCION.md).
+La matriz corre en verde en las tres, y produce paquetes de verdad: 1,8 MB de
+`.deb`, 1,9 MB de `.dmg`, 1,4 MB de `.exe` y 78 MB de AppImage. **Ése es el
+argumento con el que se eligió Tauri sobre Electron, medido por fin**: los tres
+primeros pesan eso porque usan el motor web del sistema, y un Electron
+equivalente ronda los 85 MB por plataforma.
+
+Ponerla en marcha destapó dos cosas que nadie sabía porque **nunca se había
+empaquetado**: el `beforeBuildCommand` estaba mal desde el primer día, y no había
+`icon.ico` — sin el cual `tauri-build` aborta, o sea que este proyecto no podía
+compilarse para Windows.
+
+Qué hace falta para firmar, secreto a secreto, y en qué orden conviene pedirlo,
+está en [docs/DISTRIBUCION.md](docs/DISTRIBUCION.md).
 
 **Va al final, con una excepción.** Firmar y notarizar es un trabajo que no se
 paraleliza y que no aporta nada mientras no haya producto; hacerlo con el
