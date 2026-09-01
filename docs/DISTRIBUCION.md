@@ -46,7 +46,7 @@ distinto: no depende de Tauri ni de WebKitGTK, así que si rompe es del núcleo.
 | Paquete | Tamaño |
 |---|---|
 | `Orbit Desktop_0.1.0_amd64.deb` | **1,8 MB** |
-| `Orbit Desktop_0.1.0_aarch64.dmg` | **1,9 MB** |
+| `Orbit Desktop_0.1.0_aarch64.dmg` | **1,9 MB** · sólo Apple Silicon, [a propósito](#macos-sólo-apple-silicon-y-es-una-decisión) |
 | `Orbit Desktop_0.1.0_x64-setup.exe` | **1,4 MB** |
 | `Orbit Desktop_0.1.0_amd64.AppImage` | 78 MB |
 
@@ -57,16 +57,26 @@ aplicación de Electron equivalente ronda los 85 MB *por plataforma*. El AppImag
 es el único grande, y por definición: existe justo para no depender de nada de
 la máquina.
 
-### Dos huecos conocidos
+### macOS: sólo Apple Silicon, y es una decisión
 
-**El `.dmg` es sólo para Apple Silicon.** `macos-latest` es ARM, así que un Mac
-con Intel no tiene paquete. Se arregla con un `--target universal-apple-darwin`
-y compilando las dos arquitecturas, y cuesta tiempo de runner: conviene decidirlo
-sabiendo a quién se reparte.
+`macos-latest` es ARM, así que el `.dmg` es `aarch64` y **un Mac con Intel no
+tiene paquete**. Está decidido así: no se compila universal.
 
-**El instalador de Windows no trae WebView2.** Lo instala si falta, descargándolo
-—que es lo que hace su modo por defecto— así que una máquina sin conexión y sin
-WebView2 se queda a medias. La alternativa es empotrarlo, y son unos 150 MB.
+Se podría —`--target universal-apple-darwin`, compilando las dos arquitecturas—
+y cuesta el doble de tiempo de runner y un binario que pesa el doble para que
+cada máquina use la mitad. A cambio de cubrir unos Mac que Apple dejó de vender
+en 2023 y a los que ya no lleva macOS nuevo.
+
+Si algún día hace falta, es un cambio de una línea en la matriz y este párrafo
+explica qué se está deshaciendo.
+
+### Un hueco conocido
+
+**El instalador de Windows no trae WebView2.** Lo instala si falta,
+descargándolo —que es lo que hace su modo por defecto— así que una máquina sin
+conexión y sin WebView2 se queda a medias. La alternativa es empotrarlo, y son
+unos 150 MB frente a los 1,4 de ahora. Se deja como está: una máquina donde se
+despliegan webs por SSH tiene conexión por definición.
 
 ## 2. Lo que falta, secreto a secreto
 
@@ -107,6 +117,9 @@ físico, así que «el `.pfx` en un secreto de GitHub» ya no es una opción par
 certificado nuevo: hay que usar un servicio de firma en la nube (Azure Trusted
 Signing, SSL.com eSigner…) y el workflow cambia de forma. **Conviene decidir eso
 antes de comprar el certificado, no después.**
+
+El paso a paso —qué pedir, a quién, qué papeles hacen falta y qué tarda cada
+cosa— está en [CERTIFICADO-WINDOWS.md](CERTIFICADO-WINDOWS.md).
 
 ### 2.3 El actualizador · minisign
 

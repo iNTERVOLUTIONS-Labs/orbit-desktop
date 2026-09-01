@@ -265,8 +265,13 @@ empaquetado**: el `beforeBuildCommand` estaba mal desde el primer día, y no hab
 `icon.ico` — sin el cual `tauri-build` aborta, o sea que este proyecto no podía
 compilarse para Windows.
 
-Qué hace falta para firmar, secreto a secreto, y en qué orden conviene pedirlo,
-está en [docs/DISTRIBUCION.md](docs/DISTRIBUCION.md).
+**macOS se compila sólo para Apple Silicon**, y está decidido así: compilar
+universal cuesta el doble de runner y un binario que pesa el doble para cubrir
+unos Mac que Apple dejó de vender en 2023.
+
+Qué hace falta para firmar, secreto a secreto, está en
+[docs/DISTRIBUCION.md](docs/DISTRIBUCION.md); y el papeleo del certificado de
+Windows, paso a paso, en [docs/CERTIFICADO-WINDOWS.md](docs/CERTIFICADO-WINDOWS.md).
 
 **Va al final, con una excepción.** Firmar y notarizar es un trabajo que no se
 paraleliza y que no aporta nada mientras no haya producto; hacerlo con el
