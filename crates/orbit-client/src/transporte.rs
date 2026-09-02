@@ -521,6 +521,114 @@ pub fn ejecutar_en_vivo(
     )
 }
 
+/// Ejecuta una línea **que no es del catálogo**, sirviendo su salida.
+///
+/// # Esto es la excepción, y se llama así para que no se confunda
+///
+/// Todo el resto del transporte pasa por [`Comando`], que es un enumerado
+/// cerrado: **la superficie de lo que este cliente le puede pedir a un servidor
+/// cabe en una pantalla y se revisa de un vistazo**. Esa propiedad es la que
+/// hace revisable el proyecto, y esta función la rompe.
+///
+/// Existe para **una sola cosa**: instalar Orbit en un servidor que todavía no
+/// lo tiene. Ahí no hay ningún `orbit` que invocar —ése es justo el problema que
+/// se va a resolver— así que el catálogo no puede expresarlo.
+///
+/// Tres cosas que la hacen aceptable, y que si algún día dejan de cumplirse
+/// convierten esto en la puerta trasera que el proyecto no quiere:
+///
+/// 1. **La línea la construye [`crate::instalar`]**, no quien llama. No hay
+///    ninguna forma de pasarle texto que venga de un campo de la interfaz.
+/// 2. **Se enseña entera antes de ejecutarla.** Es la misma regla que el repaso
+///    del asistente de web nueva.
+/// 3. **No se usa para leer nada.** Lo que este cliente sabe de un servidor sale
+///    del contrato y sólo del contrato. El día que alguien tape un hueco del
+///    contrato con esto, el cliente deja de hablar el contrato y pasa a hablar
+///    Bash contra un servidor cuyo layout puede cambiar.
+///
+/// La prueba de arquitectura comprueba que sólo la llama el instalador.
+pub fn ejecutar_crudo_en_vivo(
+    servidor: &Servidor,
+    linea: &str,
+    dir_control: Option<&str>,
+    en_curso: EnCurso,
+    al_llegar: impl FnMut(String) + Send + 'static,
+) -> Result<Respuesta, ErrorTransporte> {
+    let mut cmd = Command::new("ssh");
+    cmd.args(servidor.opciones_ssh(dir_control));
+    cmd.arg(&servidor.destino);
+    cmd.arg(linea);
+    // Sin plazo: instalar tarda entre cinco y diez minutos, y un tope corto
+    // mataría el proceso a mitad de un `apt` — que es exactamente el momento en
+    // que peor está un servidor.
+    //
+    // Y `Vena::Stdout`, porque aquí no hay `--json`: lo que dice el instalador
+    // es prosa para una persona y sale por donde sale la prosa.
+    ejecutar_sirviendo(
+        cmd,
+        Duration::MAX,
+        &servidor.binario,
+        Vena::Stdout,
+        en_curso,
+        al_llegar,
+    )
+}
+
+/// Lo mismo sin servir nada, para preguntas cortas.
+///
+/// Misma excepción y mismas tres condiciones que [`ejecutar_crudo_en_vivo`]. Se
+/// usa para la comprobación de requisitos, que es una línea fija de
+/// [`crate::instalar::COMPROBACION`].
+pub fn ejecutar_crudo(
+    servidor: &Servidor,
+    linea: &str,
+    dir_control: Option<&str>,
+) -> Result<Respuesta, ErrorTransporte> {
+    let mut cmd = Command::new("ssh");
+    cmd.args(servidor.opciones_ssh(dir_control));
+    cmd.arg(&servidor.destino);
+    cmd.arg(linea);
+    // Mismo motor que el resto, pero **sin clasificar**: ver abajo.
+    let r = match ejecutar_proceso(cmd, Duration::from_secs(30), &servidor.binario) {
+        Ok(r) => r,
+        // `clasificar` traduce los códigos de `orbit`, y aquí puede que ni
+        // exista: un 127 «command not found» es lo NORMAL en un servidor sin
+        // instalar, no un fallo. Se recupera la respuesta y se sigue.
+        Err(ErrorTransporte::OrbitNoEsta { stderr, .. }) => Respuesta {
+            stdout: String::new(),
+            stderr,
+            codigo: 127,
+        },
+        Err(ErrorTransporte::Orbit {
+            codigo,
+            stdout,
+            stderr,
+        }) => Respuesta {
+            stdout,
+            stderr,
+            codigo,
+        },
+        Err(e) => return Err(e),
+    };
+    // A propósito NO pasa por `clasificar`: esa función traduce los códigos de
+    // `orbit`, y aquí no hay ningún `orbit` — puede que ni exista todavía. Lo
+    // único que se reconoce es no haber llegado, que lo dice `ssh` y no el otro
+    // lado.
+    if r.codigo == 255 {
+        let e = r.stderr.to_lowercase();
+        if e.contains("remote host identification has changed")
+            || e.contains("host key verification failed")
+        {
+            return Err(ErrorTransporte::ClaveDeHostCambiada { detalle: r.stderr });
+        }
+        return Err(ErrorTransporte::NoLlego {
+            codigo: 255,
+            stderr: r.stderr,
+        });
+    }
+    Ok(r)
+}
+
 /// Dónde viven los sockets de `ControlMaster`.
 ///
 /// Vive en el núcleo y no en el envoltorio porque **es política del transporte**:

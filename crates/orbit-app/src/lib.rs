@@ -24,6 +24,7 @@
 
 use orbit_client::comando::{AjustesDeteccion, Anulacion, Comando, ModoDeExec, WebNueva};
 use orbit_client::descubrir;
+use orbit_client::{instalar, registro};
 // `dir_control` viene del núcleo: dónde viven los sockets de ControlMaster
 // es política del transporte, y compartirlo con el cliente de terminal es
 // justo lo que hace que el segundo reutilice la conexión del primero.
@@ -81,7 +82,14 @@ impl From<transporte::ErrorTransporte> for ErrorParaLaInterfaz {
 
 type Resultado = Result<serde_json::Value, ErrorParaLaInterfaz>;
 
-fn servidor(alias: &str, binario: Option<String>) -> Servidor {
+/// Un servidor que SÓLO puede estar en el `~/.ssh/config`.
+///
+/// No se llama directamente desde ninguna orden: la puerta es
+/// [`servidor_por_alias`], que mira además la lista propia. Un alias añadido a
+/// mano que pasara por aquí acabaría en un `ssh alias` que no resuelve nada, y
+/// el fallo diría «no he llegado al servidor» — que manda a buscar el problema
+/// a la red cuando está en el cliente.
+fn servidor_del_config(alias: &str, binario: Option<String>) -> Servidor {
     let mut s = Servidor::nuevo(alias, alias);
     if let Some(b) = binario {
         s.binario = b;
@@ -96,7 +104,7 @@ fn servidor(alias: &str, binario: Option<String>) -> Servidor {
 /// su gemelo de TypeScript, y meter aquí una tercera forma sería inventar un
 /// tercer contrato.
 fn pedir(alias: &str, binario: Option<String>, c: Comando) -> Resultado {
-    let s = servidor(alias, binario);
+    let s = servidor_por_alias(alias, binario);
     let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
     let texto = r.objeto()?;
     serde_json::from_str(texto).map_err(|e| ErrorParaLaInterfaz {
@@ -153,7 +161,7 @@ fn logs(
     desde: Option<String>,
     binario: Option<String>,
 ) -> Result<String, ErrorParaLaInterfaz> {
-    let s = servidor(&alias, binario);
+    let s = servidor_por_alias(&alias, binario);
     let c = Comando::Logs {
         app,
         desde,
@@ -212,7 +220,7 @@ async fn desplegar(
     let mando = EnCurso::nuevo();
     vivos.0.lock().unwrap().insert(clave.clone(), mando.clone());
 
-    let s = servidor(&alias, binario);
+    let s = servidor_por_alias(&alias, binario);
     let c = Comando::Desplegar {
         app: app.clone(),
         progreso: true,
@@ -297,7 +305,7 @@ async fn crear(
     let mando = EnCurso::nuevo();
     vivos.0.lock().unwrap().insert(clave.clone(), mando.clone());
 
-    let s = servidor(&alias, binario);
+    let s = servidor_por_alias(&alias, binario);
     let c = Comando::Nueva(Box::new(WebNueva {
         nombre: nombre.clone(),
         repo,
@@ -432,7 +440,7 @@ async fn desplegar_todo(
     let mando = EnCurso::nuevo();
     vivos.0.lock().unwrap().insert(clave.clone(), mando.clone());
 
-    let s = servidor(&alias, binario);
+    let s = servidor_por_alias(&alias, binario);
     let c = Comando::DesplegarTodo {
         progreso: true,
         solo_si_cambia,
@@ -551,6 +559,263 @@ pub struct Resolucion {
     pub coinciden: Option<bool>,
 }
 
+// ── los servidores que se añaden a mano ────────────────────────────────────
+//
+// Hasta ahora salían **sólo** del `~/.ssh/config`, y eso era un error de base
+// disfrazado de decisión elegante: mucha gente no tiene ese fichero, y en
+// Windows casi nadie. La aplicación abría vacía y sin salida.
+
+/// Un servidor de la lista propia, tal como cruza el puente.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct ServidorParaLaInterfaz {
+    pub alias: String,
+    pub host: String,
+    pub usuario: String,
+    pub puerto: u16,
+    /// La **ruta** de la clave. Nunca su contenido ni su frase de paso: eso no
+    /// cruza este puente en ninguna dirección.
+    pub clave: Option<String>,
+    pub binario: Option<String>,
+}
+
+impl From<registro::ServidorGuardado> for ServidorParaLaInterfaz {
+    fn from(s: registro::ServidorGuardado) -> Self {
+        Self {
+            alias: s.alias,
+            host: s.host,
+            usuario: s.usuario,
+            puerto: s.puerto,
+            clave: s.clave,
+            binario: s.binario,
+        }
+    }
+}
+
+impl From<ServidorParaLaInterfaz> for registro::ServidorGuardado {
+    fn from(s: ServidorParaLaInterfaz) -> Self {
+        Self {
+            alias: s.alias,
+            host: s.host,
+            usuario: s.usuario,
+            puerto: s.puerto,
+            clave: s.clave,
+            binario: s.binario,
+        }
+    }
+}
+
+#[tauri::command]
+fn servidores_guardados() -> Vec<ServidorParaLaInterfaz> {
+    registro::leer().into_iter().map(Into::into).collect()
+}
+
+#[tauri::command]
+fn guardar_servidor(
+    servidor: ServidorParaLaInterfaz,
+) -> Result<Vec<ServidorParaLaInterfaz>, ErrorParaLaInterfaz> {
+    // Los alias del `~/.ssh/config` se leen aquí y se pasan: un alias repetido
+    // haría que `ssh` resolviera el del fichero y la aplicación enseñara un
+    // servidor mientras habla con otro.
+    let del_config: Vec<String> = descubrir::ruta_por_defecto()
+        .map(|r| descubrir::descubrir(&r))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| a.alias)
+        .collect();
+
+    let mut lista = registro::leer();
+    registro::anadir(&mut lista, servidor.into(), &del_config).map_err(|e| {
+        ErrorParaLaInterfaz {
+            clase: "registro",
+            mensaje: e.to_string(),
+            detalle: None,
+        }
+    })?;
+    registro::escribir(&lista).map_err(|e| ErrorParaLaInterfaz {
+        clase: "registro",
+        mensaje: e.to_string(),
+        detalle: None,
+    })?;
+    Ok(lista.into_iter().map(Into::into).collect())
+}
+
+#[tauri::command]
+fn olvidar_servidor(alias: String) -> Result<Vec<ServidorParaLaInterfaz>, ErrorParaLaInterfaz> {
+    let mut lista = registro::leer();
+    registro::olvidar(&mut lista, &alias);
+    registro::escribir(&lista).map_err(|e| ErrorParaLaInterfaz {
+        clase: "registro",
+        mensaje: e.to_string(),
+        detalle: None,
+    })?;
+    Ok(lista.into_iter().map(Into::into).collect())
+}
+
+/// Construye el `Servidor` del núcleo a partir de un alias.
+///
+/// Mira **primero** la lista propia, porque un alias que está ahí no está en el
+/// `~/.ssh/config` —el guardado lo impide— y así se evita una lectura del
+/// fichero en el caso normal.
+fn servidor_por_alias(alias: &str, binario: Option<String>) -> Servidor {
+    if let Some(g) = registro::leer().into_iter().find(|s| s.alias == alias) {
+        let mut s = Servidor::nuevo(&g.alias, g.destino());
+        s.puerto = Some(g.puerto);
+        s.clave = g.clave.clone();
+        if let Some(b) = binario.or(g.binario) {
+            s.binario = b;
+        }
+        return s;
+    }
+    servidor_del_config(alias, binario)
+}
+
+// ── instalar Orbit ─────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+pub struct RequisitosParaLaInterfaz {
+    pub git: bool,
+    pub root: bool,
+    pub sudo_sin_contrasena: bool,
+    pub ya_instalado: bool,
+    pub sistema: String,
+    pub puede: bool,
+    pub impedimentos: Vec<ImpedimentoParaLaInterfaz>,
+    pub avisos: Vec<String>,
+    /// La secuencia literal que se ejecutaría. Se manda **siempre**, también
+    /// cuando hay impedimentos: quien no pueda instalar desde aquí igualmente
+    /// puede copiarla y ejecutarla a mano.
+    pub pasos: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ImpedimentoParaLaInterfaz {
+    pub clase: String,
+    pub que: String,
+    pub arreglo: Option<String>,
+}
+
+/// Qué hay en el otro lado antes de instalar nada.
+///
+/// Una sola conexión y **antes de tocar nada**: descubrir a mitad de una
+/// instalación que falta `git` deja un servidor a medias y a quien mira sin
+/// saber qué ha quedado hecho.
+#[tauri::command]
+async fn requisitos_de_instalacion(
+    alias: String,
+    binario: Option<String>,
+) -> Result<RequisitosParaLaInterfaz, ErrorParaLaInterfaz> {
+    let s = servidor_por_alias(&alias, binario);
+    let ctrl = dir_control();
+    let r = tauri::async_runtime::spawn_blocking(move || {
+        transporte::ejecutar_crudo(&s, instalar::COMPROBACION, ctrl.as_deref())
+    })
+    .await
+    .map_err(|e| ErrorParaLaInterfaz {
+        clase: "hilo",
+        mensaje: e.to_string(),
+        detalle: None,
+    })??;
+
+    let req = instalar::Requisitos::leer(&r.stdout);
+    Ok(RequisitosParaLaInterfaz {
+        git: req.git,
+        root: req.root,
+        sudo_sin_contrasena: req.sudo_sin_contrasena,
+        ya_instalado: req.ya_instalado,
+        sistema: req.sistema.clone(),
+        puede: req.impedimentos().is_empty(),
+        impedimentos: req
+            .impedimentos()
+            .into_iter()
+            .map(|i| ImpedimentoParaLaInterfaz {
+                clase: i.clase.to_string(),
+                que: i.que,
+                arreglo: i.arreglo,
+            })
+            .collect(),
+        avisos: req.avisos(),
+        pasos: instalar::pasos(),
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct Instalacion {
+    pub codigo: i32,
+    /// Lo que dijo el instalador, tal cual.
+    pub salida: String,
+    /// **Lo único en lo que se cree.** Sale de preguntarle a `orbit version
+    /// --json` después, no del código de salida ni de la prosa: es la misma
+    /// decisión que con `orbit new`, y por el mismo motivo — un instalador que
+    /// termina en 1 puede haber dejado Orbit funcionando, y uno que termina en
+    /// 0 no lo demuestra.
+    pub version: Option<String>,
+}
+
+/// Instala Orbit, sirviendo la salida mientras ocurre.
+///
+/// Tarda entre cinco y diez minutos y no se puede acortar: son `apt`, Node,
+/// PostgreSQL y PHP. Por eso la salida se sirve línea a línea — un bloque de
+/// texto al final de diez minutos es información que llega cuando ya no sirve.
+#[tauri::command]
+async fn instalar_orbit(
+    ventana: tauri::Window,
+    vivos: tauri::State<'_, Vivos>,
+    alias: String,
+    binario: Option<String>,
+) -> Result<Instalacion, ErrorParaLaInterfaz> {
+    // La clave lleva `!` porque ningún nombre de app puede empezar por ahí: la
+    // regla del servidor obliga a `[a-z0-9]`. Igual que el `*` de la pasada.
+    let clave = format!("{alias}:!instalar");
+    let mando = EnCurso::nuevo();
+    vivos.0.lock().unwrap().insert(clave.clone(), mando.clone());
+
+    let s = servidor_por_alias(&alias, binario.clone());
+    let ctrl = dir_control();
+    let clave_ev = clave.clone();
+    let linea = instalar::orden();
+
+    let r = tauri::async_runtime::spawn_blocking(move || {
+        transporte::ejecutar_crudo_en_vivo(&s, &linea, ctrl.as_deref(), mando, move |l| {
+            let _ = ventana.emit("orbit://progreso", (clave_ev.clone(), l));
+        })
+    })
+    .await;
+
+    vivos.0.lock().unwrap().remove(&clave);
+
+    let (codigo, salida) = match r {
+        Ok(Ok(r)) => (r.codigo, r.stdout),
+        Ok(Err(transporte::ErrorTransporte::Orbit { codigo, stdout, .. })) => (codigo, stdout),
+        Ok(Err(e)) => return Err(e.into()),
+        Err(e) => {
+            return Err(ErrorParaLaInterfaz {
+                clase: "hilo",
+                mensaje: format!("la instalación se ha interrumpido: {e}"),
+                detalle: None,
+            })
+        }
+    };
+
+    // Y ahora lo único que cuenta: preguntarle al servidor. Si contesta una
+    // versión, está instalado — diga lo que diga el código de salida.
+    let s2 = servidor_por_alias(&alias, binario);
+    let ctrl2 = dir_control();
+    let version = tauri::async_runtime::spawn_blocking(move || {
+        transporte::ejecutar(&s2, &Comando::Version, ctrl2.as_deref(), &[])
+            .ok()
+            .and_then(|r| r.leer::<orbit_client::contrato::Version>().ok())
+            .map(|v| v.version)
+    })
+    .await
+    .unwrap_or(None);
+
+    Ok(Instalacion {
+        codigo,
+        salida,
+        version,
+    })
+}
+
 /// Cancela un despliegue en curso.
 ///
 /// Mata el proceso, y lo que eso deja detrás **depende del paso**: interrumpir
@@ -603,7 +868,7 @@ fn entorno_valor(
     clave: String,
     binario: Option<String>,
 ) -> Result<String, ErrorParaLaInterfaz> {
-    let s = servidor(&alias, binario);
+    let s = servidor_por_alias(&alias, binario);
     let c = Comando::EntornoValor { app, clave };
     let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
     // Pelado y sin adornos, que es como lo imprime Orbit. El salto final se
@@ -667,7 +932,7 @@ fn correr(
     } else {
         ModoDeExec::Argumentos(argumentos)
     };
-    let s = servidor(&alias, binario);
+    let s = servidor_por_alias(&alias, binario);
     let c = Comando::Ejecutar { app, modo };
     // Se enseña la orden exacta que se va a mandar, ya escapada. Es lo que
     // convierte «confío en la interfaz» en «he leído lo que va a pasar».
@@ -728,7 +993,7 @@ fn retirar(alias: String, app: String, binario: Option<String>) -> Resultado {
     // 'remove' no habla JSON, así que la respuesta es prosa. Se devuelve tal
     // cual y la interfaz vuelve a preguntar por el estado, que es la regla:
     // lo que cuenta es cómo queda el servidor, no lo que dijo el comando.
-    let s = servidor(&alias, binario);
+    let s = servidor_por_alias(&alias, binario);
     let c = Comando::Retirar { app };
     let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
     Ok(serde_json::json!({ "salida": r.stderr, "codigo": r.codigo }))
@@ -740,7 +1005,7 @@ fn retirar(alias: String, app: String, binario: Option<String>) -> Resultado {
 /// toda la protección está en la pantalla que llama a esto.
 #[tauri::command]
 fn retirar_y_borrar(alias: String, app: String, binario: Option<String>) -> Resultado {
-    let s = servidor(&alias, binario);
+    let s = servidor_por_alias(&alias, binario);
     let c = Comando::RetirarYBorrar { app };
     let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
     Ok(serde_json::json!({ "salida": r.stderr, "codigo": r.codigo }))
@@ -751,7 +1016,7 @@ fn retirar_y_borrar(alias: String, app: String, binario: Option<String>) -> Resu
 /// defecto» sería la que ya está activa.
 #[tauri::command]
 fn revertir(alias: String, app: String, release: String, binario: Option<String>) -> Resultado {
-    let s = servidor(&alias, binario);
+    let s = servidor_por_alias(&alias, binario);
     let c = Comando::Revertir { app, release };
     let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
     Ok(serde_json::json!({ "salida": r.stderr, "codigo": r.codigo }))
@@ -768,7 +1033,7 @@ fn saludar(
     alias: String,
     binario: Option<String>,
 ) -> Result<serde_json::Value, ErrorParaLaInterfaz> {
-    let s = servidor(&alias, binario);
+    let s = servidor_por_alias(&alias, binario);
     let c = Comando::Version;
     let saludo = match transporte::ejecutar(&s, &c, dir_control().as_deref(), &[]) {
         Ok(r) => orbit_client::saludo::clasificar(&r),
@@ -878,6 +1143,11 @@ pub fn ejecutar() {
             resolver,
             cancelar,
             servidores_del_config,
+            servidores_guardados,
+            guardar_servidor,
+            olvidar_servidor,
+            requisitos_de_instalacion,
+            instalar_orbit,
             saludar,
         ])
         .run(tauri::generate_context!())

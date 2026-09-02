@@ -165,3 +165,46 @@
   --shadow-3: 0 20px 48px rgb(0 0 0 / 60%);
   --chip-tinte: 18%;
 }
+
+/* ── Movimiento ────────────────────────────────────────────────────────────
+   Las duraciones y las curvas, en un sitio. Aquí y no repartidas por los
+   componentes por la misma razón que los colores: si cada pantalla elige su
+   propio tiempo, la aplicación se mueve como cinco aplicaciones.
+
+   Los números no son de gusto. Por debajo de ~90 ms un cambio no se lee como
+   movimiento sino como un salto; por encima de ~400 ms se lee como espera. Lo
+   que aparece y lo que desaparece NO duran lo mismo: salir rápido y entrar algo
+   más despacio es lo que hace que una interfaz responda «antes» de lo que
+   tarda.
+
+   La curva de entrada arranca deprisa y frena: es la que hace que algo parezca
+   que llega y se posa. La de salida hace lo contrario. */
+:root {
+  --t-rapido: 120ms;
+  --t-normal: 200ms;
+  --t-lento: 320ms;
+  --e-entrada: cubic-bezier(0.16, 1, 0.3, 1);
+  --e-salida: cubic-bezier(0.4, 0, 1, 1);
+  --e-suave: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Y la regla que no se negocia: quien ha pedido que las cosas no se muevan, no
+   las mueve. `prefers-reduced-motion` no es una preferencia estética — para
+   algunas personas una animación es un mareo o una migraña. Se apaga TODO de
+   una vez y en la capa de tokens, para que ningún componente pueda saltárselo
+   por olvido. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-rapido: 1ms;
+    --t-normal: 1ms;
+    --t-lento: 1ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}

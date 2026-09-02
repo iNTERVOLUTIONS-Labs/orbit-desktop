@@ -27,6 +27,8 @@ pub mod comando;
 pub mod contrato;
 pub mod descubrir;
 pub mod flujo;
+pub mod instalar;
+pub mod registro;
 pub mod saludo;
 pub mod shquote;
 pub mod transporte;

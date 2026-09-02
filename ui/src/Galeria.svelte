@@ -10,6 +10,9 @@
   import LoteVista from './componentes/Lote.svelte'
   import Pasada from './componentes/Pasada.svelte'
   import Comparar from './componentes/Comparar.svelte'
+  import AltaServidores from './componentes/AltaServidores.svelte'
+  import AnadirServidor from './componentes/AnadirServidor.svelte'
+  import InstalarOrbit from './componentes/InstalarOrbit.svelte'
   import OrbitJson from './componentes/OrbitJson.svelte'
   import HojaDeComando from './componentes/HojaDeComando.svelte'
   import Desenlace from './componentes/Desenlace.svelte'
@@ -149,6 +152,35 @@
     { ...LADO_A[1]! },
     { ...LADO_A[2]!, name: 'solo-en-staging', domain: 'pruebas.ejemplo.com' },
   ]
+
+  const REQUISITOS = {
+    git: true, root: true, sudo_sin_contrasena: false, ya_instalado: false,
+    sistema: 'ubuntu-24.04', puede: true, impedimentos: [], avisos: [],
+    pasos: [
+      'rm -rf /tmp/orbit-instalacion',
+      'git clone --depth 1 https://github.com/iNTERVOLUTIONS-Labs/orbit.git /tmp/orbit-instalacion',
+      'cd /tmp/orbit-instalacion && sudo bash install.sh',
+      'rm -rf /tmp/orbit-instalacion',
+    ],
+  }
+  const REQUISITOS_NO = {
+    ...REQUISITOS, git: false, root: false, puede: false, sistema: 'fedora-41',
+    impedimentos: [
+      { clase: 'git', que: 'No hay «git» en el servidor, y la instalación empieza clonando el repositorio.',
+        arreglo: 'sudo apt-get update && sudo apt-get install -y git' },
+      { clase: 'sudo', que: 'Ese usuario necesita contraseña para sudo, y aquí no hay terminal donde escribirla.',
+        arreglo: null },
+    ],
+    avisos: ['El instalador está probado en Ubuntu 24.04 y Debian 12, y este servidor dice ser «fedora-41». Puede funcionar; si no, lo dirá él y no habrá tocado gran cosa.'],
+  }
+  const SALIDA_INSTALADOR = [
+    '1/13  Actualizando el sistema base', '  ✔ apt actualizado',
+    '2/13  Zona horaria, swap y límites del kernel', '  ✔ swap de 2G',
+    '3/13  Creando el usuario de despliegue «deploy»', '  ✔ deploy',
+    '4/13  Instalando Node.js 22 LTS + pnpm',
+    'Get:1 https://deb.nodesource.com/node_22.x nodistro InRelease',
+    'Setting up nodejs (22.11.0-1nodesource1) ...',
+  ].join('\n')
 
   const CRUDO_PASADA = [
     '{"event":"app","app":"tienda","status":"start","elapsed_s":0}',
@@ -469,6 +501,65 @@
     durante días. Agruparlos está prohibido.
   </p>
   <div class="panel"><LoteVista lote={loteMuestra as Lote} servidor="vps-ovh" /></div>
+
+  <h2>Empezar de cero</h2>
+  <p class="nota">
+    La pantalla que estaba rota: los servidores salían <strong>sólo</strong> del
+    <code>~/.ssh/config</code>, así que quien no tuviera ese fichero —en Windows
+    casi nadie— abría una lista vacía sin ninguna salida. Un producto que no se
+    puede empezar a usar no es un producto.
+  </p>
+  <div class="panel">
+    <AltaServidores alias={[]} propios={[]} saludos={{}} comprobando={null}
+      alComprobar={() => {}} alUsar={() => {}} alAnadir={() => {}}
+      alOlvidar={() => {}} alInstalar={() => {}} />
+  </div>
+
+  <h3>Añadir uno a mano</h3>
+  <div class="panel">
+    <AnadirServidor yaUsados={['vps-ovh']} alGuardar={() => {}} alCerrar={() => {}} />
+  </div>
+
+  <h3>Instalar Orbit: lo que se va a ejecutar</h3>
+  <p class="nota">
+    La secuencia literal antes de ejecutarla, y es la del README —
+    <code>git clone</code>, entrar, <code>sudo bash install.sh</code>. La versión
+    anterior mandaba copiar un <code>curl … | sudo bash</code> que
+    <strong>no funciona</strong>: <code>install.sh</code> lee el fichero
+    <code>orbit</code> que tiene al lado y por una tubería no hay ninguno.
+  </p>
+  <div class="panel">
+    <InstalarOrbit alias="produccion" requisitos={REQUISITOS}
+      alInstalar={() => {}} alCancelar={() => {}} alCerrar={() => {}} />
+  </div>
+
+  <h3>Cuando no se puede desde aquí</h3>
+  <div class="panel">
+    <InstalarOrbit alias="produccion" requisitos={REQUISITOS_NO}
+      alInstalar={() => {}} alCancelar={() => {}} alCerrar={() => {}} />
+  </div>
+
+  <h3>Mientras corre</h3>
+  <p class="nota">
+    Los trece pasos salen del propio instalador, que anuncia cada sección con un
+    <code>N/13</code> delante. No hay barra ni porcentaje: eso sería un número
+    inventado, porque él no dice cuánto le queda.
+  </p>
+  <div class="panel">
+    <InstalarOrbit alias="produccion" instalando={true} salida={SALIDA_INSTALADOR}
+      alInstalar={() => {}} alCancelar={() => {}} alCerrar={() => {}} />
+  </div>
+
+  <h3>Y al terminar, preguntándole a él</h3>
+  <p class="nota">
+    El veredicto <strong>no sale del código de salida</strong>: sale de
+    <code>orbit version --json</code> después. Un instalador que termina en 1
+    puede haber dejado Orbit funcionando, y uno que termina en 0 no lo demuestra.
+  </p>
+  <div class="panel">
+    <InstalarOrbit alias="produccion" resultado={{ codigo: 1, salida: '', version: '1.3.6' }}
+      alInstalar={() => {}} alCancelar={() => {}} alCerrar={() => {}} />
+  </div>
 
   <h2>El asistente de web nueva</h2>
   <p class="nota">

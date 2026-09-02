@@ -17,6 +17,8 @@
   import Retirar from './componentes/Retirar.svelte'
   import Revertir from './componentes/Revertir.svelte'
   import AltaServidores from './componentes/AltaServidores.svelte'
+  import AnadirServidor from './componentes/AnadirServidor.svelte'
+  import InstalarOrbit from './componentes/InstalarOrbit.svelte'
   import AsistenteNueva from './componentes/AsistenteNueva.svelte'
   import Pasada from './componentes/Pasada.svelte'
   import Comparar from './componentes/Comparar.svelte'
@@ -32,7 +34,10 @@
     correr, detalle as pedirDetalle, metricas as pedirMetricas, portada,
     retirar, retirarYBorrar, revertir, saludar, servidoresDelConfig, trafico as pedirTrafico,
     crear, resolver, desplegarTodo,
+    servidoresGuardados, guardarServidor, olvidarServidor,
+    requisitosDeInstalacion, instalarOrbit,
     type AliasSsh, type ErrorDelPuente, type Resolucion,
+    type ServidorPropio, type Requisitos, type Instalacion,
   } from './lib/puente'
 
   let servidores = $state<AliasSsh[]>([])
@@ -64,6 +69,136 @@
   let enAlta = $state(false)
   let saludos = $state<Record<string, Saludo | null>>({})
   let comprobando = $state<string | null>(null)
+
+  // Los servidores añadidos a mano. La primera versión sacaba los servidores
+  // **sólo** del ~/.ssh/config, y eso dejaba sin salida a quien no tuviera ese
+  // fichero — que en Windows es casi todo el mundo.
+  let propios = $state<ServidorPropio[]>([])
+  let anadiendo = $state(false)
+  let guardando = $state(false)
+  let falloAlGuardar = $state<ErrorDelPuente | null>(null)
+
+  // Instalar Orbit en un servidor que no lo tiene.
+  let instalandoEn = $state<string | null>(null)
+  let requisitos = $state<Requisitos | null>(null)
+  let mirandoRequisitos = $state(false)
+  let instalando = $state(false)
+  let salidaInstalacion = $state('')
+  let resultadoInstalacion = $state<Instalacion | null>(null)
+  let paraDeEscucharInstalacion: (() => void) | null = null
+
+  /** Todos los alias ocupados, de las dos fuentes. Un alias repetido haría que
+   *  `ssh` resolviera el del fichero y la aplicación enseñara un servidor
+   *  mientras habla con otro. */
+  const aliasOcupados = $derived([
+    ...servidores.map((s) => s.alias),
+    ...propios.map((s) => s.alias),
+  ])
+
+  async function cargarPropios() {
+    try {
+      propios = await servidoresGuardados()
+    } catch {
+      // Que no se pueda leer la lista no tumba la aplicación: se sigue con los
+      // del ~/.ssh/config, que es lo que había antes de que esto existiera.
+      propios = []
+    }
+  }
+
+  async function anadirServidor(b: {
+    alias: string
+    host: string
+    usuario: string
+    puerto: number
+    clave: string
+  }) {
+    guardando = true
+    falloAlGuardar = null
+    try {
+      propios = await guardarServidor({
+        alias: b.alias.trim(),
+        host: b.host.trim(),
+        usuario: b.usuario.trim(),
+        puerto: b.puerto,
+        clave: b.clave.trim() === '' ? null : b.clave.trim(),
+        binario: null,
+      })
+      anadiendo = false
+      // Y se le pregunta enseguida: acabar de añadir un servidor y no saber si
+      // contesta es dejar a alguien delante de una fila muda.
+      void comprobar(b.alias.trim())
+    } catch (e) {
+      falloAlGuardar = e as ErrorDelPuente
+    } finally {
+      guardando = false
+    }
+  }
+
+  async function quitarServidor(a: string) {
+    try {
+      propios = await olvidarServidor(a)
+      delete saludos[a]
+    } catch (e) {
+      error = e as ErrorDelPuente
+    }
+  }
+
+  /** Mira qué hay antes de instalar nada. */
+  async function abrirInstalacion(a: string) {
+    instalandoEn = a
+    requisitos = null
+    resultadoInstalacion = null
+    salidaInstalacion = ''
+    mirandoRequisitos = true
+    try {
+      requisitos = await requisitosDeInstalacion(a)
+    } catch (e) {
+      error = e as ErrorDelPuente
+      instalandoEn = null
+    } finally {
+      mirandoRequisitos = false
+    }
+  }
+
+  async function lanzarInstalacion() {
+    const a = instalandoEn
+    if (!a) return
+    instalando = true
+    salidaInstalacion = ''
+    resultadoInstalacion = null
+
+    if (hayPuente()) {
+      const { listen } = await import('@tauri-apps/api/event')
+      const clave = `${a}:!instalar`
+      paraDeEscucharInstalacion = await listen<[string, string]>('orbit://progreso', (e) => {
+        const [k, linea] = e.payload
+        if (k === clave) salidaInstalacion += linea + '\n'
+      })
+    }
+
+    try {
+      resultadoInstalacion = await instalarOrbit(a)
+      // El saludo de ese servidor ya no vale: acaba de cambiar lo que hay.
+      delete saludos[a]
+      if (resultadoInstalacion.version) void comprobar(a)
+    } catch (e) {
+      error = e as ErrorDelPuente
+    } finally {
+      paraDeEscucharInstalacion?.()
+      paraDeEscucharInstalacion = null
+      instalando = false
+    }
+  }
+
+  function cerrarInstalacion() {
+    instalandoEn = null
+    requisitos = null
+    resultadoInstalacion = null
+    salidaInstalacion = ''
+    instalando = false
+    paraDeEscucharInstalacion?.()
+    paraDeEscucharInstalacion = null
+  }
 
   // El asistente de web nueva. Vive aquí y no dentro de una pestaña de app
   // porque todavía no hay app: es la única pantalla que crea al sujeto del que
@@ -468,9 +603,16 @@
   }
 
   $effect(() => {
-    servidoresDelConfig().then((s) => {
-      servidores = s
-      if (s.length > 0 && !alias) cargar(s[0]!.alias)
+    // Las DOS fuentes. Si no hay ninguna en ninguna de las dos, se abre
+    // directamente la pantalla de servidores: una portada vacía sin explicación
+    // es lo que hacía que esta aplicación pareciera rota al abrirla por primera
+    // vez, y es literalmente lo que pasaba en un Windows recién instalado.
+    void Promise.all([servidoresDelConfig(), servidoresGuardados()]).then(([config, mios]) => {
+      servidores = config
+      propios = mios
+      const primero = mios[0]?.alias ?? config[0]?.alias
+      if (primero && !alias) cargar(primero)
+      else if (!primero) enAlta = true
     })
   })
 </script>
@@ -644,13 +786,39 @@
           />
         {/if}
       {:else if enAlta}
-        <AltaServidores
-          alias={servidores}
-          {saludos}
-          {comprobando}
-          alComprobar={comprobar}
-          alUsar={(a) => { enAlta = false; cargar(a) }}
-        />
+        {#if instalandoEn}
+          <InstalarOrbit
+            alias={instalandoEn}
+            {requisitos}
+            mirando={mirandoRequisitos}
+            {instalando}
+            salida={salidaInstalacion}
+            resultado={resultadoInstalacion}
+            alInstalar={lanzarInstalacion}
+            alCancelar={() => cancelar(instalandoEn!, '!instalar')}
+            alCerrar={cerrarInstalacion}
+          />
+        {:else if anadiendo}
+          <AnadirServidor
+            yaUsados={aliasOcupados}
+            {guardando}
+            fallo={falloAlGuardar}
+            alGuardar={anadirServidor}
+            alCerrar={() => { anadiendo = false; falloAlGuardar = null }}
+          />
+        {:else}
+          <AltaServidores
+            alias={servidores}
+            {propios}
+            {saludos}
+            {comprobando}
+            alComprobar={comprobar}
+            alUsar={(a) => { enAlta = false; cargar(a) }}
+            alAnadir={() => { anadiendo = true; falloAlGuardar = null }}
+            alOlvidar={quitarServidor}
+            alInstalar={abrirInstalacion}
+          />
+        {/if}
       {:else if cargando}
         <Esqueleto />
       {:else if error}

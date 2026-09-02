@@ -220,21 +220,77 @@ fn el_catalogo_de_ordenes_es_finito_y_vive_en_un_sitio() {
 
 /// **SEC-11 y T-12.** Nada del contrato se persiste.
 ///
-/// Hoy el crate no escribe en disco, y esta prueba existe para que eso siga
-/// siendo verdad por accidente el día que alguien añada una caché. Ponerla ahora
-/// que no hay nada que barrer es barato; ponerla cuando ya se guardan quince
-/// cosas es una auditoría.
+/// La versión anterior de esta prueba decía «el núcleo no escribe en disco», a
+/// secas, y cayó el día que hubo que guardar los servidores que alguien añade a
+/// mano. Borrarla habría sido perder la regla; dejarla habría sido no poder
+/// arreglar el fallo. Así que se afina, porque **la regla que importa nunca fue
+/// «no escribir»**: era que lo que dice un servidor no acaba en el disco de
+/// nadie.
+///
+/// Lo que se puede escribir: **cómo llegar** a un servidor —alias, host,
+/// usuario, puerto y la ruta de una clave—, que es la misma clase de dato que
+/// lleva un `~/.ssh/config` en claro desde siempre.
+///
+/// Lo que no: nada que haya contestado un servidor, y ninguna credencial.
 #[test]
-fn el_nucleo_no_escribe_en_disco() {
+fn solo_el_registro_escribe_y_solo_escribe_como_llegar() {
     for (nombre, texto) in fuentes() {
         let codigo = codigo_enviado(&texto);
         for prohibido in ["fs::write", "File::create", "OpenOptions"] {
-            assert!(
-                !codigo.contains(prohibido),
-                "{nombre} escribe en disco. Si hace falta, primero hay que decidir \
-                 qué se persiste y añadir el barrido de secretos de docs/QA.md §5.5"
+            if !codigo.contains(prohibido) {
+                continue;
+            }
+            assert_eq!(
+                nombre, "registro.rs",
+                "{nombre} escribe en disco. El único que puede es el registro de \
+                 servidores, y sólo con cómo llegar a ellos: si hace falta persistir \
+                 algo que diga un servidor, primero hay que decidir qué y añadir el \
+                 barrido de secretos de docs/QA.md §5.5"
             );
         }
+    }
+}
+
+/// Y el registro no tiene dónde guardar lo que no debe.
+///
+/// Se comprueba sobre el **tipo**, no sobre lo que se escriba hoy: el día que
+/// alguien añada un campo para una contraseña «sólo para no tener que teclearla»,
+/// esta prueba se lo dice antes de que llegue a un fichero.
+#[test]
+fn el_registro_no_puede_guardar_una_credencial_ni_una_respuesta() {
+    let c = fs::read_to_string(crate_dir().join("src/registro.rs")).unwrap();
+    let tipo = c
+        .split("pub struct ServidorGuardado {")
+        .nth(1)
+        .expect("falta el tipo")
+        .split("\n}")
+        .next()
+        .unwrap();
+    let campos = codigo_enviado(tipo);
+
+    for prohibido in [
+        "contrasena",
+        "password",
+        "passphrase",
+        "frase",
+        "secreto",
+        "token",
+        "contenido",
+        "privada",
+    ] {
+        assert!(
+            !campos.contains(prohibido),
+            "el registro tiene un campo «{prohibido}»: ahí no va ninguna credencial, \
+             sólo la RUTA de una clave"
+        );
+    }
+    // Y nada que venga del contrato: una app, un estado, una release.
+    for del_servidor in ["app", "estado", "state", "release", "releases", "log"] {
+        assert!(
+            !campos.contains(del_servidor),
+            "el registro tiene un campo «{del_servidor}»: lo que dice un servidor no \
+             se guarda"
+        );
     }
 }
 
@@ -285,4 +341,46 @@ fn las_respuestas_sanas_son_json_valido() {
         serde_json::from_str::<serde_json::Value>(&t)
             .unwrap_or_else(|e| panic!("{nombre} no es JSON válido: {e}"));
     }
+}
+
+/// La puerta trasera del transporte tiene **un solo** usuario.
+///
+/// `ejecutar_crudo` y `ejecutar_crudo_en_vivo` ejecutan una línea que no está en
+/// el catálogo, y el catálogo es lo que hace revisable este proyecto: la
+/// superficie de lo que el cliente le puede pedir a un servidor cabe en una
+/// pantalla. Existen para una sola cosa —instalar Orbit donde todavía no
+/// está— y el día que alguien las use para tapar un hueco del contrato, el
+/// cliente deja de hablar el contrato y pasa a hablar Bash contra un servidor
+/// cuyo layout puede cambiar.
+#[test]
+fn lo_crudo_solo_lo_usa_el_instalador() {
+    for (nombre, texto) in fuentes() {
+        // Donde se definen y donde se documentan, no cuenta.
+        if nombre == "transporte.rs" || nombre == "instalar.rs" {
+            continue;
+        }
+        let codigo = codigo_enviado(&texto);
+        assert!(
+            !codigo.contains("ejecutar_crudo"),
+            "{nombre} usa la puerta trasera del transporte: la línea la construye \
+             `instalar`, y nadie más"
+        );
+    }
+}
+
+/// Y la línea que se ejecuta por ahí **no la compone la interfaz**.
+///
+/// Es la condición que hace aceptable la excepción: no hay ninguna forma de que
+/// texto escrito en un campo llegue a un shell remoto por esa vía.
+#[test]
+fn la_linea_cruda_sale_de_una_funcion_sin_argumentos() {
+    let c = fs::read_to_string(crate_dir().join("src/instalar.rs")).unwrap();
+    assert!(
+        c.contains("pub fn orden() -> String"),
+        "la orden se genera entera, sin recibir nada de fuera"
+    );
+    assert!(
+        c.contains("pub const COMPROBACION: &str"),
+        "la comprobación es una constante, no una plantilla"
+    );
 }

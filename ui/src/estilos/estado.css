@@ -223,3 +223,21 @@
    escrito en la cabecera de cada columna, que no se quita nunca. */
 .lado--a { --comparado-a: var(--accent-text); }
 .lado--b { --comparado-b: var(--st-warn); }
+
+/* Un campo del formulario que está mal. Va aquí porque es un ESTADO y la regla
+   de este fichero no admite excepciones por comodidad — la primera vez que la
+   rompí fue escribiendo justo un aviso, y la comprobación lo cazó.
+
+   Y el mismo token para el borde y para el texto: el color no es nunca el único
+   portador, así que debajo del campo siempre hay una frase. */
+.mal, input[aria-invalid='true'], .fallo { --aviso-campo: var(--st-error); }
+
+/* La instalación. Aquí porque son estados y su aspecto se decide en un sitio. */
+.chequeo .si         { --chequeo-si: var(--st-ok); }
+.chequeo .no         { --chequeo-no: var(--st-error); }
+.impedimento .titulo { --chequeo-no: var(--st-error); }
+.aviso               { --aviso-instalar: var(--st-warn); }
+.hito--hecho .punto  { --hito-hecho: var(--st-ok); }
+.hito--ahora .punto  { --hito-ahora: var(--accent); }
+.final--bien         { --final-borde: var(--st-ok); }
+.final--mal          { --final-borde: var(--st-error); }

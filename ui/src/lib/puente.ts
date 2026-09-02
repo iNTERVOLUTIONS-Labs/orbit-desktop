@@ -350,6 +350,91 @@ export async function resolver(nombre: string, alias: string): Promise<Resolucio
   return invocar<Resolucion>('resolver', { nombre, alias })
 }
 
+// ── los servidores propios ──────────────────────────────────────────────────
+
+/** Un servidor añadido a mano.
+ *
+ *  Existe porque la primera versión sacaba los servidores **sólo** del
+ *  `~/.ssh/config`, y eso era un error de base disfrazado de decisión elegante:
+ *  mucha gente no tiene ese fichero, y en Windows casi nadie. La aplicación
+ *  abría vacía y sin salida. */
+export interface ServidorPropio {
+  alias: string
+  host: string
+  usuario: string
+  puerto: number
+  /** La **ruta** de la clave. Nunca su contenido ni su frase de paso: eso no
+   *  cruza este puente en ninguna dirección. */
+  clave: string | null
+  binario: string | null
+}
+
+export async function servidoresGuardados(): Promise<ServidorPropio[]> {
+  if (!hayPuente()) return []
+  return invocar<ServidorPropio[]>('servidores_guardados')
+}
+
+export async function guardarServidor(s: ServidorPropio): Promise<ServidorPropio[]> {
+  if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
+  return invocar<ServidorPropio[]>('guardar_servidor', { servidor: s })
+}
+
+export async function olvidarServidor(alias: string): Promise<ServidorPropio[]> {
+  if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
+  return invocar<ServidorPropio[]>('olvidar_servidor', { alias })
+}
+
+// ── instalar Orbit ──────────────────────────────────────────────────────────
+
+export interface Impedimento {
+  /** Identificador estable: se decide con esto y nunca leyendo el texto. */
+  clase: string
+  que: string
+  /** Qué haría falta, cuando hay algo que se pueda decir. `null` cuando la
+   *  salida es una decisión de quien manda en el servidor y no una orden. */
+  arreglo: string | null
+}
+
+export interface Requisitos {
+  git: boolean
+  root: boolean
+  sudo_sin_contrasena: boolean
+  ya_instalado: boolean
+  sistema: string
+  puede: boolean
+  impedimentos: Impedimento[]
+  avisos: string[]
+  /** La secuencia literal. Llega **siempre**, también cuando no se puede
+   *  instalar desde aquí: quien no pueda igualmente la puede copiar. */
+  pasos: string[]
+}
+
+/** Qué hay en el otro lado, **antes de tocar nada**.
+ *
+ *  Una sola conexión. Descubrir a mitad de una instalación que falta `git` deja
+ *  un servidor a medias y a quien mira sin saber qué ha quedado hecho. */
+export async function requisitosDeInstalacion(alias: string): Promise<Requisitos> {
+  if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
+  return invocar<Requisitos>('requisitos_de_instalacion', { alias })
+}
+
+export interface Instalacion {
+  codigo: number
+  salida: string
+  /** **Lo único en lo que se cree.** Sale de preguntarle a `orbit version
+   *  --json` después, no del código de salida ni de la prosa. */
+  version: string | null
+}
+
+/** Instala Orbit. Tarda entre cinco y diez minutos y no se puede acortar: son
+ *  `apt`, Node, PostgreSQL y PHP.
+ *
+ *  El progreso llega por `orbit://progreso` con la clave `alias:!instalar`. */
+export async function instalarOrbit(alias: string): Promise<Instalacion> {
+  if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
+  return invocar<Instalacion>('instalar_orbit', { alias })
+}
+
 /**
  * Qué hay al otro lado de un alias.
  *

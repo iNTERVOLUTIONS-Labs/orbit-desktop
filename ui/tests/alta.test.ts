@@ -23,13 +23,18 @@ const s = (p: Partial<Saludo>): Saludo => ({
   ...p,
 })
 
-function montar(saludos: Record<string, Saludo | null> = {}) {
+function montar(saludos: Record<string, Saludo | null> = {}, extra: Record<string, unknown> = {}) {
   const alComprobar = vi.fn()
   const alUsar = vi.fn()
+  const alAnadir = vi.fn()
+  const alOlvidar = vi.fn()
+  const alInstalar = vi.fn()
   const r = render(AltaServidores, {
-    alias: ALIAS, saludos, comprobando: null, alComprobar, alUsar,
+    alias: ALIAS, propios: [], saludos, comprobando: null,
+    alComprobar, alUsar, alAnadir, alOlvidar, alInstalar,
+    ...extra,
   })
-  return { ...r, alComprobar, alUsar }
+  return { ...r, alComprobar, alUsar, alAnadir, alOlvidar, alInstalar }
 }
 
 describe('enumerar no es visitar', () => {
@@ -42,7 +47,8 @@ describe('enumerar no es visitar', () => {
 
   it('y se dice en voz alta', () => {
     const { container } = montar()
-    expect(container.querySelector('.intro')?.textContent).toContain('no habla con ninguno')
+    const t = (container.querySelector('.intro')?.textContent ?? '').replace(/\s+/g, ' ')
+    expect(t).toContain('no habla con ninguno')
   })
 
   it('preguntar por uno es un gesto aparte', () => {
@@ -82,17 +88,53 @@ describe('qué se puede hacer con cada servidor', () => {
 })
 
 describe('sin Orbit', () => {
-  it('se ofrece la orden para COPIAR, no un botón de instalar', () => {
-    // Instalar Orbit desde aquí sería la primera vez que este cliente escribe
-    // en el servidor algo que no es una invocación de `orbit`, y la regla nº 1
-    // no admite un «pero es el instalador».
-    const { container } = montar({
+  it('se ofrece instalarlo, con un botón', () => {
+    // Esta prueba decía lo contrario. Afirmaba que aquí NO podía haber un botón
+    // de instalar porque sería la primera vez que el cliente escribe en el
+    // servidor algo que no es una invocación de `orbit`.
+    //
+    // Se revirtió por dos motivos. El razonable: lo que iba a ejecutar quien
+    // copiara el comando era exactamente lo mismo que ejecuta este botón, así
+    // que la diferencia no era de seguridad sino de quién teclea — y a cambio,
+    // un cliente de escritorio para una herramienta de despliegue no podía
+    // poner en marcha un servidor.
+    //
+    // Y el vergonzoso: **el comando que se mandaba copiar no funcionaba**. Era
+    // un `curl … | sudo bash` que me inventé sin leer el README, y `install.sh`
+    // muere si no encuentra el fichero `orbit` a su lado. Por una tubería no hay
+    // ninguno. O sea que la regla que se estaba defendiendo protegía una
+    // instrucción rota.
+    const { container, alInstalar } = montar({
       'vps-ovh': s({ clase: 'no-instalado', puede_operar: false, puede_leer: false, motivo: 'no hay orbit ahí' }),
     })
-    expect(container.querySelector('.instalar')?.textContent).toContain('install.sh')
+    const boton = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Instalar Orbit',
+    ) as HTMLButtonElement
+    expect(boton).toBeDefined()
+    boton.click()
+    expect(alInstalar).toHaveBeenCalledWith('vps-ovh')
+  })
+
+  it('y a un Orbit viejo se le ofrece actualizar, que no es lo mismo', () => {
+    // Un Orbit anterior al contrato es un servidor SANO y viejo, no uno roto.
+    // El botón dice «actualizar» porque eso es lo que hace.
+    const { container } = montar({
+      'vps-ovh': s({ clase: 'sin-contrato', contrato: 0, puede_operar: false, puede_leer: false }),
+    })
     const botones = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim())
-    expect(botones).not.toContain('instalar')
-    expect(botones).not.toContain('Instalar')
+    expect(botones).toContain('Actualizar Orbit')
+    expect(botones).not.toContain('Instalar Orbit')
+  })
+
+  it('el comando roto ya no está en ninguna parte', () => {
+    // `curl … | sudo bash` no instala Orbit: install.sh necesita el fichero
+    // `orbit` a su lado. Que no vuelva por copiar y pegar de un sitio viejo.
+    const { container } = montar({
+      'vps-ovh': s({ clase: 'no-instalado', puede_operar: false, puede_leer: false }),
+    })
+    const t = container.textContent ?? ''
+    expect(t).not.toContain('curl')
+    expect(t).not.toContain('| sudo bash')
   })
 })
 
@@ -132,5 +174,63 @@ describe('un salto se anuncia', () => {
     // Por un bastión, el saludo se paga dos veces.
     const { container } = montar()
     expect(container.textContent).toContain('por bastion')
+  })
+})
+
+describe('sin ningún servidor', () => {
+  // El fallo que rompía la aplicación al abrirla por primera vez: los
+  // servidores salían SÓLO del ~/.ssh/config, así que quien no tuviera ese
+  // fichero —en Windows casi nadie— veía una lista vacía sin ninguna salida.
+  it('no se queda en blanco: ofrece añadir uno', () => {
+    const { container, alAnadir } = montar({}, { alias: [], propios: [] })
+    const t = (container.textContent ?? '').replace(/\s+/g, ' ')
+    expect(t).toContain('Añade tu primer servidor')
+
+    const boton = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Añadir un servidor',
+    ) as HTMLButtonElement
+    expect(boton).toBeDefined()
+    boton.click()
+    expect(alAnadir).toHaveBeenCalled()
+  })
+
+  it('y dice que el ~/.ssh/config es un extra, no un requisito', () => {
+    const { container } = montar({}, { alias: [], propios: [] })
+    const t = (container.textContent ?? '').replace(/\s+/g, ' ')
+    expect(t).toContain('saldrán aquí solos')
+  })
+})
+
+describe('los servidores añadidos a mano', () => {
+  const PROPIO = {
+    alias: 'produccion', host: '203.0.113.10', usuario: 'root',
+    puerto: 22, clave: null, binario: null,
+  }
+
+  it('salen junto a los del fichero, y se distingue de dónde viene cada uno', () => {
+    // Se desapuntan de forma distinta: uno se quita de aquí y el otro hay que
+    // editarlo en el ~/.ssh/config. Confundirlos manda a alguien a buscar un
+    // botón que no existe.
+    const { container } = montar({}, { propios: [PROPIO] })
+    const t = (container.textContent ?? '').replace(/\s+/g, ' ')
+    expect(t).toContain('produccion')
+    expect(t).toContain('vps-ovh')
+    expect(t).toContain('añadido a mano')
+    expect(container.querySelectorAll('.marca')).toHaveLength(1)
+  })
+
+  it('sólo los propios se pueden quitar', () => {
+    const { container, alOlvidar } = montar({}, { propios: [PROPIO] })
+    const quitar = [...container.querySelectorAll('button')].filter(
+      (b) => b.textContent?.trim() === 'quitar',
+    )
+    expect(quitar).toHaveLength(1)
+    ;(quitar[0] as HTMLButtonElement).click()
+    expect(alOlvidar).toHaveBeenCalledWith('produccion')
+  })
+
+  it('el puerto sólo se enseña cuando no es el de siempre', () => {
+    const { container } = montar({}, { propios: [{ ...PROPIO, puerto: 2222 }] })
+    expect(container.textContent).toContain('root@203.0.113.10:2222')
   })
 })
