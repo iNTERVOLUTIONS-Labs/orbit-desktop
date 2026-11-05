@@ -1157,7 +1157,7 @@ lectura. Están en `tests/fakeserver/fixtures/*-1.4*.json`, `env-check.json`, `c
 | Orbit Desktop | Orbit | Comprobado | Notas |
 |---|---|---|---|
 | 0.1.0 | 1.3.6 | 2026-08 | Contra 1.4.3+ no podía leer una pasada con una app congelada |
-| 0.1.1 | 1.3.6 – 1.4.8 | 2026-11-05 | Lo que no existe en el servidor no se ofrece, y su silencio no se lee como un «no» |
+| 0.1.1 | 1.3.6 – 1.4.9 | 2026-11-05 | Lo que no existe en el servidor no se ofrece, y su silencio no se lee como un «no». Con 1.4.9, las variables van por la entrada estándar |
 
 #### Los campos nuevos de `state` (`list`, `status` e `info`)
 
@@ -1217,8 +1217,39 @@ Sin terminal, `_env_can_ask` es falso: con `--json` **nadie pregunta**. Así que
 despliegue se ve en `ps` del servidor —también desde los usuarios aislados de las apps— y, si el
 usuario SSH no es root, `sudo` lo apunta en su registro. `--env-file` exige un fichero regular en el
 servidor (`[[ -f "$2" ]]`, así que `/dev/stdin` no vale), y escribirlo es justo lo que este cliente
-no hace. Lo que haría falta es un `--env-stdin` en Orbit; mientras no exista, la hoja lo dice y
-THREAT-MODEL T-13 lo cuenta.
+no hace. **Desde Orbit 1.4.9 existe `--env-stdin`** (abajo), y con esos servidores el cliente ya no
+usa `--env`; con 1.4.3–1.4.8 la hoja lo avisa y THREAT-MODEL T-13 lo cuenta.
+
+#### 1.4.9: `deploy --env-stdin`, y la CI por defecto en el autodespliegue
+
+**`orbit --json deploy <app> --progress --env-stdin`** lee las mismas líneas `CLAVE=valor` que
+`--env-file`, de la entrada estándar, con la misma validación que `--env`. Compone con `--json` y
+`--progress`, apaga las preguntas —la entrada queda gastada— y rechaza `--pick` y el selector de
+app. Con un servidor 1.4.9 o posterior el cliente manda **siempre** las variables así:
+
+- En el `argv` sólo va `--env-stdin`, y sólo si hay variables: sin ellas no se pasa, porque gasta
+  la entrada y no hay nada que leer.
+- Por la entrada, una línea `CLAVE="valor"` por variable. **Las comillas dobles no son estilo**:
+  Orbit pasa cada valor por `_env_unquote`, que sin comillas corta un ` #` como comentario y quita
+  los espacios del final (`p@ss #1` llegaría como `p@ss`). Entre comillas dobles sólo interpreta
+  `\"` y `\\`, que son los dos que se escapan; comilla simple, salto de línea y nulo ya se
+  rechazan antes. Comprobado ejecutando `_env_unquote` y `_deploy_env_lines` de la 1.4.9.
+- La entrada **se cierra** al terminar de escribir: Orbit lee hasta el final.
+- Lo decide el envoltorio preguntando la versión justo antes, no la interfaz; con una versión que
+  no se puede leer no se manda nada.
+
+Lo demás de la 1.4.9 que toca al cliente:
+
+- **`orbit autodeploy enable` enciende la espera a la CI por defecto** en un repositorio de GitHub
+  (`--no-checks` para no esperarla). El cliente no ofrece `autodeploy enable`, así que no cambia
+  ninguna orden; lo que sí hace ahora el detalle es decir cuándo una app se despliega sola **sin**
+  esperar a la CI, que desde la 1.4.9 ya no es lo normal y `orbit doctor` cuenta. No hay migración:
+  las apps que ya estaban en automático siguen como estaban.
+- `autodeploy status` dice por app si espera a la CI, pero no habla `--json`; el cliente lo lee de
+  `state.checks`, que ya tenía.
+- **Ningún emisor del contrato cambia**: `_app_state_json`, `_deploy_json`, `_dall_json` y
+  `_json_capable` son idénticos a los de la 1.4.8 (comprobado con `diff`), y `check-contract.py`
+  pasa contra la 1.4.9.
 
 #### `deploy --all --json`: once finales
 

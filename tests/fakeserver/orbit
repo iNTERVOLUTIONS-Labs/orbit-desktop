@@ -56,6 +56,37 @@ done
 
 emitir() { cat "$FIX/$1"; }
 
+# `_env_unquote`, copiada tal cual de Orbit 1.4.9. Es la que decide cómo llega
+# un valor de `--env-stdin`: sin comillas corta un ` #` como comentario y quita
+# los espacios del final, así que el doble tiene que leer igual que el de
+# verdad o la prueba de que un valor llega entero no probaría nada.
+_env_unquote() { # _env_unquote <valor crudo>
+  local s="$1" out="" c i
+  case "$s" in
+    \"*)
+      s="${s:1}"
+      for (( i = 0; i < ${#s}; i++ )); do
+        c="${s:i:1}"
+        if [[ "$c" == "\\" && "${s:i+1:1}" == [\"\\] ]]; then out+="${s:i+1:1}"; i=$((i+1)); continue; fi
+        [[ "$c" == '"' ]] && break
+        out+="$c"
+      done ;;
+    \'*)
+      while [[ -n "$s" ]]; do
+        if [[ "$s" == \'* ]]; then
+          s="${s:1}"
+          if [[ "$s" == *\'* ]]; then out+="${s%%\'*}"; s="${s#*\'}"
+          else out+="$s"; s=""; fi
+        elif [[ "$s" == "\\'"* ]]; then out+="'"; s="${s:2}"
+        else break; fi
+      done ;;
+    *)
+      out="${s%%[[:space:]]#*}"
+      out="${out%"${out##*[![:space:]]}"}" ;;
+  esac
+  printf '%s' "$out"
+}
+
 case "$CASE" in
   # ── el camino feliz ──────────────────────────────────────────────────────
   sano)
@@ -293,7 +324,32 @@ case "$CASE" in
   # el tipo de certificado, la comprobación del entorno y las tareas. Los
   # casos de arriba siguen siendo de un 1.3.6, y tienen que seguir pasando:
   # hablar con un servidor viejo es el caso normal, no una excepción.
-  orbit-1.4)
+  orbit-1.4|orbit-1.4.9)
+    # Con --env-stdin, la entrada se lee ANTES que nada, como hace el Orbit de
+    # verdad al analizar los argumentos, y con su mismo analizador. Si la
+    # tubería no se cierra, Orbit esperaría para siempre; aquí se espera cinco
+    # segundos por línea y se sale con 99, para que la prueba lo vea en vez de
+    # colgarse con el tope de una hora de un despliegue.
+    for a in "$@"; do
+      [[ "$a" == --env-stdin ]] || continue
+      [[ "$CASE" == orbit-1.4.9 ]] || { printf '  ✗ orbit deploy: no entiendo «--env-stdin». Mira '"'"'orbit deploy --help'"'"'.\n' >&2; exit 1; }
+      efl=""
+      while :; do
+        if IFS= read -r -t 5 efl; then :
+        else
+          rc=$?
+          (( rc > 128 )) && { printf '  ✗ la entrada estándar no se cerró\n' >&2; exit 99; }
+          [[ -n "$efl" ]] || break
+        fi
+        efl="${efl%$'\r'}"
+        [[ "$efl" =~ ^[[:space:]]*(#|$) ]] && continue
+        [[ "$efl" =~ ^[[:space:]]*(export[[:space:]]+)?([^=]*)=(.*)$ ]] \
+          || { printf '  ✗ «%s» no es una línea CLAVE=valor\n' "$efl" >&2; exit 1; }
+        kv="${BASH_REMATCH[2]}=$(_env_unquote "${BASH_REMATCH[3]}")"
+        [[ -n "${ORBIT_FAKE_ENV:-}" ]] && printf '%s\0' "$kv" >> "$ORBIT_FAKE_ENV"
+        efl=""
+      done
+    done
     # El segundo argumento que no es bandera: 'env check' frente a 'env list'.
     seg=""; visto=""
     for a in "$@"; do
@@ -303,7 +359,7 @@ case "$CASE" in
     done
     todas=""; for a in "$@"; do [[ "$a" == --all ]] && todas=1; done
     case "$sub" in
-      version) emitir version-1.4.8.json ;;
+      version) [[ "$CASE" == orbit-1.4.9 ]] && emitir version-1.4.9.json || emitir version-1.4.8.json ;;
       list)    emitir list-1.4.json ;;
       info)    emitir info-1.4.json ;;
       env)     [[ "$seg" == check ]] && emitir env-check.json || emitir env.json ;;

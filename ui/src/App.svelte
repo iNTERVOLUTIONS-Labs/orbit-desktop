@@ -873,6 +873,7 @@
     {comprobacion}
     {estadoComprobacion}
     {faltanDeAntes}
+    porEntrada={sabe(versionActual, 'entornoPorEntrada')}
     alConfirmar={(entorno, forzar) => lanzar(hoja!, entorno, forzar)}
     alCancelar={cerrarHoja}
   />

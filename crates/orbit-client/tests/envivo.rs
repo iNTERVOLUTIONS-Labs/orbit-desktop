@@ -38,6 +38,7 @@ fn el_progreso_llega_segun_ocurre_y_no_al_final() {
         progreso: true,
         entorno: vec![],
         forzar: false,
+        por_entrada: false,
     };
     let r = ejecutar_en_vivo_local(
         &falso(),
@@ -83,6 +84,7 @@ fn lo_servido_y_lo_acumulado_dicen_lo_mismo() {
         progreso: true,
         entorno: vec![],
         forzar: false,
+        por_entrada: false,
     };
     let r = ejecutar_en_vivo_local(
         &falso(),
@@ -120,6 +122,7 @@ fn se_puede_cancelar_un_despliegue_en_curso() {
             progreso: true,
             entorno: vec![],
             forzar: false,
+            por_entrada: false,
         };
         ejecutar_en_vivo_local(
             &falso(),
@@ -256,6 +259,7 @@ fn quien_lleva_json_habla_por_stderr_y_quien_no_por_stdout() {
             progreso: true,
             entorno: vec![],
             forzar: false,
+            por_entrada: false,
         },
         Comando::EntornoLista { app: "web".into() },
         Comando::EntornoValor {

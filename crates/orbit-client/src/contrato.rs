@@ -153,6 +153,9 @@ pub enum Capacidad {
     EsperarCi,
     /// `state.cert_type`: de quién es el certificado. 1.4.7.
     TipoDeCertificado,
+    /// `deploy --env-stdin`: las variables por la entrada estándar, sin tocar
+    /// el `argv`. 1.4.9. Es lo que cierra THREAT-MODEL T-13.
+    EntornoPorEntrada,
 }
 
 impl Capacidad {
@@ -162,6 +165,7 @@ impl Capacidad {
             Self::Tareas => (1, 3, 9),
             Self::Congelar | Self::EsperarCi => (1, 4, 3),
             Self::TipoDeCertificado => (1, 4, 7),
+            Self::EntornoPorEntrada => (1, 4, 9),
         }
     }
 }
@@ -848,6 +852,9 @@ mod tests {
         assert!(v("1.4.8").sabe(Capacidad::TipoDeCertificado));
         assert!(!v("1.4.6").sabe(Capacidad::TipoDeCertificado));
         assert!(v("1.3.8").sabe(Capacidad::EntornoDeclarado));
+        assert!(!v("1.4.8").sabe(Capacidad::EntornoPorEntrada));
+        assert!(v("1.4.9").sabe(Capacidad::EntornoPorEntrada));
+        assert!(v("1.5.0").sabe(Capacidad::EntornoPorEntrada));
         assert!(!v("1.3.7").sabe(Capacidad::EntornoDeclarado));
         assert!(
             v("1.10.0").sabe(Capacidad::Tareas),

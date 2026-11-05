@@ -174,6 +174,18 @@
   {#if estado.checks !== undefined && puedeEsperarCi && alEsperarCi}
     <section class="seccion" aria-labelledby="t-ci">
       <h3 id="t-ci">CI de GitHub</h3>
+      {#if estado.autodeploy && !estado.checks}
+        <!-- Lo que Orbit 1.4.9 dejó de hacer por defecto, y que `orbit doctor`
+             cuenta sin arreglarlo: el automático cómodo desplegaba un commit en
+             rojo de madrugada. Una app que ya estaba así sigue así hasta que
+             alguien lo decida. -->
+        <p class="aviso-ci">
+          <strong>Se despliega sola sin esperar a la CI</strong>: un commit en
+          rojo llegaría a producción. Desde Orbit 1.4.9, activar el
+          autodespliegue en un repositorio de GitHub enciende esta espera por
+          defecto; las apps que ya estaban en automático siguen como estaban.
+        </p>
+      {/if}
       {#if estado.checks}
         <p class="tenue">
           El autodespliegue y «desplegar todo» sólo despliegan un commit cuya CI

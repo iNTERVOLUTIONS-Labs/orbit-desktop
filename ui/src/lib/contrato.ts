@@ -408,6 +408,8 @@ export const CAPACIDADES = {
   esperarCi: [1, 4, 3],
   /** `state.cert_type`. */
   tipoDeCertificado: [1, 4, 7],
+  /** `deploy --env-stdin`: las variables por la entrada, fuera del `argv`. */
+  entornoPorEntrada: [1, 4, 9],
 } as const
 
 export type Capacidad = keyof typeof CAPACIDADES

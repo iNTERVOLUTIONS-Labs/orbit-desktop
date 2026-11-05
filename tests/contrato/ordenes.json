@@ -35,6 +35,17 @@
                "--env", "DATABASE_URL=••••••", "--env", "MAIL_FROM=••••••"]
     },
     {
+      "nombre": "con dos variables por la entrada estándar (Orbit 1.4.9)",
+      "orden": {
+        "tipo": "desplegar", "app": "tienda", "forzar": false, "por_entrada": true,
+        "entorno": [
+          { "clave": "DATABASE_URL", "valor": "postgres://tienda:s3cr3t@localhost/tienda" },
+          { "clave": "MAIL_FROM", "valor": "web@ejemplo.com" }
+        ]
+      },
+      "argv": ["--json", "deploy", "tienda", "--progress", "--env-stdin"]
+    },
+    {
       "nombre": "congelar con motivo",
       "orden": { "tipo": "congelar", "app": "tienda", "motivo": "black friday: no tocar" },
       "argv": ["lock", "tienda", "-m", "black friday: no tocar"]

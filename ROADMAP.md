@@ -450,9 +450,12 @@ congelaba esperando al servidor, una respuesta tardía de un servidor se pintaba
 bajo el nombre de otro, el monitor podía encolar peticiones, en macOS no se
 multiplexaba nunca, y los servidores añadidos a mano no salían en el rail.
 
+Y lo que Orbit añadió para esto: con un servidor 1.4.9 las variables van por la
+entrada estándar (`--env-stdin`) y no tocan el `argv`; con uno 1.4.3–1.4.8, por
+`--env` y avisándolo.
+
 Lo que queda para cuando Orbit lo publique: la lista de repositorios de la
-cuenta del servidor (`orbit github repos --json`, en `main` sin versión), y una
-forma de pasar un valor sin que toque el `argv` (`--env-stdin`, que no existe).
+cuenta del servidor (`orbit github repos --json`, en `main` sin versión).
 
 ## Fase 7 y más allá 💭
 

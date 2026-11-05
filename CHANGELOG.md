@@ -8,12 +8,32 @@ en el 1, porque todo se ha *añadido*—, así que es un parche.
 
 ## [0.1.1] - 2026-11-05
 
-Puesta al día con **Orbit 1.4.8**. El cliente se escribió contra la 1.3.6, y
+Puesta al día con **Orbit 1.4.8**, y con lo que la 1.4.9 añadió para este
+cliente. El cliente se escribió contra la 1.3.6, y
 entre medias Orbit ganó once versiones: la congelación de despliegues, la puerta
 de la CI de GitHub, las variables obligatorias que se piden antes del build, las
 tareas programadas, los certificados de origen de Cloudflare y el grupo
 `orbit-admin`. Todo con las formas sacadas **del Orbit de verdad ejecutado en el
 banco**, no de su documentación. Ver [docs/CONTRACT.md](docs/CONTRACT.md) §1.16.
+
+### Seguridad — con Orbit 1.4.9 las variables van por la entrada estándar, no en la orden
+
+Orbit 1.4.9 añadió `deploy --env-stdin`, y con un servidor 1.4.9 o posterior el
+cliente lo usa siempre: en la orden sólo va la bandera, y los valores se escriben
+por la entrada del proceso `ssh` —una línea `CLAVE="valor"` por variable— y la
+entrada se cierra al terminar. No tocan ni `ps` ni el registro de `sudo` del
+servidor: cierra THREAT-MODEL T-13. Las comillas dobles son necesarias, porque
+Orbit pasa cada valor por `_env_unquote`, que sin ellas corta un ` #` y los
+espacios del final. Quien decide el camino es el envoltorio, que le pregunta la
+versión al servidor justo antes; si no la puede leer, no manda nada. Con
+1.4.3–1.4.8 se sigue usando `--env`, con el aviso de siempre en la hoja.
+
+### Añadido — el detalle dice cuándo una app se despliega sola sin esperar a la CI
+
+Desde Orbit 1.4.9, `autodeploy enable` en un repositorio de GitHub enciende la
+espera a la CI por defecto (`--no-checks` para no esperarla). El cliente no
+ofrece activar el automático, así que no cambia ninguna orden; pero una app que
+ya estaba en automático sin la espera sigue así, y ahora se dice.
 
 ### Corregido — una pasada de un servidor 1.4.3 o posterior no se podía leer
 
@@ -155,6 +175,13 @@ respuesta manda que el campo esté.
 - `ui/tests/orbitjson-legible.test.ts` ejecuta también la expresión de
   `_read_env_block` de la 1.4.8 contra el fichero generado.
 - El servidor falso gana un caso `orbit-1.4` y cuatro patológicos; los de la 1.3.6
-  se quedan y siguen en verde, a propósito.
+  se quedan y siguen en verde, a propósito. Y un caso `orbit-1.4.9`, que lee
+  `--env-stdin` con el `_env_unquote` de Orbit copiado tal cual y sale con 99 si
+  la entrada no se cierra en cinco segundos.
+- `crates/orbit-client/tests/entrada.rs`, 5: en el `argv` del servidor no hay ni
+  un valor ni un `--env`, lo leído por la entrada es lo escrito, la entrada se
+  cierra, y un servidor anterior se niega sin que el valor toque el `argv`.
+  Comprobadas mutando el código (sin comillas, o sin cerrar la entrada: en rojo),
+  más una de punta a punta por `sshd`, con y sin multiplexar.
 - `tools/bench/check-contract.py` comprueba contra el Orbit de `main` que la lista
   trae los cuatro campos nuevos y que la pasada cuenta los once finales.

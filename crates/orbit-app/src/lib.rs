@@ -286,6 +286,16 @@ pub struct Vivos(Mutex<HashMap<String, EnCurso>>);
 /// quién preguntar. Los valores cruzan el puente una vez, se convierten en
 /// [`Secreto`] —que no se deja imprimir— y no se guardan en ningún sitio.
 ///
+/// **Por dónde viajan los valores lo decide esto, no la interfaz.** Con Orbit
+/// 1.4.9 o posterior van por la entrada estándar (`--env-stdin`) y no tocan ni
+/// `ps` ni el registro de `sudo` del servidor; con 1.4.3–1.4.8 sólo existe
+/// `--env`, que los pone en el `argv` (THREAT-MODEL T-13, y la hoja lo avisa).
+/// La versión se le pregunta al servidor justo antes —una llamada corta, por la
+/// conexión multiplexada— en vez de fiarse de la que tenga la interfaz, que
+/// puede ser de antes de una actualización. Y si no se puede saber, **no se
+/// manda nada**: adivinar mal aquí es poner una contraseña en el `argv` de un
+/// servidor que sí sabía leerla por la entrada.
+///
 /// `forzar` es `--force`: desplegar una app congelada **sin descongelarla**.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -301,15 +311,46 @@ async fn desplegar(
     let clave = format!("{alias}:{app}");
 
     let s = servidor_por_alias(&alias, binario);
+    let variables: Vec<VariableNueva> = entorno
+        .unwrap_or_default()
+        .into_iter()
+        .map(VariableNueva::from)
+        .collect();
+    let por_entrada = if variables.is_empty() {
+        false
+    } else {
+        let s_v = s.clone();
+        let v = aparte(move || {
+            let r = transporte::ejecutar(&s_v, &Comando::Version, dir_control().as_deref(), &[])?;
+            r.leer::<orbit_client::contrato::Version>()
+                .map_err(ErrorParaLaInterfaz::from)
+        })
+        .await
+        .map_err(|e| ErrorParaLaInterfaz {
+            clase: "sin-version",
+            mensaje: format!(
+                "no he podido saber qué versión de Orbit tiene el servidor, y sin saberlo no \
+                 mando las variables: según la versión irían por la entrada o en la orden. {}",
+                e.mensaje
+            ),
+            detalle: e.detalle,
+        })?;
+        variables_por_la_entrada(&v).ok_or_else(|| ErrorParaLaInterfaz {
+            clase: "sin-version",
+            mensaje: format!(
+                "el servidor dice tener Orbit «{}», que no sé leer, y sin saber la versión \
+                 no mando las variables: según cuál sea irían por la entrada o en la orden",
+                v.version
+            ),
+            detalle: None,
+        })?
+    };
     let c = Comando::Desplegar {
         app: app.clone(),
         progreso: true,
-        entorno: entorno
-            .unwrap_or_default()
-            .into_iter()
-            .map(VariableNueva::from)
-            .collect(),
+        entorno: variables,
         forzar: forzar.unwrap_or(false),
+        por_entrada,
     };
     // Se valida ANTES de registrar el despliegue como vivo: una variable que el
     // servidor rechazaría tiene que decirse aquí, con su nombre, y no dejar un
@@ -351,6 +392,16 @@ async fn desplegar(
         mensaje: e.to_string(),
         detalle: None,
     })
+}
+
+/// Si las variables de un despliegue van por la entrada estándar (`Some(true)`),
+/// por el `argv` (`Some(false)`, 1.4.3–1.4.8), o si no se sabe (`None`: una
+/// versión que no es semver). En el último caso no se manda nada: tratarla como
+/// vieja pondría la contraseña en el `argv` de un servidor que quizá sí sabía
+/// leerla por la entrada.
+fn variables_por_la_entrada(v: &orbit_client::contrato::Version) -> Option<bool> {
+    v.semver()?;
+    Some(v.sabe(orbit_client::contrato::Capacidad::EntornoPorEntrada))
 }
 
 /// Una variable de `deploy --env`, tal como la manda el formulario.
@@ -1387,6 +1438,21 @@ mod pruebas {
         assert_eq!(n.valor.exponer(), "hunter2");
         let d = format!("{n:?}");
         assert!(!d.contains("hunter2"), "{d}");
+    }
+
+    /// Con 1.4.9 los valores van por la entrada; antes, por el `argv`; y con una
+    /// versión que no se entiende, por ningún sitio: no se adivina.
+    #[test]
+    fn las_variables_van_por_la_entrada_desde_la_1_4_9() {
+        let v = |s: &str| orbit_client::contrato::Version {
+            schema: 1,
+            version: s.into(),
+            contract: 1,
+        };
+        assert_eq!(variables_por_la_entrada(&v("1.4.8")), Some(false));
+        assert_eq!(variables_por_la_entrada(&v("1.4.9")), Some(true));
+        assert_eq!(variables_por_la_entrada(&v("1.5.0")), Some(true));
+        assert_eq!(variables_por_la_entrada(&v("desarrollo")), None);
     }
 
     /// Los tres estados de una anulación tienen que llegar al núcleo como tres

@@ -444,11 +444,21 @@ export interface VariableNueva {
 
 /** Los argumentos de un despliegue **tal como se enseñan**: los mismos que
  *  manda el núcleo (`Comando::argv_visible`), con cada valor de `--env`
- *  tapado. Se comparan los dos contra `tests/contrato/ordenes.json`. */
-export function argvDeDespliegue(app: string, entorno: VariableNueva[] = [], forzar = false): string[] {
+ *  tapado. Se comparan los dos contra `tests/contrato/ordenes.json`.
+ *
+ *  Con `porEntrada` (Orbit 1.4.9) en la orden sólo va `--env-stdin`: los
+ *  valores los escribe el núcleo por la entrada estándar del canal SSH, y no
+ *  hay nada que tapar porque no hay nada que enseñar. */
+export function argvDeDespliegue(
+  app: string, entorno: VariableNueva[] = [], forzar = false, porEntrada = false,
+): string[] {
   const v = ['--json', 'deploy', app, '--progress']
   if (forzar) v.push('--force')
-  for (const e of entorno) v.push('--env', `${e.clave}=${OCULTO}`)
+  if (porEntrada) {
+    if (entorno.length > 0) v.push('--env-stdin')
+  } else {
+    for (const e of entorno) v.push('--env', `${e.clave}=${OCULTO}`)
+  }
   return v
 }
 

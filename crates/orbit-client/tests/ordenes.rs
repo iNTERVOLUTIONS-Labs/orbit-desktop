@@ -37,6 +37,7 @@ fn desde(o: &serde_json::Value) -> Comando {
                 })
                 .collect(),
             forzar: o["forzar"].as_bool().unwrap(),
+            por_entrada: o["por_entrada"].as_bool().unwrap_or(false),
         },
         "congelar" => Comando::Congelar {
             app,

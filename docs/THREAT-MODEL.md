@@ -1227,7 +1227,13 @@ móntales un sistema falso encima y mira qué queda tocado»*— aplicado al dis
 
 #### T-13 · Un secreto en la línea de órdenes del servidor
 **Actores:** C6 (otro usuario del servidor, incluidas las apps aisladas), el registro de `sudo`.
-**Severidad: Media.**
+**Severidad: Media. Cerrada con Orbit 1.4.9 o posterior; abierta, y avisada, con 1.4.3–1.4.8.**
+
+> **Estado.** Orbit 1.4.9 añadió `deploy --env-stdin`, y con un servidor 1.4.9 o posterior el
+> cliente lo usa siempre: en el `argv` sólo va la bandera, y los valores se escriben por la
+> entrada estándar del proceso `ssh`, que los lleva por el canal cifrado hasta Orbit. No tocan ni
+> `ps` ni el registro de `sudo`. Lo de abajo describe la amenaza tal como sigue siendo con un
+> servidor 1.4.3–1.4.8, donde sólo existe `--env`.
 
 Desde Orbit 1.3.8, una variable **obligatoria** que falta para el despliegue antes del build, y
 con `--json` no hay a quién preguntársela. La salida que da Orbit es `deploy --env CLAVE=valor`,
@@ -1258,8 +1264,29 @@ No hay una alternativa sin escribir en el servidor: `--env-file` exige un ficher
    entra como root.
 3. **Sólo se pide lo que falta.** Nunca se reenvía una variable que ya tiene valor.
 
-**Lo que haría falta, y es de Orbit:** un `--env-stdin`, o que `--env-file -` lea la entrada
-estándar. Con eso el valor iría por el canal cifrado de SSH y no tocaría ni `ps` ni el registro.
+**Lo que hacía falta era de Orbit, y llegó en la 1.4.9: `--env-stdin`.** Cómo lo usa el cliente,
+y qué se ha comprobado:
+
+4. **Quién decide el camino es el envoltorio, no la interfaz.** Justo antes de desplegar con
+   variables, le pregunta la versión al servidor (una llamada corta, por la conexión multiplexada);
+   con 1.4.9 o posterior manda `--env-stdin`, con 1.4.3–1.4.8 `--env` y el aviso de arriba. Si la
+   versión no se puede leer o no es semver, **no manda nada**: adivinar mal es poner la contraseña
+   en el `argv` de un servidor que sí sabía leerla por la entrada. Y si alguna vez llegara
+   `--env-stdin` a un servidor anterior, se negaría entero antes de empezar, sin que el valor haya
+   tocado el `argv` — un fallo seguro, no una fuga.
+5. **La entrada lleva una línea `CLAVE="valor"` por variable, entre comillas dobles**, porque Orbit
+   pasa cada valor por `_env_unquote` y sin comillas corta un ` #` como comentario y quita los
+   espacios del final. Comprobado contra las funciones de Orbit 1.4.9, y el servidor falso lleva su
+   `_env_unquote` copiado tal cual para que las pruebas lean igual que él.
+6. **La entrada se cierra** al terminar de escribir (`escribir_entrada`, en un hilo para no
+   bloquear la lectura de stdout y stderr). `--env-stdin` lee hasta el final, y con la tubería
+   abierta Orbit esperaría para siempre. El resto del catálogo sigue con la entrada a `null`.
+7. **Pruebas** (`crates/orbit-client/tests/entrada.rs`, y la de punta a punta por `sshd` con y sin
+   multiplexar): en el `argv` que recibe el servidor no hay ni un valor ni un `--env`; lo leído
+   por la entrada es exactamente lo escrito, con comillas, `#`, barras, `$(…)` y vacíos; y el falso
+   sale con 99 si la entrada no se cierra en cinco segundos. Comprobadas mutando el código: sin
+   comillas, o sin cerrar la entrada, se ponen en rojo. Y contra el Orbit 1.4.9 de verdad en el
+   banco, por el transporte: lee la entrada, no se cuelga (243 ms) y sigue hasta su respuesta.
 
 ---
 
@@ -1279,7 +1306,7 @@ estándar. Con eso el valor iría por el canal cifrado de SSH y no tocaría ni `
 | T-10 | Corte a mitad de despliegue | red | — | Media | No afirmar el resultado; no reintentar solo |
 | T-11 | Nombres que engañan | C3, C6 | — | Media | NFC, marcado, regla de forma |
 | T-12 | Persistencia accidental | C1 | A3 | Media-Alta | Lista blanca de lo que se guarda + prueba con `grep` |
-| T-13 | Secreto en el `argv` de `deploy --env` | C6, `sudo` | A3 | Media | `Secreto` sin `Debug`, tapado en la hoja, dicho donde se decide; falta `--env-stdin` en Orbit |
+| T-13 | Secreto en el `argv` de `deploy --env` | C6, `sudo` | A3 | Media | **Cerrada con Orbit ≥ 1.4.9** (`--env-stdin`, decidido por la versión del servidor). Con 1.4.3–1.4.8: `Secreto` sin `Debug`, tapado en la hoja y avisado |
 
 ### 1.7 Lo que está fuera del modelo, dicho a propósito
 

@@ -49,6 +49,11 @@ const app = (n: string): App => apps14.find((a) => a.name === n)!
 const texto = (c: HTMLElement) => (c.textContent ?? '').replace(/\s+/g, ' ')
 
 describe('qué sabe hacer un servidor', () => {
+  it('las variables por la entrada, desde la 1.4.9', () => {
+    expect(sabe('1.4.8', 'entornoPorEntrada')).toBe(false)
+    expect(sabe('1.4.9', 'entornoPorEntrada')).toBe(true)
+  })
+
   it('sale de la versión de Orbit, por componentes y no como texto', () => {
     expect(sabe('1.3.6', 'congelar')).toBe(false)
     expect(sabe('1.4.3', 'congelar')).toBe(true)
@@ -74,7 +79,7 @@ describe('las órdenes que se enseñan son las que se ejecutan', () => {
     it(c.nombre, () => {
       const o = c.orden
       const argv =
-        o.tipo === 'desplegar' ? argvDeDespliegue(o.app, o.entorno, o.forzar)
+        o.tipo === 'desplegar' ? argvDeDespliegue(o.app, o.entorno, o.forzar, o.por_entrada ?? false)
         : o.tipo === 'congelar' ? argvDeCongelar(o.app, o.motivo)
         : o.tipo === 'descongelar' ? argvDeDescongelar(o.app)
         : argvDeEsperarCi(o.app, o.esperar)
@@ -307,6 +312,17 @@ describe('el detalle', () => {
     expect(texto(sin.container)).not.toContain('Tareas programadas')
   })
 
+  it('un automático que no espera a la CI se dice, porque desde 1.4.9 no es lo normal', () => {
+    const sola = { ...app('blog'), state: { ...app('blog').state, autodeploy: true, checks: false } }
+    const { container } = render(DetalleApp, {
+      app: sola, servidor: 'produccion', puedeEsperarCi: true, alEsperarCi: vi.fn(),
+    })
+    expect(texto(container)).toContain('Se despliega sola sin esperar a la CI')
+    // Y con la espera puesta, no.
+    const r = render(DetalleApp, { app: app('api'), servidor: 'produccion', puedeEsperarCi: true, alEsperarCi: vi.fn() })
+    expect(texto(r.container)).not.toContain('sin esperar a la CI')
+  })
+
   it('el origen de Cloudflare se explica en el detalle', () => {
     const { container } = render(DetalleApp, {
       app: app('api'), servidor: 'produccion', info: { ...info('api'), state: { ...app('api').state, cert_days: 5400 } },
@@ -350,6 +366,32 @@ describe('la hoja del despliegue', () => {
     // Y en cuanto se manda, se olvida.
     await tick()
     expect(campo.value).toBe('')
+  })
+
+  it('con Orbit 1.4.9 los valores no van en la orden: ni el valor ni la bandera --env', async () => {
+    const { container } = render(HojaDeDespliegue, {
+      app: app('blog'), servidor: 'produccion', comprobacion: c, estadoComprobacion: 'hecho',
+      porEntrada: true, alConfirmar: () => {}, alCancelar: () => {},
+    })
+    const campo = container.querySelector('input[type=password]') as HTMLInputElement
+    await fireEvent.input(campo, { target: { value: 's3cr3t' } })
+    await tick()
+    const orden = container.querySelector('.orden')!.textContent!
+    expect(orden).toContain('--env-stdin')
+    expect(orden).not.toContain('--env ')
+    expect(orden).not.toContain('DATABASE_URL')
+    expect(texto(container)).not.toContain('s3cr3t')
+    expect(texto(container)).toContain('por la entrada del canal SSH')
+    expect(texto(container)).not.toContain('lista de procesos del servidor, y si')
+  })
+
+  it('con un Orbit anterior se avisa de que el valor va en la orden', () => {
+    const { container } = render(HojaDeDespliegue, {
+      app: app('blog'), servidor: 'produccion', comprobacion: c, estadoComprobacion: 'hecho',
+      alConfirmar: () => {}, alCancelar: () => {},
+    })
+    expect(texto(container)).toContain('anterior a la 1.4.9')
+    expect(texto(container)).toContain('registro de sudo')
   })
 
   it('una congelada se despliega con su propio botón y con --force', async () => {

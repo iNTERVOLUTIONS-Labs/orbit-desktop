@@ -42,6 +42,7 @@ fn desplegar(entorno: Vec<VariableNueva>, forzar: bool) -> Comando {
         progreso: false,
         entorno,
         forzar,
+        por_entrada: false,
     }
 }
 

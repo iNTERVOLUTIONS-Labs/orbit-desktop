@@ -459,6 +459,7 @@ fn desplegar(o: &Opciones, args: &[String]) -> i32 {
         progreso: true,
         entorno: vec![],
         forzar: false,
+        por_entrada: false,
     };
 
     println!("{}", p.tenue(&format!("Desplegando {app} en {alias}…")));

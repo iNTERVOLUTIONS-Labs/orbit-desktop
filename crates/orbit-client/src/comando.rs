@@ -457,6 +457,13 @@ pub enum Comando {
         /// despliega esa vez y la congelación sigue. Es una decisión, y por eso
         /// en la interfaz es un botón aparte, nunca una casilla.
         forzar: bool,
+        /// Mandar `entorno` por la **entrada estándar** (`--env-stdin`, Orbit
+        /// 1.4.9) en vez de por el `argv`. Con esto el valor viaja por el canal
+        /// cifrado de SSH y no toca ni `ps` ni el registro de `sudo`: es lo que
+        /// cierra THREAT-MODEL T-13. Lo decide quien sabe la versión del
+        /// servidor; con uno anterior, `--env-stdin` no existe y el servidor
+        /// se negaría entero —que es un fallo seguro, no una fuga—.
+        por_entrada: bool,
     },
     /// Una pasada por todas las apps del servidor.
     ///
@@ -760,6 +767,7 @@ impl Comando {
                 progreso,
                 entorno,
                 forzar,
+                por_entrada,
             } => {
                 json(&mut v);
                 v.push("deploy".into());
@@ -785,11 +793,20 @@ impl Comando {
                             motivo,
                         });
                     }
-                    // Un solo argumento `CLAVE=valor`, como lo parte el
-                    // servidor (`${kv%%=*}`): un `=` dentro del valor llega
-                    // entero, porque sólo se corta por el primero.
-                    v.push("--env".into());
-                    v.push(format!("{}={}", e.clave, e.valor.exponer()));
+                    if !*por_entrada {
+                        // Un solo argumento `CLAVE=valor`, como lo parte el
+                        // servidor (`${kv%%=*}`): un `=` dentro del valor llega
+                        // entero, porque sólo se corta por el primero.
+                        v.push("--env".into());
+                        v.push(format!("{}={}", e.clave, e.valor.exponer()));
+                    }
+                }
+                // Por la entrada: en el `argv` sólo va la bandera, y los
+                // valores los escribe el transporte por stdin (ver
+                // [`Comando::entrada`]). Sin variables no se pasa: `--env-stdin`
+                // gasta la entrada y apaga las preguntas, y no hay nada que leer.
+                if *por_entrada && !entorno.is_empty() {
+                    v.push("--env-stdin".into());
                 }
             }
             Self::EntornoComprobar { app } => {
@@ -981,6 +998,39 @@ impl Comando {
     pub fn linea(&self, binario: &str) -> Result<String, ErrorForma> {
         let argv = self.argv(binario)?;
         shquote::build(&argv).map_err(ErrorForma::Escapado)
+    }
+
+    /// Lo que hay que escribir por la **entrada estándar** de la orden, si algo.
+    ///
+    /// Sólo un despliegue con `por_entrada` y variables lo usa: una línea
+    /// `CLAVE="valor"` por variable, que es lo que lee `--env-stdin` —el mismo
+    /// formato que `--env-file`—. Las comillas dobles no son estilo: Orbit pasa
+    /// cada valor por `_env_unquote`, que **sin comillas** corta un ` #` como
+    /// comentario y quita los espacios del final, así que `p@ss #1` llegaría
+    /// como `p@ss`. Entre comillas dobles sólo se interpretan `\"` y `\\`, y
+    /// por eso son los dos únicos que se escapan. Una comilla simple, un salto
+    /// de línea o un nulo ya los rechaza [`Comando::argv`] antes de llegar aquí.
+    ///
+    /// Es un [`Secreto`]: lleva los valores.
+    pub fn entrada(&self) -> Option<Secreto> {
+        match self {
+            Self::Desplegar {
+                entorno,
+                por_entrada: true,
+                ..
+            } if !entorno.is_empty() => {
+                let mut s = String::new();
+                for e in entorno {
+                    let v = e.valor.exponer().replace('\\', "\\\\").replace('"', "\\\"");
+                    s.push_str(&e.clave);
+                    s.push_str("=\"");
+                    s.push_str(&v);
+                    s.push_str("\"\n");
+                }
+                Some(Secreto::nuevo(s))
+            }
+            _ => None,
+        }
     }
 
     /// El `argv` **para enseñarlo**: el mismo que [`Comando::argv`], con cada
@@ -1322,6 +1372,7 @@ mod tests {
             progreso: true,
             entorno: vec![],
             forzar: false,
+            por_entrada: false,
         }
         .es_flujo());
     }
@@ -1572,6 +1623,74 @@ mod tests {
 
     // ── 1.3.8 a 1.4.8 ───────────────────────────────────────────────────────
 
+    fn por_entrada(entorno: Vec<(&str, &str)>) -> Comando {
+        match desplegar_con(entorno, false) {
+            Comando::Desplegar {
+                app,
+                progreso,
+                entorno,
+                forzar,
+                ..
+            } => Comando::Desplegar {
+                app,
+                progreso,
+                entorno,
+                forzar,
+                por_entrada: true,
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn por_la_entrada_el_argv_no_lleva_ni_un_valor_ni_una_clave() {
+        let c = por_entrada(vec![("DB_PASSWORD", "hunter2"), ("MODE", "a=b")]);
+        let v = c.argv(B).unwrap();
+        assert_eq!(
+            v,
+            [B, "--json", "deploy", "tienda", "--progress", "--env-stdin"]
+        );
+        assert!(!v.join(" ").contains("hunter2"));
+        assert!(!v.iter().any(|a| a == "--env"));
+        // Lo que se enseña es lo mismo: no hay nada que tapar.
+        assert_eq!(c.argv_visible(B).unwrap(), v);
+    }
+
+    #[test]
+    fn la_entrada_va_entre_comillas_dobles_para_que_orbit_no_la_recorte() {
+        let c = por_entrada(vec![
+            ("A", r#"p@ss w"ord #no-es-comentario  "#),
+            ("B", r"back\slash\"),
+            ("C", ""),
+        ]);
+        let e = c.entrada().expect("hay entrada");
+        assert_eq!(
+            e.exponer(),
+            "A=\"p@ss w\\\"ord #no-es-comentario  \"\nB=\"back\\\\slash\\\\\"\nC=\"\"\n"
+        );
+        // Y no se deja imprimir.
+        assert!(!format!("{e:?}").contains("p@ss"));
+    }
+
+    #[test]
+    fn sin_variables_o_por_el_argv_no_hay_entrada() {
+        assert!(por_entrada(vec![]).entrada().is_none());
+        assert!(!por_entrada(vec![])
+            .argv(B)
+            .unwrap()
+            .contains(&"--env-stdin".to_string()));
+        assert!(desplegar_con(vec![("A", "1")], false).entrada().is_none());
+        assert!(Comando::Lista.entrada().is_none());
+    }
+
+    #[test]
+    fn por_la_entrada_tambien_se_valida_antes_de_mandar() {
+        assert!(matches!(
+            por_entrada(vec![("A", "dos\nlíneas")]).argv(B),
+            Err(ErrorForma::ValorDeEntorno { .. })
+        ));
+    }
+
     fn desplegar_con(entorno: Vec<(&str, &str)>, forzar: bool) -> Comando {
         Comando::Desplegar {
             app: "tienda".into(),
@@ -1584,6 +1703,7 @@ mod tests {
                 })
                 .collect(),
             forzar,
+            por_entrada: false,
         }
     }
 

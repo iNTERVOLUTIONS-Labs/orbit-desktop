@@ -21,6 +21,7 @@
     comprobacion = null,
     estadoComprobacion = 'no-sabe',
     faltanDeAntes = [],
+    porEntrada = false,
     alConfirmar,
     alCancelar,
   }: {
@@ -37,6 +38,11 @@
      *  la comprobación: ésa mira la release que sirve, y ésta la del commit
      *  nuevo, que puede declarar una más. */
     faltanDeAntes?: string[]
+    /** El servidor tiene Orbit 1.4.9 o posterior: los valores irán por la
+     *  entrada estándar (`--env-stdin`) y no en la orden. Lo decide de nuevo
+     *  el envoltorio, preguntándole la versión al servidor justo antes; esto
+     *  sólo cambia lo que se enseña y se avisa. */
+    porEntrada?: boolean
     alConfirmar: (entorno: VariableNueva[], forzar: boolean) => void
     alCancelar: () => void
   } = $props()
@@ -83,7 +89,8 @@
 
   // La orden que se enseña sale del mismo sitio que la que se compara con el
   // núcleo, y con los valores tapados: se lee la clave, nunca el valor.
-  const orden = $derived(ordenLegible(argvDeDespliegue(app.name, relleno(), congelada)))
+  const orden = $derived(ordenLegible(argvDeDespliegue(app.name, relleno(), congelada, porEntrada)))
+  const porLaEntrada = $derived(porEntrada ? relleno().map((e) => e.clave) : [])
 
   function olvidar() {
     for (const k of Object.keys(valores)) valores[k] = ''
@@ -197,20 +204,37 @@
           </details>
         {/if}
 
-        <!-- Lo incómodo, dicho donde se decide. Orbit no tiene hoy otra forma
-             de recibir un valor sin terminal: `--env-file` exige un fichero en
-             el servidor, y escribirlo es justo lo que este cliente no hace. -->
-        <p class="letra">
-          Los valores viajan dentro de la orden: mientras dura el despliegue se
-          ven en la lista de procesos del servidor, y si no entras como root
-          quedan en el registro de <code>sudo</code>. Aquí no se guardan en
-          ningún sitio y se olvidan al cerrar.
-        </p>
+        {#if porEntrada}
+          <!-- Orbit 1.4.9: `--env-stdin`. El valor va por el canal cifrado de
+               SSH y no toca la línea de órdenes del servidor. -->
+          <p class="letra">
+            Los valores viajan por la entrada del canal SSH, no dentro de la
+            orden: no se ven en la lista de procesos del servidor ni quedan en
+            el registro de <code>sudo</code>. Aquí no se guardan en ningún sitio
+            y se olvidan al cerrar.
+          </p>
+        {:else}
+          <!-- Lo incómodo, dicho donde se decide. Antes de Orbit 1.4.9 no hay
+               otra forma de recibir un valor sin terminal: `--env-file` exige
+               un fichero en el servidor, y escribirlo es justo lo que este
+               cliente no hace. -->
+          <p class="letra">
+            Este servidor tiene un Orbit anterior a la 1.4.9, y los valores
+            viajan dentro de la orden: mientras dura el despliegue se ven en la
+            lista de procesos del servidor, y si no entras como root quedan en
+            el registro de <code>sudo</code>. Con Orbit 1.4.9 irían por la
+            entrada del canal SSH. Aquí no se guardan en ningún sitio y se
+            olvidan al cerrar.
+          </p>
+        {/if}
       </section>
     {/if}
 
     <p class="intro">Se va a ejecutar:</p>
     <pre class="orden">{orden}</pre>
+    {#if porLaEntrada.length > 0}
+      <p class="letra entrada">Y por la entrada estándar: {porLaEntrada.map((k) => `${k}=••••••`).join(', ')}.</p>
+    {/if}
 
     <p class="consecuencia">
       Actualiza el clon, compila en una release nueva y sólo al final mueve el
@@ -257,6 +281,7 @@
   .mal { font-size: 12px; color: var(--fg); }
   summary { font-size: 12px; color: var(--fg-muted); cursor: pointer; margin-bottom: var(--e-2); }
   .letra { margin: 0; font-size: 11px; color: var(--fg-faint); max-width: 62ch; }
+  .entrada { margin: calc(-1 * var(--e-3)) 0 var(--e-4); font-family: var(--mono); }
   .intro { margin: 0 0 var(--e-2); font-size: 13px; color: var(--fg-muted); }
   .orden {
     margin: 0 0 var(--e-4); padding: var(--e-3);

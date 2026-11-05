@@ -34,7 +34,7 @@ use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crate::comando::{Comando, ErrorForma, Vena};
+use crate::comando::{Comando, ErrorForma, Secreto, Vena};
 
 /// Cuánto se acepta de una respuesta antes de cortar.
 ///
@@ -423,7 +423,12 @@ pub fn ejecutar(
     for (k, v) in entorno {
         cmd.env(k, v);
     }
-    ejecutar_proceso(cmd, tope_de_tiempo(comando), &servidor.binario)
+    ejecutar_proceso(
+        cmd,
+        tope_de_tiempo(comando),
+        &servidor.binario,
+        comando.entrada(),
+    )
 }
 
 /// El mismo camino sin `ssh`, para las pruebas: se ejecuta el binario en local.
@@ -453,7 +458,7 @@ pub fn ejecutar_local(
     for (k, v) in entorno {
         cmd.env(k, v);
     }
-    ejecutar_proceso(cmd, tope_de_tiempo(comando), binario)
+    ejecutar_proceso(cmd, tope_de_tiempo(comando), binario, comando.entrada())
 }
 
 /// Un despliegue en curso, para poder cancelarlo.
@@ -538,6 +543,7 @@ pub fn ejecutar_en_vivo(
         tope_de_tiempo(comando),
         &servidor.binario,
         comando.vena_humana(),
+        comando.entrada(),
         en_curso,
         al_llegar,
     )
@@ -591,6 +597,7 @@ pub fn ejecutar_crudo_en_vivo(
         Duration::MAX,
         &servidor.binario,
         Vena::Stdout,
+        None,
         en_curso,
         al_llegar,
     )
@@ -611,7 +618,7 @@ pub fn ejecutar_crudo(
     cmd.arg(&servidor.destino);
     cmd.arg(linea);
     // Mismo motor que el resto, pero **sin clasificar**: ver abajo.
-    let r = match ejecutar_proceso(cmd, Duration::from_secs(30), &servidor.binario) {
+    let r = match ejecutar_proceso(cmd, Duration::from_secs(30), &servidor.binario, None) {
         Ok(r) => r,
         // `clasificar` traduce los códigos de `orbit`, y aquí puede que ni
         // exista: un 127 «command not found» es lo NORMAL en un servidor sin
@@ -740,6 +747,7 @@ pub fn ejecutar_en_vivo_local(
         tope_de_tiempo(comando),
         binario,
         comando.vena_humana(),
+        comando.entrada(),
         en_curso,
         al_llegar,
     )
@@ -750,16 +758,22 @@ fn ejecutar_sirviendo(
     tope: Duration,
     binario: &str,
     vena: Vena,
+    entrada: Option<Secreto>,
     en_curso: EnCurso,
     mut al_llegar: impl FnMut(String) + Send + 'static,
 ) -> Result<Respuesta, ErrorTransporte> {
     use std::io::BufRead;
     use std::sync::Arc;
 
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.stdin(if entrada.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
     let mut hijo = cmd.spawn().map_err(ErrorTransporte::NoSePudoLanzar)?;
+    let h_entrada = escribir_entrada(&mut hijo, entrada);
 
     let so: Box<dyn std::io::Read + Send> = Box::new(hijo.stdout.take().unwrap());
     let se: Box<dyn std::io::Read + Send> = Box::new(hijo.stderr.take().unwrap());
@@ -828,6 +842,9 @@ fn ejecutar_sirviendo(
 
     let (guardada, corto) = h_guardada.join().unwrap()?;
     let _ = h_servida.join();
+    if let Some(h) = h_entrada {
+        let _ = h.join();
+    }
     if corto {
         return Err(ErrorTransporte::Demasiado {
             tope: TOPE_RESPUESTA,
@@ -859,12 +876,19 @@ fn ejecutar_proceso(
     mut cmd: Command,
     tope: Duration,
     binario: &str,
+    entrada: Option<Secreto>,
 ) -> Result<Respuesta, ErrorTransporte> {
-    cmd.stdin(Stdio::null()) // nadie va a contestar a un selector
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    // Sin entrada, `null`: nadie va a contestar a un selector.
+    cmd.stdin(if entrada.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
 
     let mut hijo = cmd.spawn().map_err(ErrorTransporte::NoSePudoLanzar)?;
+    let h_entrada = escribir_entrada(&mut hijo, entrada);
 
     // Los dos descriptores, a la vez y en hilos. Leerlos en serie es un bloqueo
     // mutuo en cuanto el que no se lee llena su tubería, y con --json el Orbit
@@ -894,6 +918,9 @@ fn ejecutar_proceso(
 
     let (stdout, corto_o) = h1.join().unwrap()?;
     let (stderr, _) = h2.join().unwrap()?;
+    if let Some(h) = h_entrada {
+        let _ = h.join();
+    }
     if corto_o {
         return Err(ErrorTransporte::Demasiado {
             tope: TOPE_RESPUESTA,
@@ -966,6 +993,34 @@ fn clasificar(r: Respuesta, binario: &str) -> Result<Respuesta, ErrorTransporte>
         stdout: r.stdout,
         stderr: r.stderr,
     })
+}
+
+/// Escribe la entrada de la orden **y la cierra**.
+///
+/// En un hilo y no aquí mismo por lo de siempre: si el otro lado no lee —se
+/// muere antes, o escribe mucho antes de leer— una escritura que no cabe en la
+/// tubería se quedaría esperando mientras nadie lee stdout ni stderr.
+///
+/// Y cerrarla no es un detalle: `--env-stdin` lee **hasta el final**, y con la
+/// tubería abierta Orbit esperaría para siempre a una línea que no va a llegar
+/// —un despliegue colgado antes de empezar, con un tope de una hora—. El cierre
+/// es el `drop` del extremo, que pasa al terminar el hilo; por SSH se convierte
+/// en el EOF del canal.
+///
+/// Un error al escribir —el otro lado ya se ha ido— no se convierte en el error
+/// de la orden: el código de salida y stderr cuentan mejor qué pasó.
+fn escribir_entrada(
+    hijo: &mut std::process::Child,
+    entrada: Option<Secreto>,
+) -> Option<std::thread::JoinHandle<()>> {
+    use std::io::Write;
+    let e = entrada?;
+    let mut tubo = hijo.stdin.take()?;
+    Some(std::thread::spawn(move || {
+        let _ = tubo.write_all(e.exponer().as_bytes());
+        let _ = tubo.flush();
+        drop(tubo);
+    }))
 }
 
 fn leer_hasta(mut f: impl Read, tope: usize) -> Result<(String, bool), ErrorTransporte> {
@@ -1163,6 +1218,7 @@ mod tests {
                     progreso: false,
                     entorno: vec![],
                     forzar: false,
+                    por_entrada: false,
                 })
         );
         // Y un log en vivo no tiene plazo, porque no terminar es lo que hace.

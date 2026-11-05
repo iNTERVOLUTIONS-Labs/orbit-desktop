@@ -87,7 +87,7 @@ una función que haya que escribir.
 
 ## Con qué Orbit habla
 
-Con **Orbit 1.3.6 a 1.4.8**, contrato 1. Lo que un servidor más viejo no sabe
+Con **Orbit 1.3.6 a 1.4.9**, contrato 1. Lo que un servidor más viejo no sabe
 hacer —congelar despliegues, esperar a la CI, pedir las variables que faltan—
 no se ofrece, y su silencio no se pinta como un «no». La tabla, con fechas y
 con lo que cambió entre medias, está en
@@ -100,8 +100,8 @@ Todavía no hay interfaz, pero sí hay núcleo — y se prueba entero sin levant
 una ventana:
 
 ```bash
-cargo test --all          # 221 pruebas del núcleo, más 12 de punta a punta con --ignored
-cd ui && npx vitest run   # 378 de la interfaz
+cargo test --all          # 230 pruebas del núcleo, más 13 de punta a punta con --ignored
+cd ui && npx vitest run   # 385 de la interfaz
 ```
 
 La interfaz tiene sus dos pantallas de la fase 1 y se puede mirar:
@@ -115,7 +115,7 @@ cd ui && npx playwright test          # y las capturas de los dos temas
 órdenes y el escapado. Vive fuera de la interfaz a propósito: un cambio de
 framework no lo toca, y una TUI podría reutilizarlo sin duplicar nada.
 
-`tests/fakeserver` es un Orbit de mentira con 46 respuestas. Las sanas están
+`tests/fakeserver` es un Orbit de mentira con 47 respuestas. Las sanas están
 generadas con el Orbit de verdad, así que no pueden divergir del contrato; las
 patológicas son las que un VPS no sabe devolver —un JSON cortado, un contrato
 de una versión que no conocemos, un nombre de app con `</script>` dentro— que

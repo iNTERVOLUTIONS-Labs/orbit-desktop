@@ -71,7 +71,7 @@ fn escribir_config_una_vez(dir: &Path, puerto: u16) -> String {
                IdentityFile {}\n  \
                IdentitiesOnly yes\n  \
                UserKnownHostsFile {}\n  \
-               SendEnv ORBIT_FAKE_CASE ORBIT_FAKE_LOG\n",
+               SendEnv ORBIT_FAKE_CASE ORBIT_FAKE_LOG ORBIT_FAKE_ENV\n",
             dir.join("cliente").display(),
             dir.join("known_hosts").display(),
         ),
@@ -225,6 +225,7 @@ fn una_variable_de_despliegue_hostil_llega_entera_por_ssh() {
             valor: Secreto::nuevo(valor),
         }],
         forzar: false,
+        por_entrada: false,
     };
     let ruta = log.to_string_lossy().into_owned();
     ejecutar(
@@ -241,6 +242,56 @@ fn una_variable_de_despliegue_hostil_llega_entera_por_ssh() {
         .collect();
     let i = argv.iter().position(|a| a == "--env").unwrap();
     assert_eq!(argv[i + 1], format!("DB_PASSWORD={valor}"));
+}
+
+/// Lo mismo por `--env-stdin` (Orbit 1.4.9), que es lo que cierra T-13: el
+/// valor tiene que llegar entero por el canal de SSH —atravesando, si se
+/// multiplexa, el máster— y **no** aparecer en el `argv`. Y la entrada tiene
+/// que cerrarse: si no, el falso sale con 99 a los cinco segundos.
+#[test]
+#[ignore = "necesita el sshd del banco"]
+fn una_variable_por_la_entrada_cruza_ssh_y_no_toca_el_argv() {
+    use orbit_client::comando::{Secreto, VariableNueva};
+    let d = banco();
+    let (log, env) = (d.join("argv-stdin.log"), d.join("env-stdin.log"));
+    let _ = fs::remove_file(&log);
+    let _ = fs::remove_file(&env);
+    let valor = r#"p@ss w"ord;$(id)`x`=y ${HOME} #no-es-comentario  "#;
+    let c = Comando::Desplegar {
+        app: "tienda".into(),
+        progreso: false,
+        entorno: vec![VariableNueva {
+            clave: "DB_PASSWORD".into(),
+            valor: Secreto::nuevo(valor),
+        }],
+        forzar: false,
+        por_entrada: true,
+    };
+    let (rl, re) = (
+        log.to_string_lossy().into_owned(),
+        env.to_string_lossy().into_owned(),
+    );
+    for multiplexar in [false, true] {
+        let _ = fs::remove_file(&env);
+        let ctrl = if multiplexar { dir_control() } else { None };
+        let r = ejecutar(
+            &servidor(multiplexar),
+            &c,
+            ctrl.as_deref(),
+            &[
+                ("ORBIT_FAKE_CASE", "orbit-1.4.9"),
+                ("ORBIT_FAKE_LOG", &rl),
+                ("ORBIT_FAKE_ENV", &re),
+            ],
+        )
+        .expect("el despliegue del falso contesta");
+        assert_eq!(r.codigo, 0, "multiplexar={multiplexar}: {}", r.stderr);
+        let argv = String::from_utf8_lossy(&fs::read(&log).unwrap()).into_owned();
+        assert!(!argv.contains("p@ss"), "el valor ha llegado al argv");
+        assert!(argv.contains("--env-stdin"));
+        let llegado = String::from_utf8_lossy(&fs::read(&env).unwrap()).into_owned();
+        assert_eq!(llegado, format!("DB_PASSWORD={valor}\0"));
+    }
 }
 
 // ── stdout y stderr, separados de verdad ───────────────────────────────────
@@ -307,6 +358,7 @@ fn un_despliegue_fallido_trae_su_objeto_aunque_el_rc_sea_1() {
         progreso: false,
         entorno: vec![],
         forzar: false,
+        por_entrada: false,
     };
     let r = pedir(&c, "fallo-con-objeto").expect("el objeto cruza aunque el rc sea 1");
     let d: Despliegue = r.leer().unwrap();
