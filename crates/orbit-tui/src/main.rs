@@ -386,11 +386,22 @@ fn estado(o: &Opciones, args: &[String]) -> i32 {
                     // que dice «— —». La ventana ya se comió ese defecto, y
                     // aquí se volvió a cometer a la primera — por eso la regla
                     // vive en el núcleo y no en cada interfaz.
+                    // La congelación va detrás y en tenue, no en la columna
+                    // del estado: una app congelada atiende igual, y lo que
+                    // está congelado son sus despliegues. Es lo mismo que hace
+                    // `orbit list`. Con un servidor anterior a la 1.4.3 no se
+                    // pinta nada, porque no lo sabe.
+                    let congelada = if app.state.congelada() == Some(true) {
+                        format!("  {}", p.tenue("congelada"))
+                    } else {
+                        String::new()
+                    };
                     println!(
-                        "{}  {}  {}",
+                        "{}  {}  {}{}",
                         relleno(a, ancho_srv),
                         relleno(&app.name, ancho_app),
                         p.de(s, &s.rotulo()),
+                        congelada,
                     );
                 }
             }
@@ -446,6 +457,8 @@ fn desplegar(o: &Opciones, args: &[String]) -> i32 {
     let c = Comando::Desplegar {
         app: app.clone(),
         progreso: true,
+        entorno: vec![],
+        forzar: false,
     };
 
     println!("{}", p.tenue(&format!("Desplegando {app} en {alias}…")));
@@ -487,7 +500,32 @@ fn desplegar(o: &Opciones, args: &[String]) -> i32 {
                     );
                     0
                 }
+                Ok(d) if d.failed_step.is_none() && d.release.is_none() => {
+                    // Se negó antes de empezar —congelada, otro despliegue en
+                    // curso—: no ha fallado nada, y «Falló en ?» lo diría.
+                    let motivo = d.error.unwrap_or_else(|| "sin motivo".into());
+                    println!(
+                        "{}",
+                        p.de(
+                            Salud::Mantenimiento,
+                            &format!("No se ha desplegado: {motivo}")
+                        )
+                    );
+                    1
+                }
                 Ok(d) => {
+                    // Lo que falta del .env, si el servidor lo cuenta. Es lo
+                    // único accionable de un despliegue que se para antes del
+                    // build, y desde aquí no se pide: se dice cómo darlo.
+                    if let Some(faltan) = d.env_missing.as_ref().filter(|v| !v.is_empty()) {
+                        println!(
+                            "{}",
+                            p.tenue(&format!(
+                                "Sin valor: {}. Dalo con  ssh {alias} orbit deploy {app} --env CLAVE=valor",
+                                faltan.join(", ")
+                            ))
+                        );
+                    }
                     // Un despliegue que falla y revierte **no deja la web
                     // caída**, y decir sólo «ha fallado» esconde justo eso.
                     let paso = d.failed_step.unwrap_or_else(|| "?".into());
@@ -538,7 +576,7 @@ fn paso_de(linea: &str) -> Option<String> {
             let paso = s.step.as_deref()?;
             let como = match estado {
                 "start" => "…",
-                "ok" => "✔",
+                "ok" => "✓",
                 _ => estado,
             };
             Some(format!("{como} {paso}"))

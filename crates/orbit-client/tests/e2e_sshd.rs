@@ -205,6 +205,44 @@ fn los_argumentos_hostiles_llegan_enteros_al_otro_lado() {
     }
 }
 
+/// `deploy --env CLAVE=valor` lleva **un secreto en el argv**, y un valor de
+/// contraseña es exactamente el tipo de texto que parte un escapado hecho a
+/// mano: comillas, `$`, `;`, espacios. Tiene que llegar como **un** argumento
+/// atravesando el shell de login de verdad.
+#[test]
+#[ignore = "necesita el sshd del banco"]
+fn una_variable_de_despliegue_hostil_llega_entera_por_ssh() {
+    use orbit_client::comando::{Secreto, VariableNueva};
+    let d = banco();
+    let log = d.join("argv-env.log");
+    let _ = fs::remove_file(&log);
+    let valor = r#"p@ss w"ord;$(id)`x`=y ${HOME}"#;
+    let c = Comando::Desplegar {
+        app: "tienda".into(),
+        progreso: false,
+        entorno: vec![VariableNueva {
+            clave: "DB_PASSWORD".into(),
+            valor: Secreto::nuevo(valor),
+        }],
+        forzar: false,
+    };
+    let ruta = log.to_string_lossy().into_owned();
+    ejecutar(
+        &servidor(false),
+        &c,
+        None,
+        &[("ORBIT_FAKE_CASE", "orbit-1.4"), ("ORBIT_FAKE_LOG", &ruta)],
+    )
+    .expect("el despliegue del falso contesta");
+    let bruto = fs::read(&log).expect("el falso no apuntó nada");
+    let argv: Vec<String> = String::from_utf8_lossy(&bruto)
+        .split('\0')
+        .map(String::from)
+        .collect();
+    let i = argv.iter().position(|a| a == "--env").unwrap();
+    assert_eq!(argv[i + 1], format!("DB_PASSWORD={valor}"));
+}
+
 // ── stdout y stderr, separados de verdad ───────────────────────────────────
 
 #[test]
@@ -267,6 +305,8 @@ fn un_despliegue_fallido_trae_su_objeto_aunque_el_rc_sea_1() {
     let c = Comando::Desplegar {
         app: "mi-web".into(),
         progreso: false,
+        entorno: vec![],
+        forzar: false,
     };
     let r = pedir(&c, "fallo-con-objeto").expect("el objeto cruza aunque el rc sea 1");
     let d: Despliegue = r.leer().unwrap();

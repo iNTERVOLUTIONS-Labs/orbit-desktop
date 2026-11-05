@@ -287,5 +287,60 @@ case "$CASE" in
     printf '  ✗ orbit doctor: no sé qué es «--yes». Sólo acepta --fix y --json.\n' >&2
     exit 1 ;;
 
+  # ── Un servidor 1.4.8 sano ──────────────────────────────────────────────
+  # Las formas salen del Orbit de verdad, ejecutado en el banco de
+  # tools/bench: la congelación con su quién y su porqué, la puerta de la CI,
+  # el tipo de certificado, la comprobación del entorno y las tareas. Los
+  # casos de arriba siguen siendo de un 1.3.6, y tienen que seguir pasando:
+  # hablar con un servidor viejo es el caso normal, no una excepción.
+  orbit-1.4)
+    # El segundo argumento que no es bandera: 'env check' frente a 'env list'.
+    seg=""; visto=""
+    for a in "$@"; do
+      case "$a" in -*) continue ;; esac
+      if [[ -z "$visto" ]]; then [[ "$a" == "$sub" ]] && visto=1; continue; fi
+      seg="$a"; break
+    done
+    todas=""; for a in "$@"; do [[ "$a" == --all ]] && todas=1; done
+    case "$sub" in
+      version) emitir version-1.4.8.json ;;
+      list)    emitir list-1.4.json ;;
+      info)    emitir info-1.4.json ;;
+      env)     [[ "$seg" == check ]] && emitir env-check.json || emitir env.json ;;
+      cron)    emitir cron.json ;;
+      deploy)  if [[ -n "$todas" ]]; then emitir deploy-all-puertas.json; exit 1
+               else emitir deploy-ok-1.4.json; fi ;;
+      # Sin --json, que no hablan: la prosa sale por stdout (_ui_route).
+      lock)    printf '  ✓ «%s» congelada: no se desplegará hasta '"'"'orbit unlock %s'"'"'\n' "$seg" "$seg" ;;
+      unlock)  printf '  ✓ «%s» descongelada: vuelve a desplegarse con normalidad\n' "$seg" ;;
+      autodeploy) printf '  ✓ hecho\n' ;;
+      *)       printf '  ✗ Comando desconocido: %s\n' "$sub" >&2; exit 1 ;;
+    esac ;;
+
+  # ── Un despliegue que se niega: la app está congelada ───────────────────
+  # Salida real del banco. El objeto llega con ok:false, sin release y sin
+  # paso fallido —no se ha empezado nada—, y el motivo va en 'error'.
+  congelada)
+    printf '  ✗ «tienda» está congelada desde hace 6 h por dabellan: black friday: no tocar hasta el lunes.\n' >&2
+    printf '  · Para desplegar igualmente:  orbit deploy tienda --force\n' >&2
+    printf '  ✗ Nada tocado: la versión anterior sigue en producción.\n' >&2
+    emitir deploy-congelada.json; exit 1 ;;
+
+  # ── Un despliegue que se para antes del build: falta una obligatoria ─────
+  faltan-variables)
+    printf '  ! Faltan por definir: DATABASE_URL MAIL_FROM\n' >&2
+    printf '  x Faltan variables obligatorias (DATABASE_URL). Nada tocado: la versión anterior sigue en producción.\n' >&2
+    emitir deploy-faltan-variables.json; exit 1 ;;
+
+  # ── Una pasada que sólo está en rojo por no haber podido preguntar a la CI ─
+  lote-ci-muda)   emitir deploy-all-ci-muda.json; exit 1 ;;
+
+  # ── Un orbit lock que el servidor rechaza, sin objeto ────────────────────
+  # 'lock' no habla JSON: un fallo es prosa por stderr y un rc, y lo que se
+  # enseña tiene que ser la frase de Orbit y no «ha salido con 1».
+  lock-redireccion)
+    printf "  ✗ 'viejo.com' es una redirección: no tiene código que desplegar.\n" >&2
+    exit 1 ;;
+
   *) printf 'caso desconocido en el falso: %s\n' "$CASE" >&2; exit 2 ;;
 esac

@@ -1,0 +1,1 @@
+{"schema":1,"app":"tienda","ok":true,"release":"20261105-120000","previous":"20261104-181200","commit":{"sha":"9f8e7d6c5b4a","subject":"corregir el pie","ref":null},"env_missing":["MAIL_FROM"],"rolled_back":false,"recovered":false,"duration_s":93,"failed_step":null,"error":null}

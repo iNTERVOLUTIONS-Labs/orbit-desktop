@@ -22,7 +22,9 @@
 //! **La lista de comandos de este fichero ES la superficie.** Si crece, crece
 //! la superficie, y hay que verlo en un diff.
 
-use orbit_client::comando::{AjustesDeteccion, Anulacion, Comando, ModoDeExec, WebNueva};
+use orbit_client::comando::{
+    AjustesDeteccion, Anulacion, Comando, ModoDeExec, Secreto, VariableNueva, WebNueva,
+};
 use orbit_client::descubrir;
 use orbit_client::{instalar, registro};
 // `dir_control` viene del núcleo: dónde viven los sockets de ControlMaster
@@ -114,11 +116,76 @@ fn pedir(alias: &str, binario: Option<String>, c: Comando) -> Resultado {
     })
 }
 
+/// Lo bloqueante, **fuera del hilo de la ventana**.
+///
+/// Un `#[tauri::command]` sin `async` corre en el hilo principal, que es el que
+/// pinta la ventana y atiende al ratón. La primera versión de este fichero
+/// tenía así casi todo el catálogo, y eso tenía dos consecuencias que no se
+/// veían contra el servidor falso, que contesta en milisegundos:
+///
+///  · **La ventana se congelaba mientras esperaba al servidor.** `doctor` son
+///    1,4 s con 40 apps y puede llegar a dos minutos con un resolutor lento;
+///    `top`, 2,1 s cada vez que el monitor refresca; un saludo sin
+///    multiplexar, un cuarto de segundo. Todo ese tiempo, ni un clic.
+///  · **Las peticiones iban en fila**, aunque la interfaz las lanzara a la vez:
+///    el `Promise.all` del tráfico y las métricas esperaba la suma de las dos,
+///    no la más lenta. Con el multiplexado, dos órdenes al mismo servidor
+///    comparten la conexión y pueden ir en paralelo de verdad.
+///
+/// Se usa `spawn_blocking` y no `async` a secas porque el transporte bloquea
+/// —espera a un proceso `ssh`— y un hilo del runtime asíncrono bloqueado es
+/// otra forma de la misma fila.
+async fn aparte<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, ErrorParaLaInterfaz> + Send + 'static,
+) -> Result<T, ErrorParaLaInterfaz> {
+    match tauri::async_runtime::spawn_blocking(f).await {
+        Ok(r) => r,
+        Err(e) => Err(ErrorParaLaInterfaz {
+            clase: "hilo",
+            mensaje: format!("la petición se ha interrumpido: {e}"),
+            detalle: None,
+        }),
+    }
+}
+
+/// [`pedir`], fuera del hilo de la ventana.
+async fn pedir_aparte(alias: String, binario: Option<String>, c: Comando) -> Resultado {
+    aparte(move || pedir(&alias, binario, c)).await
+}
+
+/// La prosa de una orden sin `--json`, entera.
+///
+/// Sin `--json`, Orbit manda a **stdout** lo que le cuenta a una persona
+/// (`_ui_route`) y a stderr sólo los avisos y los errores. La primera versión
+/// de `retirar` y `revertir` devolvía sólo stderr, así que de un `remove` que
+/// salía bien llegaba una cadena vacía: la confirmación de lo que se había
+/// hecho se perdía justo en las dos órdenes que cambian algo.
+fn prosa(r: &transporte::Respuesta) -> String {
+    let mut s = r.stdout.trim_end().to_string();
+    let e = r.stderr.trim_end();
+    if !e.is_empty() {
+        if !s.is_empty() {
+            s.push('\n');
+        }
+        s.push_str(e);
+    }
+    s
+}
+
+/// Una orden del catálogo que contesta en prosa —`remove`, `rollback`, `lock`—,
+/// devuelta como `{salida, codigo}`. Si sale con error, el error es la frase de
+/// Orbit (ver `ErrorTransporte::Orbit`), no «ha salido con 1».
+fn pedir_prosa(alias: &str, binario: Option<String>, c: Comando) -> Resultado {
+    let s = servidor_por_alias(alias, binario);
+    let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
+    Ok(serde_json::json!({ "salida": prosa(&r), "codigo": r.codigo }))
+}
+
 // ── el catálogo, y nada más ────────────────────────────────────────────────
 
 #[tauri::command]
-fn version(alias: String, binario: Option<String>) -> Resultado {
-    pedir(&alias, binario, Comando::Version)
+async fn version(alias: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::Version).await
 }
 
 /// La portada se alimenta de **esto** y no de `list`.
@@ -128,23 +195,23 @@ fn version(alias: String, binario: Option<String>) -> Resultado {
 /// 389 ms sustituye a dos que suman 695. Un 44 % menos en la carga que forma la
 /// primera impresión, y no cuesta nada: es elegir bien qué comando se pide.
 #[tauri::command]
-fn portada(alias: String, binario: Option<String>) -> Resultado {
-    pedir(&alias, binario, Comando::Estado)
+async fn portada(alias: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::Estado).await
 }
 
 #[tauri::command]
-fn lista(alias: String, binario: Option<String>) -> Resultado {
-    pedir(&alias, binario, Comando::Lista)
+async fn lista(alias: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::Lista).await
 }
 
 #[tauri::command]
-fn info(alias: String, app: String, binario: Option<String>) -> Resultado {
-    pedir(&alias, binario, Comando::Info { app })
+async fn info(alias: String, app: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::Info { app }).await
 }
 
 #[tauri::command]
-fn doctor(alias: String, binario: Option<String>) -> Resultado {
-    pedir(&alias, binario, Comando::Doctor)
+async fn doctor(alias: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::Doctor).await
 }
 
 /// El log de una app, **crudo**.
@@ -155,24 +222,28 @@ fn doctor(alias: String, binario: Option<String>) -> Resultado {
 /// la interfaz. El lector vive en `flujo.rs` y tiene su gemelo en TypeScript,
 /// que son dos y no tres.
 #[tauri::command]
-fn logs(
+async fn logs(
     alias: String,
     app: String,
     desde: Option<String>,
     binario: Option<String>,
 ) -> Result<String, ErrorParaLaInterfaz> {
-    let s = servidor_por_alias(&alias, binario);
-    let c = Comando::Logs {
-        app,
-        desde,
-        lineas: Some(500),
-        // Nunca en vivo por este camino: un flujo que no termina no se puede
-        // devolver de una llamada que sí. La pantalla en vivo es otra cosa.
-        seguir: false,
-        solo_nginx: false,
-    };
-    let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
-    Ok(r.stdout)
+    aparte(move || {
+        let s = servidor_por_alias(&alias, binario);
+        let c = Comando::Logs {
+            app,
+            desde,
+            lineas: Some(500),
+            // Nunca en vivo por este camino: un flujo que no termina no se
+            // puede devolver de una llamada que sí. La pantalla en vivo es
+            // otra cosa.
+            seguir: false,
+            solo_nginx: false,
+        };
+        let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
+        Ok(r.stdout)
+    })
+    .await
 }
 
 /// Aplica lo que el servidor sabe arreglar sin decidir nada por nadie.
@@ -183,8 +254,8 @@ fn logs(
 /// y la interfaz vuelve a enseñar la orden para copiar. Por eso la capacidad se
 /// **pregunta** y no se supone.
 #[tauri::command]
-fn doctor_arreglar(alias: String, binario: Option<String>) -> Resultado {
-    pedir(&alias, binario, Comando::DoctorArreglar)
+async fn doctor_arreglar(alias: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::DoctorArreglar).await
 }
 
 /// Los despliegues vivos, para poder cancelarlos.
@@ -208,23 +279,45 @@ pub struct Vivos(Mutex<HashMap<String, EnCurso>>);
 /// desconocido», con `orbit info` como forma de averiguarlo. Y no reintenta
 /// solo: un `deploy` reintentado sobre uno en curso es, en el mejor caso, dos
 /// releases.
+///
+/// `entorno` es lo que se pone en el `.env` **antes del build**, con
+/// `deploy --env`. Es la forma de dar una variable obligatoria sin terminal: sin
+/// ella el servidor se para antes de compilar, porque con `--json` no tiene a
+/// quién preguntar. Los valores cruzan el puente una vez, se convierten en
+/// [`Secreto`] —que no se deja imprimir— y no se guardan en ningún sitio.
+///
+/// `forzar` es `--force`: desplegar una app congelada **sin descongelarla**.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn desplegar(
     ventana: tauri::Window,
     vivos: tauri::State<'_, Vivos>,
     alias: String,
     app: String,
+    entorno: Option<Vec<VariableDeLaInterfaz>>,
+    forzar: Option<bool>,
     binario: Option<String>,
 ) -> Resultado {
     let clave = format!("{alias}:{app}");
-    let mando = EnCurso::nuevo();
-    vivos.0.lock().unwrap().insert(clave.clone(), mando.clone());
 
     let s = servidor_por_alias(&alias, binario);
     let c = Comando::Desplegar {
         app: app.clone(),
         progreso: true,
+        entorno: entorno
+            .unwrap_or_default()
+            .into_iter()
+            .map(VariableNueva::from)
+            .collect(),
+        forzar: forzar.unwrap_or(false),
     };
+    // Se valida ANTES de registrar el despliegue como vivo: una variable que el
+    // servidor rechazaría tiene que decirse aquí, con su nombre, y no dejar un
+    // despliegue fantasma en el rail.
+    c.argv(&s.binario).map_err(ErrorParaLaInterfaz::from)?;
+
+    let mando = EnCurso::nuevo();
+    vivos.0.lock().unwrap().insert(clave.clone(), mando.clone());
     let ctrl = dir_control();
     let clave_ev = clave.clone();
 
@@ -258,6 +351,26 @@ async fn desplegar(
         mensaje: e.to_string(),
         detalle: None,
     })
+}
+
+/// Una variable de `deploy --env`, tal como la manda el formulario.
+///
+/// **Sin `Debug`, a propósito**: `valor` es casi siempre una contraseña, y un
+/// `{:?}` de esto en un mensaje de error la sacaría. Se convierte en
+/// [`VariableNueva`] en cuanto cruza, y ahí el valor ya es un [`Secreto`].
+#[derive(serde::Deserialize)]
+pub struct VariableDeLaInterfaz {
+    pub clave: String,
+    pub valor: String,
+}
+
+impl From<VariableDeLaInterfaz> for VariableNueva {
+    fn from(v: VariableDeLaInterfaz) -> Self {
+        VariableNueva {
+            clave: v.clave,
+            valor: Secreto::nuevo(v.valor),
+        }
+    }
 }
 
 /// Crea una web, sirviendo la prosa mientras ocurre.
@@ -842,8 +955,54 @@ fn cancelar(vivos: tauri::State<'_, Vivos>, alias: String, app: String) -> bool 
 /// filtra la contraseña de la base de datos en la primera captura que alguien
 /// pegue en un issue.
 #[tauri::command]
-fn entorno(alias: String, app: String, binario: Option<String>) -> Resultado {
-    pedir(&alias, binario, Comando::EntornoLista { app })
+async fn entorno(alias: String, app: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::EntornoLista { app }).await
+}
+
+/// Lo que la app declara frente a lo que tiene, **sin un solo valor**. 1.3.8.
+///
+/// Es lo que se pregunta antes de desplegar: si falta una obligatoria, la
+/// interfaz la pide en un formulario y la manda con `--env`, en vez de lanzar
+/// un despliegue que el servidor va a parar antes del build.
+#[tauri::command]
+async fn comprobar_entorno(alias: String, app: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::EntornoComprobar { app }).await
+}
+
+/// Las tareas programadas de una app, con su última y su próxima pasada. 1.3.9.
+#[tauri::command]
+async fn tareas(alias: String, app: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::Tareas { app }).await
+}
+
+/// Congela los despliegues de una app (`orbit lock`). 1.4.3.
+///
+/// El rollback sigue permitido: es la salida de emergencia. Contesta en prosa,
+/// y lo que cuenta es cómo queda: la interfaz vuelve a preguntar con `info`.
+#[tauri::command]
+async fn congelar(
+    alias: String,
+    app: String,
+    motivo: Option<String>,
+    binario: Option<String>,
+) -> Resultado {
+    aparte(move || pedir_prosa(&alias, binario, Comando::Congelar { app, motivo })).await
+}
+
+#[tauri::command]
+async fn descongelar(alias: String, app: String, binario: Option<String>) -> Resultado {
+    aparte(move || pedir_prosa(&alias, binario, Comando::Descongelar { app })).await
+}
+
+/// Que el autodespliegue y `deploy --all` esperen a la CI de GitHub. 1.4.3.
+#[tauri::command]
+async fn esperar_ci(
+    alias: String,
+    app: String,
+    esperar: bool,
+    binario: Option<String>,
+) -> Resultado {
+    aparte(move || pedir_prosa(&alias, binario, Comando::EsperarCi { app, esperar })).await
 }
 
 /// **Un** valor, de uno en uno.
@@ -862,26 +1021,29 @@ fn entorno(alias: String, app: String, binario: Option<String>) -> Resultado {
 ///    `logline "exec $name"`, y por el mismo motivo: un log no es sitio para
 ///    secretos.
 #[tauri::command]
-fn entorno_valor(
+async fn entorno_valor(
     alias: String,
     app: String,
     clave: String,
     binario: Option<String>,
 ) -> Result<String, ErrorParaLaInterfaz> {
-    let s = servidor_por_alias(&alias, binario);
-    let c = Comando::EntornoValor { app, clave };
-    let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
-    // Pelado y sin adornos, que es como lo imprime Orbit. El salto final se
-    // quita porque es del `printf`, no del valor.
-    Ok(r.stdout.trim_end_matches('\n').to_string())
+    aparte(move || {
+        let s = servidor_por_alias(&alias, binario);
+        let c = Comando::EntornoValor { app, clave };
+        let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
+        // Pelado y sin adornos, que es como lo imprime Orbit. El salto final se
+        // quita porque es del `printf`, no del valor.
+        Ok(r.stdout.trim_end_matches('\n').to_string())
+    })
+    .await
 }
 
 /// El monitor. **Tarda ~2,1 s con 40 apps**, y no es lentitud: la CPU es la
 /// diferencia entre dos lecturas del cgroup, así que una foto suelta tiene que
 /// esperar a la segunda a propósito.
 #[tauri::command]
-fn monitor(alias: String, binario: Option<String>) -> Resultado {
-    pedir(&alias, binario, Comando::Top)
+async fn monitor(alias: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::Top).await
 }
 
 /// El tráfico de una app, del log que nginx ya escribe.
@@ -890,19 +1052,19 @@ fn monitor(alias: String, binario: Option<String>) -> Resultado {
 /// una analítica quepa aquí cuando un panel web no cabe. Y el dato lleva ahí
 /// desde la primera visita.
 #[tauri::command]
-fn trafico(
+async fn trafico(
     alias: String,
     app: String,
     desde: Option<String>,
     binario: Option<String>,
 ) -> Resultado {
-    pedir(&alias, binario, Comando::Trafico { app, desde })
+    pedir_aparte(alias, binario, Comando::Trafico { app, desde }).await
 }
 
 /// El histórico de despliegues de una app.
 #[tauri::command]
-fn metricas(alias: String, app: String, binario: Option<String>) -> Resultado {
-    pedir(&alias, binario, Comando::Metricas { app: Some(app) })
+async fn metricas(alias: String, app: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::Metricas { app: Some(app) }).await
 }
 
 /// Ejecuta algo dentro de una app. **La puerta trasera.**
@@ -920,7 +1082,17 @@ fn metricas(alias: String, app: String, binario: Option<String>) -> Resultado {
 /// diferencia se elige en la pantalla y se ve, en vez de deducirla de la
 /// heurística del servidor: quien escribe tiene que poder predecir cuándo su
 /// `&&` se ejecuta y cuándo se pasa como texto.
-fn correr(
+async fn correr(
+    alias: String,
+    app: String,
+    shell: bool,
+    argumentos: Vec<String>,
+    binario: Option<String>,
+) -> Result<SalidaDeExec, ErrorParaLaInterfaz> {
+    aparte(move || correr_aqui(alias, app, shell, argumentos, binario)).await
+}
+
+fn correr_aqui(
     alias: String,
     app: String,
     shell: bool,
@@ -983,20 +1155,18 @@ impl From<orbit_client::comando::ErrorForma> for ErrorParaLaInterfaz {
 /// al borrarla, y se pide **en ese momento**: decirle a alguien que va a perder
 /// 3 releases cuando tiene 12 es peor que no decírselo.
 #[tauri::command]
-fn detalle(alias: String, app: String, binario: Option<String>) -> Resultado {
-    pedir(&alias, binario, Comando::Info { app })
+async fn detalle(alias: String, app: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::Info { app }).await
 }
 
 /// Retira una app **sin borrar sus datos**. Reversible.
+///
+/// 'remove' no habla JSON, así que la respuesta es prosa. Se devuelve tal cual
+/// y la interfaz vuelve a preguntar por el estado, que es la regla: lo que
+/// cuenta es cómo queda el servidor, no lo que dijo el comando.
 #[tauri::command]
-fn retirar(alias: String, app: String, binario: Option<String>) -> Resultado {
-    // 'remove' no habla JSON, así que la respuesta es prosa. Se devuelve tal
-    // cual y la interfaz vuelve a preguntar por el estado, que es la regla:
-    // lo que cuenta es cómo queda el servidor, no lo que dijo el comando.
-    let s = servidor_por_alias(&alias, binario);
-    let c = Comando::Retirar { app };
-    let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
-    Ok(serde_json::json!({ "salida": r.stderr, "codigo": r.codigo }))
+async fn retirar(alias: String, app: String, binario: Option<String>) -> Resultado {
+    aparte(move || pedir_prosa(&alias, binario, Comando::Retirar { app })).await
 }
 
 /// Retira una app **y borra sus datos**. Irreversible.
@@ -1004,22 +1174,22 @@ fn retirar(alias: String, app: String, binario: Option<String>) -> Resultado {
 /// Aquí no hay red debajo: `orbit remove -y --purge` no pregunta nada, así que
 /// toda la protección está en la pantalla que llama a esto.
 #[tauri::command]
-fn retirar_y_borrar(alias: String, app: String, binario: Option<String>) -> Resultado {
-    let s = servidor_por_alias(&alias, binario);
-    let c = Comando::RetirarYBorrar { app };
-    let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
-    Ok(serde_json::json!({ "salida": r.stderr, "codigo": r.codigo }))
+async fn retirar_y_borrar(alias: String, app: String, binario: Option<String>) -> Resultado {
+    aparte(move || pedir_prosa(&alias, binario, Comando::RetirarYBorrar { app })).await
 }
 
 /// Vuelve a una release anterior. La release es **obligatoria**: sin ella y sin
 /// terminal, `orbit rollback` aborta — y hace bien, porque el «valor por
-/// defecto» sería la que ya está activa.
+/// defecto» sería la que ya está activa. Y funciona también con la app
+/// congelada: es la salida de emergencia, y Orbit no la bloquea.
 #[tauri::command]
-fn revertir(alias: String, app: String, release: String, binario: Option<String>) -> Resultado {
-    let s = servidor_por_alias(&alias, binario);
-    let c = Comando::Revertir { app, release };
-    let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
-    Ok(serde_json::json!({ "salida": r.stderr, "codigo": r.codigo }))
+async fn revertir(
+    alias: String,
+    app: String,
+    release: String,
+    binario: Option<String>,
+) -> Resultado {
+    aparte(move || pedir_prosa(&alias, binario, Comando::Revertir { app, release })).await
 }
 
 /// Qué hay al otro lado de un alias, antes de fiarse de nada.
@@ -1029,7 +1199,14 @@ fn revertir(alias: String, app: String, release: String, binario: Option<String>
 /// demo, y por eso es un comando propio y no un efecto secundario de la primera
 /// pantalla que se abra.
 #[tauri::command]
-fn saludar(
+async fn saludar(
+    alias: String,
+    binario: Option<String>,
+) -> Result<serde_json::Value, ErrorParaLaInterfaz> {
+    aparte(move || saludar_aqui(alias, binario)).await
+}
+
+fn saludar_aqui(
     alias: String,
     binario: Option<String>,
 ) -> Result<serde_json::Value, ErrorParaLaInterfaz> {
@@ -1129,6 +1306,11 @@ pub fn ejecutar() {
             logs,
             entorno,
             entorno_valor,
+            comprobar_entorno,
+            tareas,
+            congelar,
+            descongelar,
+            esperar_ci,
             monitor,
             trafico,
             metricas,
@@ -1172,6 +1354,39 @@ mod pruebas {
         for n in ["*", "*x", "a*", "todo *"] {
             assert!(!nombre_de_app_valido(n), "«{n}» no puede ser una app");
         }
+    }
+
+    /// Una orden sin `--json` cuenta lo que ha hecho por **stdout**, y los
+    /// avisos por stderr. La primera versión devolvía sólo stderr, y de un
+    /// `remove` que salía bien llegaba una cadena vacía.
+    #[test]
+    fn la_prosa_de_una_orden_sin_json_llega_entera() {
+        let r = transporte::Respuesta {
+            stdout: "  ✓ «tienda» congelada\n".into(),
+            stderr: "  ! sin avisos configurados\n".into(),
+            codigo: 0,
+        };
+        let p = prosa(&r);
+        assert!(p.contains("congelada"));
+        assert!(p.contains("sin avisos"));
+        let solo = transporte::Respuesta {
+            stdout: "hecho\n".into(),
+            stderr: String::new(),
+            codigo: 0,
+        };
+        assert_eq!(prosa(&solo), "hecho");
+    }
+
+    /// El valor de una variable cruza el puente una vez y, en cuanto cruza, ya
+    /// no se deja imprimir.
+    #[test]
+    fn el_valor_de_una_variable_no_sale_por_debug_al_cruzar() {
+        let v: VariableDeLaInterfaz =
+            serde_json::from_str(r#"{"clave":"DB_PASSWORD","valor":"hunter2"}"#).unwrap();
+        let n: VariableNueva = v.into();
+        assert_eq!(n.valor.exponer(), "hunter2");
+        let d = format!("{n:?}");
+        assert!(!d.contains("hunter2"), "{d}");
     }
 
     /// Los tres estados de una anulación tienen que llegar al núcleo como tres

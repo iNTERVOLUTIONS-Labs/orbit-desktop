@@ -64,6 +64,45 @@ def main():
         print("status --json alimenta la portada de una sola llamada "
               "(%d apps, idénticas a list --json)" % len(estado["apps"]))
 
+    # Lo que el cliente lee desde Orbit 1.4.3 y 1.4.7. Si un campo deja de
+    # salir, la interfaz no se rompe —lo trata como un servidor viejo— pero
+    # deja de enseñar la congelación, la CI o el certificado de origen SIN
+    # avisar, y eso hay que saberlo aquí y no por un usuario.
+    esperados = ("cert_type", "checks", "locked", "lock")
+    for a in lista["apps"]:
+        falta = [k for k in esperados if k not in a["state"]]
+        if falta:
+            fallos.append("la app %s no trae %s en state" % (a["name"], ", ".join(falta)))
+            break
+    else:
+        print("list --json trae %s" % ", ".join(esperados))
+
+    # Los once recuentos de la pasada. Se congelan todas las apps del banco con
+    # el testigo que lee Orbit (/etc/orbit/apps/<app>.lock): una congelada se
+    # salta antes de nada, así que la pasada no despliega ni pregunta a ningún
+    # remoto, y el objeto que sale es el de verdad.
+    apps_dir = os.path.join(bench, "etc", "apps")
+    testigos = []
+    for a in lista["apps"]:
+        t = os.path.join(apps_dir, a["name"] + ".lock")
+        with open(t, "w") as f:
+            f.write("at=2026-11-05T10:00:00+00:00\nby=banco\nreason=check-contract\n")
+        testigos.append(t)
+    try:
+        lote = orbit(bench, "deploy", "--all", "--if-changed", "--json")
+    finally:
+        for t in testigos:
+            os.remove(t)
+    finales = ("deployed", "failed", "unchanged", "unreachable", "gone", "skipped",
+               "locked", "ignored", "ci_pending", "ci_failed", "ci_unknown")
+    falta = [k for k in finales if not isinstance(lote.get(k), int)]
+    if falta:
+        fallos.append("'deploy --all --json' no trae los recuentos %s" % ", ".join(falta))
+    elif lote["locked"] != len(lista["apps"]) or sum(lote[k] for k in finales) != lote["total"]:
+        fallos.append("los once recuentos no reconstruyen el total de la pasada")
+    else:
+        print("deploy --all --json cuenta los once finales (%d congeladas)" % lote["locked"])
+
     if fallos:
         for f in fallos:
             print("  ✗ %s" % f, file=sys.stderr)
