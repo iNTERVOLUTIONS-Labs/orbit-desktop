@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import ListaApps from './componentes/ListaApps.svelte'
   import DetalleApp from './componentes/DetalleApp.svelte'
   import Esqueleto from './componentes/Esqueleto.svelte'
@@ -7,6 +8,7 @@
   import VisorLog from './componentes/VisorLog.svelte'
   import DespliegueVista from './componentes/Despliegue.svelte'
   import HojaDeComando from './componentes/HojaDeComando.svelte'
+  import HojaDeDespliegue from './componentes/HojaDeDespliegue.svelte'
   import AvisoDeCierre from './componentes/AvisoDeCierre.svelte'
   import * as vivos from './lib/vivos.svelte'
   import EntornoVista from './componentes/Entorno.svelte'
@@ -26,8 +28,15 @@
   import LoDetectado from './componentes/LoDetectado.svelte'
   import Desenlace from './componentes/Desenlace.svelte'
   import { clasificar, type Borrador, type Desenlace as Final } from './lib/asistente'
-  import { periodoDelMonitor } from './lib/despliegue'
-  import type { App, AppInfo, Doctor, Entorno, Log, Lote, Metricas, Monitor, Saludo, Trafico } from './lib/contrato'
+  import {
+    argvDeCongelar, argvDeDescongelar, argvDeEsperarCi, ordenLegible, periodoDelMonitor,
+    type VariableNueva,
+  } from './lib/despliegue'
+  import {
+    sabe,
+    type App, type AppInfo, type ComprobacionDeEntorno, type Doctor, type Entorno, type Log,
+    type Lote, type Metricas, type Monitor, type Saludo, type Tareas, type Trafico,
+  } from './lib/contrato'
   import {
     arreglar, cancelar, desplegar, diagnostico, entorno as pedirEntorno,
     entornoValor, hayPuente, log as pedirLog, monitor as pedirMonitor,
@@ -36,6 +45,8 @@
     crear, resolver, desplegarTodo,
     servidoresGuardados, guardarServidor, olvidarServidor,
     requisitosDeInstalacion, instalarOrbit,
+    version as pedirVersion, comprobarEntorno, tareas as pedirTareas,
+    congelar, descongelar, esperarCi,
     type AliasSsh, type ErrorDelPuente, type Resolucion,
     type ServidorPropio, type Requisitos, type Instalacion,
   } from './lib/puente'
@@ -62,6 +73,30 @@
   let trafico = $state<Trafico | null>(null)
   let metricas = $state<Metricas | null>(null)
   let detalleApp = $state<AppInfo | null>(null)
+  let tareasApp = $state<Tareas | null>(null)
+  // Lo que contestó la última orden sobre la app elegida —congelar, la CI—, con
+  // la frase de Orbit tal cual. Un error aquí no tapa la lista: es de una app.
+  let avisoDetalle = $state<{ ok: boolean; texto: string } | null>(null)
+
+  // La versión de Orbit de cada servidor. Se pide UNA vez por sesión y en
+  // paralelo con la portada —son 72 ms en frío y ~13 con la conexión
+  // multiplexada—, y de ella salen los botones que sólo existen desde cierta
+  // versión. `null` es «no he podido saberlo»: entonces no se ofrecen.
+  let versiones = $state<Record<string, string | null>>({})
+  const versionActual = $derived(versiones[alias] ?? null)
+
+  // Cada carga de la portada lleva un turno. Si alguien cambia de servidor
+  // mientras la anterior está en vuelo, la respuesta vieja llega DESPUÉS y,
+  // sin esto, pintaba las apps de un servidor bajo el nombre de otro: el
+  // accidente más caro de un cliente multiservidor, provocado por la red y no
+  // por nadie. Lo mismo para todo lo que se pide de una app.
+  let turno = 0
+  // `app` con valor por defecto y no `app?:`: el compilador de Svelte 5.42 deja
+  // el `?` de un parámetro opcional en lo que genera, y el build se rompe con
+  // un error de sintaxis que svelte-check no ve.
+  function sigue(a: string, app: string | null = null): boolean {
+    return alias === a && (app === null || elegida?.name === app)
+  }
 
   // El alta de servidores. Vive en su propia vista porque enumerar y usar son
   // dos cosas distintas: la lista sale del ~/.ssh/config sin hablar con nadie,
@@ -90,6 +125,18 @@
   /** Todos los alias ocupados, de las dos fuentes. Un alias repetido haría que
    *  `ssh` resolviera el del fichero y la aplicación enseñara un servidor
    *  mientras habla con otro. */
+  // El rail enseña los DOS orígenes. La primera versión sólo pintaba los del
+  // ~/.ssh/config, así que un servidor añadido a mano se podía usar desde el
+  // alta pero no aparecía en el rail: no había forma de volver a él, ni de ver
+  // que era el activo, ni su contador de despliegues en curso.
+  const enElRail = $derived<AliasSsh[]>([
+    ...servidores,
+    ...propios.map((p) => ({
+      alias: p.alias, hostname: p.host, usuario: p.usuario, puerto: p.puerto,
+      salto: null, identidad: p.clave,
+    })),
+  ])
+
   const aliasOcupados = $derived([
     ...servidores.map((s) => s.alias),
     ...propios.map((s) => s.alias),
@@ -178,8 +225,10 @@
 
     try {
       resultadoInstalacion = await instalarOrbit(a)
-      // El saludo de ese servidor ya no vale: acaba de cambiar lo que hay.
+      // El saludo de ese servidor ya no vale: acaba de cambiar lo que hay. Y
+      // su versión tampoco, que es de donde salen los botones que ofrece.
       delete saludos[a]
+      delete versiones[a]
       if (resultadoInstalacion.version) void comprobar(a)
     } catch (e) {
       error = e as ErrorDelPuente
@@ -412,25 +461,175 @@
   // La hoja de comando de un despliegue. Se enseña la orden literal ANTES de
   // ejecutarla: es la prueba visible de que esto sólo invoca `orbit`.
   let hoja = $state<App | null>(null)
+  let comprobacion = $state<ComprobacionDeEntorno | null>(null)
+  let estadoComprobacion = $state<'no-sabe' | 'mirando' | 'hecho' | 'no-se-pudo'>('no-sabe')
+  let faltanDeAntes = $state<string[]>([])
 
   vivos.escuchar()
 
-  async function lanzar(a: App) {
-    hoja = null
-    pestana = 'despliegue'
-    const k = vivos.clave(alias, a.name)
-    vivos.empezar(alias, a.name)
+  /**
+   * Abre la hoja del despliegue y, mientras se lee, pregunta qué le falta.
+   *
+   * `env check` cuesta una llamada corta y ahorra la cara: un despliegue que
+   * el servidor va a parar antes del build porque falta una obligatoria, y que
+   * sin terminal no tiene a quién preguntársela. Se lanza en paralelo con la
+   * hoja ya abierta, así que no retrasa nada.
+   */
+  async function prepararDespliegue(a: App, faltan: string[] = []) {
+    hoja = a
+    faltanDeAntes = faltan
+    comprobacion = null
+    if (!sabe(versionActual, 'entornoDeclarado')) {
+      estadoComprobacion = 'no-sabe'
+      return
+    }
+    estadoComprobacion = 'mirando'
+    const yo = alias
     try {
-      vivos.terminar(k, await desplegar(alias, a.name))
+      const c = await comprobarEntorno(yo, a.name)
+      if (!sigue(yo) || hoja?.name !== a.name) return
+      comprobacion = c
+      estadoComprobacion = 'hecho'
+    } catch {
+      if (sigue(yo)) estadoComprobacion = 'no-se-pudo'
+    }
+  }
+
+  function cerrarHoja() {
+    hoja = null
+    comprobacion = null
+    faltanDeAntes = []
+  }
+
+  async function lanzar(a: App, entorno: VariableNueva[] = [], forzar = false) {
+    cerrarHoja()
+    pestana = 'despliegue'
+    const yo = alias
+    const k = vivos.clave(yo, a.name)
+    vivos.empezar(yo, a.name)
+    try {
+      vivos.terminar(k, await desplegar(yo, a.name, { entorno, forzar }))
       // Un despliegue cambia el estado de la app: la portada deja de ser de
-      // fiar y se vuelve a pedir, en vez de parchear la fila a mano.
-      apps = null
-      cargar(alias)
+      // fiar y se vuelve a pedir, en vez de parchear la fila a mano. Sin
+      // soltar la app elegida: la primera versión recargaba con `cargar`, que
+      // la deseleccionaba, y el resultado del despliegue desaparecía de la
+      // pantalla justo cuando llegaba.
+      if (sigue(yo)) void refrescar()
     } catch (e) {
       const err = e as ErrorDelPuente
       // NO se llama fallo. Si se perdió el contacto, el despliegue sigue en el
       // servidor y el cliente ya no sabe qué pasó.
       vivos.perder(k, err.mensaje)
+    } finally {
+      // Los valores no se quedan en ningún sitio: se olvidan aquí también.
+      entorno.length = 0
+    }
+  }
+
+  /** Vuelve a pedir la portada **sin soltar la app elegida**, y su detalle. */
+  async function refrescar() {
+    const yo = alias
+    const t = ++turno
+    try {
+      const r = await portada(yo)
+      if (t !== turno || !sigue(yo)) return
+      apps = r.apps
+      if (elegida) {
+        const misma = r.apps.find((x) => x.name === elegida!.name) ?? null
+        elegida = misma
+        detalleApp = null
+        tareasApp = null
+        // Sin cambiar de pestaña: si se está mirando el resultado de un
+        // despliegue, ahí se queda.
+        if (misma) void cargarDetalle(misma)
+      }
+    } catch (e) {
+      if (t === turno && sigue(yo)) error = e as ErrorDelPuente
+    }
+  }
+
+  /** El detalle de la app: `info` y sus tareas, a la vez y bajo demanda. */
+  async function verDetalle(a: App) {
+    pestana = 'detalle'
+    await cargarDetalle(a)
+  }
+
+  async function cargarDetalle(a: App) {
+    const yo = alias
+    if (detalleApp?.name === a.name && (tareasApp?.app === a.name || !sabe(versionActual, 'tareas'))) return
+    const [d, t] = await Promise.all([
+      pedirDetalle(yo, a.name).catch(() => null),
+      sabe(versionActual, 'tareas') ? pedirTareas(yo, a.name).catch(() => null) : Promise.resolve(null),
+    ])
+    if (!sigue(yo, a.name)) return
+    // Que `info` falle no rompe el detalle: se sigue con lo que trajo la lista,
+    // que es lo que había antes de que esto existiera.
+    detalleApp = d
+    tareasApp = t
+  }
+
+  // La hoja de una orden corta sobre la app —congelar, descongelar, la CI—,
+  // con la orden literal a la vista antes de lanzarla.
+  let pendiente = $state<{
+    titulo: string
+    orden: string
+    consecuencia: string
+    verbo: string
+    correr: () => Promise<{ salida: string }>
+  } | null>(null)
+
+  async function ejecutarPendiente() {
+    const p = pendiente
+    pendiente = null
+    if (!p) return
+    const yo = alias
+    try {
+      const r = await p.correr()
+      if (!sigue(yo)) return
+      avisoDetalle = { ok: true, texto: r.salida.trim() || 'Hecho.' }
+    } catch (e) {
+      // La frase de Orbit tal cual: «'viejo.com' es una redirección…», no
+      // «ha salido con 1».
+      if (sigue(yo)) avisoDetalle = { ok: false, texto: (e as ErrorDelPuente).mensaje }
+    }
+    if (sigue(yo)) await refrescar()
+  }
+
+  function pedirCongelar(a: App, motivo: string | null) {
+    const yo = alias
+    pendiente = {
+      titulo: `Congelar los despliegues de ${a.name}`,
+      orden: ordenLegible(argvDeCongelar(a.name, motivo)),
+      consecuencia:
+        'El autodespliegue y «desplegar todo» la saltarán, y desplegarla a mano pedirá confirmarlo aparte. Lo que se sirve no cambia, y revertir sigue permitido.',
+      verbo: 'Congelar',
+      correr: () => congelar(yo, a.name, motivo),
+    }
+  }
+
+  function pedirDescongelar(a: App) {
+    const yo = alias
+    pendiente = {
+      titulo: `Descongelar ${a.name}`,
+      orden: ordenLegible(argvDeDescongelar(a.name)),
+      consecuencia: a.state.autodeploy
+        ? 'Vuelve a desplegarse con normalidad. Tiene el autodespliegue puesto: si su rama ha avanzado, se desplegará sola en la próxima pasada.'
+        : 'Vuelve a desplegarse con normalidad.',
+      verbo: 'Descongelar',
+      correr: () => descongelar(yo, a.name),
+    }
+  }
+
+  function pedirEsperarCi(a: App, esperar: boolean) {
+    const yo = alias
+    pendiente = {
+      titulo: esperar ? `Esperar a la CI en ${a.name}` : `Dejar de esperar a la CI en ${a.name}`,
+      orden: ordenLegible(argvDeEsperarCi(a.name, esperar)),
+      consecuencia: esperar
+        ? 'El autodespliegue y «desplegar todo» sólo desplegarán un commit cuya CI de GitHub haya terminado bien; si no pueden preguntar, no despliegan. Si el servidor no tiene sesión de gh, avisará.'
+        : 'El autodespliegue volverá a desplegar sin mirar la CI.',
+      verbo: esperar ? 'Esperar a la CI' : 'Dejar de esperar',
+      correr: () => esperarCi(yo, a.name, esperar),
     }
   }
 
@@ -449,40 +648,58 @@
     monitor = null
     trafico = null
     metricas = null
+    detalleApp = null
+    tareasApp = null
+    avisoDetalle = null
     vista = 'apps'
     cargando = true
+    const t = ++turno
+    // La versión, una vez por servidor y en paralelo: no retrasa la portada.
+    if (!versiones[a]) {
+      void pedirVersion(a)
+        .then((v) => { versiones = { ...versiones, [a]: v.version } })
+        .catch(() => { versiones = { ...versiones, [a]: null } })
+    }
     try {
-      apps = (await portada(a)).apps
+      const r = await portada(a)
+      if (t !== turno) return
+      apps = r.apps
     } catch (e) {
+      if (t !== turno) return
       // Un fallo se pinta como un fallo. Lo que NO se hace es dejar los datos
       // viejos en pantalla sin decir que son viejos: un panel que dice «todo
       // verde» cuando no ha podido preguntar oculta un incidente en curso.
       error = e as ErrorDelPuente
     } finally {
-      cargando = false
+      if (t === turno) cargando = false
     }
   }
 
   async function verDiagnostico() {
     vista = 'diagnostico'
     if (doctor) return
+    const yo = alias
     cargando = true
     try {
-      doctor = await diagnostico(alias)
+      const d = await diagnostico(yo)
+      if (sigue(yo)) doctor = d
     } catch (e) {
-      error = e as ErrorDelPuente
+      if (sigue(yo)) error = e as ErrorDelPuente
     } finally {
-      cargando = false
+      if (sigue(yo)) cargando = false
     }
   }
 
   async function aplicarArreglos() {
     arreglando = true
+    const yo = alias
     try {
       // Se vuelve a diagnosticar con lo que devuelve el propio comando: lo que
       // cuenta es el estado del servidor después, no lo que dijeron los
       // arreglos. Es la misma regla que sigue `orbit doctor --fix`.
-      doctor = await arreglar(alias)
+      const d = await arreglar(yo)
+      if (!sigue(yo)) return
+      doctor = d
       // Y las apps pueden haber cambiado —un vhost regenerado cambia
       // `served`— así que la portada deja de ser de fiar.
       apps = null
@@ -493,8 +710,17 @@
     }
   }
 
+  // Una sola petición del monitor en vuelo, nunca dos. Con `setInterval`, un
+  // `top` que tardara más que el periodo —2,1 s con 40 apps, más con la red
+  // lenta— dejaba otro esperando detrás, y otro, y otro: una cola de sesiones
+  // SSH que nadie iba a mirar.
+  let monitorEnVuelo = false
+
   async function verMonitor() {
     vista = 'monitor'
+    if (monitorEnVuelo) return
+    monitorEnVuelo = true
+    const yo = alias
     cargando = monitor === null
     try {
       // El periodo sale de lo que TARDÓ, no de un número elegido: `top --json`
@@ -502,32 +728,45 @@
       // lecturas, y encadenar peticiones más rápido de lo que contestan no da
       // más frescura, da una cola.
       const t0 = performance.now()
-      monitor = await pedirMonitor(alias)
+      const m = await pedirMonitor(yo)
+      if (!sigue(yo)) return
+      monitor = m
       periodo = periodoDelMonitor(performance.now() - t0)
     } catch (e) {
-      error = e as ErrorDelPuente
+      if (sigue(yo)) error = e as ErrorDelPuente
     } finally {
-      cargando = false
+      monitorEnVuelo = false
+      if (sigue(yo)) cargando = false
     }
   }
 
   // Sólo mientras se está mirando, y sólo con la ventana enfocada. Sondear una
   // pantalla que nadie ve es gastar una sesión SSH del usuario en nada.
+  //
+  // Encadenado y no a intervalo fijo: la siguiente vuelta se programa cuando la
+  // anterior TERMINA, con el periodo que ella misma midió. Así no puede haber
+  // dos a la vez, y un servidor lento se pregunta menos, no más.
   $effect(() => {
     if (vista !== 'monitor') return
-    const t = setInterval(() => {
-      if (!document.hidden) verMonitor()
-    }, periodo * 1000)
-    return () => clearInterval(t)
+    let vivo = true
+    let t: ReturnType<typeof setTimeout>
+    const vuelta = async () => {
+      if (!document.hidden) await verMonitor()
+      if (vivo) t = setTimeout(vuelta, periodo * 1000)
+    }
+    t = setTimeout(vuelta, untrack(() => periodo) * 1000)
+    return () => { vivo = false; clearTimeout(t) }
   })
 
   async function verEntorno(a: App) {
     pestana = 'entorno'
     if (entorno && entorno.app === a.name) return
+    const yo = alias
     try {
-      entorno = await pedirEntorno(alias, a.name)
+      const e = await pedirEntorno(yo, a.name)
+      if (sigue(yo, a.name)) entorno = e
     } catch (e) {
-      error = e as ErrorDelPuente
+      if (sigue(yo, a.name)) error = e as ErrorDelPuente
     }
   }
 
@@ -536,11 +775,13 @@
   // perder 3 releases cuando tiene 12 es peor que no decírselo.
   async function verAdmin(a: App, cual: 'retirar' | 'revertir') {
     pestana = cual
+    const yo = alias
     try {
       const [d, e] = await Promise.all([
-        pedirDetalle(alias, a.name),
-        cual === 'retirar' ? pedirEntorno(alias, a.name) : Promise.resolve(null),
+        pedirDetalle(yo, a.name),
+        cual === 'retirar' ? pedirEntorno(yo, a.name) : Promise.resolve(null),
       ])
+      if (!sigue(yo, a.name)) return
       detalleApp = d
       if (e) entorno = e
     } catch (err) {
@@ -563,11 +804,13 @@
    */
   async function verDescriptor(a: App) {
     pestana = 'descriptor'
+    const yo = alias
     try {
       const [d, e] = await Promise.all([
-        detalleApp?.name === a.name ? Promise.resolve(detalleApp) : pedirDetalle(alias, a.name),
-        entorno?.app === a.name ? Promise.resolve(entorno) : pedirEntorno(alias, a.name).catch(() => null),
+        detalleApp?.name === a.name ? Promise.resolve(detalleApp) : pedirDetalle(yo, a.name),
+        entorno?.app === a.name ? Promise.resolve(entorno) : pedirEntorno(yo, a.name).catch(() => null),
       ])
+      if (!sigue(yo, a.name)) return
       detalleApp = d
       if (e) entorno = e
     } catch (err) {
@@ -578,13 +821,17 @@
   async function verTrafico(a: App) {
     pestana = 'trafico'
     if (trafico && trafico.app === a.name) return
+    const yo = alias
     try {
       // Las dos a la vez: se miran juntas y son dos comandos distintos, así que
       // pedirlas en serie doblaría la espera de una pantalla sin ganar nada.
+      // Y ahora a la vez de verdad: el envoltorio las corre fuera del hilo de
+      // la ventana y cada una en el suyo.
       const [t, m] = await Promise.all([
-        pedirTrafico(alias, a.name),
-        pedirMetricas(alias, a.name),
+        pedirTrafico(yo, a.name),
+        pedirMetricas(yo, a.name),
       ])
+      if (!sigue(yo, a.name)) return
       trafico = t
       metricas = m
     } catch (e) {
@@ -595,10 +842,12 @@
   async function verLog(a: App) {
     pestana = 'log'
     if (log) return
+    const yo = alias
     try {
-      log = await pedirLog(alias, a.name)
+      const l = await pedirLog(yo, a.name)
+      if (sigue(yo, a.name)) log = l
     } catch (e) {
-      error = e as ErrorDelPuente
+      if (sigue(yo, a.name)) error = e as ErrorDelPuente
     }
   }
 
@@ -618,14 +867,27 @@
 </script>
 
 {#if hoja}
-  <HojaDeComando
-    titulo="Desplegar {hoja.name}"
+  <HojaDeDespliegue
+    app={hoja}
     servidor={alias}
-    orden="orbit deploy {hoja.name}"
-    consecuencia="Actualiza el clon, compila en una release nueva y sólo al final mueve el symlink. Si el build falla, la versión que está publicada ahora ni se entera. Al reiniciar el proceso puede haber uno o dos segundos sin respuesta."
-    verbo="Desplegar"
-    alConfirmar={() => lanzar(hoja!)}
-    alCancelar={() => (hoja = null)}
+    {comprobacion}
+    {estadoComprobacion}
+    {faltanDeAntes}
+    porEntrada={sabe(versionActual, 'entornoPorEntrada')}
+    alConfirmar={(entorno, forzar) => lanzar(hoja!, entorno, forzar)}
+    alCancelar={cerrarHoja}
+  />
+{/if}
+
+{#if pendiente}
+  <HojaDeComando
+    titulo={pendiente.titulo}
+    servidor={alias}
+    orden={pendiente.orden}
+    consecuencia={pendiente.consecuencia}
+    verbo={pendiente.verbo}
+    alConfirmar={ejecutarPendiente}
+    alCancelar={() => (pendiente = null)}
   />
 {/if}
 
@@ -638,7 +900,7 @@
   <nav class="rail" aria-label="Servidores">
     <p class="marca">Orbit</p>
     <ul>
-      {#each servidores as s (s.alias)}
+      {#each enElRail as s (s.alias)}
         {@const enMarcha = vivos.enCurso(s.alias).length}
         <li>
           <button
@@ -712,7 +974,7 @@
             nueva web
           </button>
           <button type="button" onclick={() => (enPasada = true)}>desplegar todo</button>
-          {#if servidores.length > 1}
+          {#if enElRail.length > 1}
             <button type="button" onclick={() => (enComparar = true)}>comparar</button>
           {/if}
         {/if}
@@ -729,7 +991,7 @@
           appsB={appsOtro}
           fallo={falloOtro}
           cargando={comparando}
-          candidatos={servidores.map((x) => x.alias).filter((x) => x !== alias)}
+          candidatos={enElRail.map((x) => x.alias).filter((x) => x !== alias)}
           alElegir={compararCon}
           alCerrar={cerrarComparar}
         />
@@ -849,7 +1111,13 @@
             trafico = null
             metricas = null
             detalleApp = null
+            tareasApp = null
+            avisoDetalle = null
             pestana = 'detalle'
+            // El detalle se pide al elegir: trae lo que la lista no calcula
+            // —los días del certificado, el motivo de una congelación, las
+            // tareas— y es una sola app.
+            void verDetalle(a)
           }}
         />
       {/if}
@@ -858,7 +1126,7 @@
     {#if elegida && vista === 'apps' && !enNueva && !enPasada && !enComparar}
       <section class="panel panel--detalle">
         <nav class="pestanas" aria-label="Qué mirar de esta app">
-          <button type="button" class:activo={pestana === 'detalle'} onclick={() => (pestana = 'detalle')}>
+          <button type="button" class:activo={pestana === 'detalle'} onclick={() => verDetalle(elegida!)}>
             detalle
           </button>
           <button type="button" class:activo={pestana === 'log'} onclick={() => verLog(elegida!)}>
@@ -887,12 +1155,29 @@
               despliegue
             </button>
           {/if}
-          <button type="button" class="lanzar" onclick={() => (hoja = elegida)}>
+          <button type="button" class="lanzar" onclick={() => prepararDespliegue(elegida!)}>
             Desplegar
           </button>
         </nav>
         {#if pestana === 'detalle'}
-          <DetalleApp app={elegida} servidor={alias} />
+          {#if avisoDetalle}
+            <!-- Lo que dijo Orbit, tal cual. Si falló, es su frase y no un
+                 código de salida. -->
+            <p class="aviso-detalle" class:aviso-detalle--mal={!avisoDetalle.ok} role="status">
+              {avisoDetalle.texto}
+            </p>
+          {/if}
+          <DetalleApp
+            app={elegida}
+            servidor={alias}
+            info={detalleApp?.name === elegida.name ? detalleApp : null}
+            tareas={tareasApp?.app === elegida.name ? tareasApp : null}
+            puedeCongelar={hayPuente() && elegida.type !== 'redirect'}
+            puedeEsperarCi={hayPuente() && elegida.type !== 'redirect'}
+            alCongelar={(m) => pedirCongelar(elegida!, m)}
+            alDescongelar={() => pedirDescongelar(elegida!)}
+            alEsperarCi={(e) => pedirEsperarCi(elegida!, e)}
+          />
         {:else if pestana === 'descriptor'}
           <OrbitJson app={elegida.name} info={detalleApp} {entorno} />
         {:else if pestana === 'entorno'}
@@ -938,7 +1223,7 @@
                 await revertir(alias, elegida!.name, r)
                 // Lo que cuenta es cómo queda el servidor, no lo que dijo el
                 // comando: se vuelve a preguntar en vez de parchear la fila.
-                apps = null; detalleApp = null; cargar(alias)
+                await refrescar()
               }}
             />
           {:else}
@@ -987,6 +1272,7 @@
                 progreso={v.progreso}
                 resultado={v.resultado}
                 crudo={v.crudo}
+                alDarVariables={hayPuente() ? (f) => prepararDespliegue(elegida!, f) : null}
               />
             {/if}
           {/if}
@@ -1086,4 +1372,10 @@
     padding: var(--e-2) var(--e-3); font: inherit; font-size: 12px;
     color: var(--fg-muted); cursor: pointer;
   }
+  .aviso-detalle {
+    margin: var(--e-4) var(--e-5) 0; padding: var(--e-2) var(--e-3);
+    border: 1px solid var(--border); border-radius: var(--r-2);
+    font-size: 12px; color: var(--fg-muted); white-space: pre-wrap;
+  }
+  .aviso-detalle--mal { color: var(--fg); border-color: var(--border-strong); }
 </style>

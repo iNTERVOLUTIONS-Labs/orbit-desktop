@@ -149,6 +149,45 @@ describe('el fichero generado pasa por el lector de Orbit', () => {
     ])
   })
 
+  it('el bloque env lo lee también el Orbit de la 1.3.8 en adelante, con obligatoria y por defecto', () => {
+    // La expresión literal de `_read_env_block` en Orbit 1.4.8 (orbit, en
+    // `A_ENV_SPEC="$(jq -r '…')"`). Desde la 1.3.8 son siete campos separados
+    // por US, y el descriptor que escribe ese Orbit también viene así: el
+    // fichero generado tiene que dar la vuelta entera, o una obligatoria
+    // regenerada como opcional deja de parar el despliegue.
+    const US = '\x1f'
+    const spec = [
+      ['DATABASE_URL', 'prompt', 'Postgres', 'secret', 'Postgres', 'required', ''],
+      ['APP_KEY', 'generate', 'hex:32', 'plain', '', 'optional', ''],
+      ['MAIL_FROM', 'prompt', 'MAIL_FROM', 'plain', '', 'optional', 'web@ejemplo.com'],
+    ].map((c) => c.join(US)).join('\n')
+    const f = fichero({ ...RICA, config: { ...RICA.config, env_spec: spec } }, [])
+    const salida = execFileSync(
+      'jq',
+      [
+        '-r',
+        `(.env.vars // {}) | to_entries[] |
+    (if (.value | type) == "object" then .value else {} end) as $v |
+    [ .key,
+      (if $v.generate then "generate" else "prompt" end),
+      ($v.generate // $v.prompt // $v.desc // .key | tostring),
+      (if $v.secret then "secret" else "plain" end),
+      ($v.desc // "" | tostring),
+      (if $v.required then "required" else "optional" end),
+      (if ($v | has("default")) then ($v.default | tostring) else "" end)
+    ] | map(gsub("[\u001f\n\r]"; " ")) | join("\u001f")`,
+        f,
+      ],
+      { encoding: 'utf8' },
+    ).replace(/\n$/, '')
+    const filas = salida.split('\n').map((l) => l.split(US))
+    expect(filas).toEqual([
+      ['DATABASE_URL', 'prompt', 'Postgres', 'secret', 'Postgres', 'required', ''],
+      ['APP_KEY', 'generate', 'hex:32', 'plain', '', 'optional', ''],
+      ['MAIL_FROM', 'prompt', 'MAIL_FROM', 'plain', '', 'optional', 'web@ejemplo.com'],
+    ])
+  })
+
   it('«env.file» por defecto no se escribe, y Orbit pone «.env» igual', () => {
     // `.env.file // ".env"` — línea 1855.
     const f = fichero(RICA, [])

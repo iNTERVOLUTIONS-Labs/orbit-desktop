@@ -53,6 +53,18 @@ pub enum ErrorForma {
     /// ofrecerlo: lo que se ofrece en su lugar es la orden `ssh` para pegarla
     /// en un terminal de verdad.
     ExecSinComando,
+    /// Un valor para `deploy --env` que el servidor rechazaría. **Lleva la
+    /// clave y el motivo, nunca el valor**: este error acaba en pantalla y en
+    /// los informes de fallo, y el valor suele ser una contraseña.
+    ValorDeEntorno {
+        clave: String,
+        motivo: &'static str,
+    },
+    /// La misma variable dos veces en un despliegue. El servidor se quedaría
+    /// con una de las dos sin decir cuál, y quien lo pidió no sabría cuál.
+    ClaveRepetida(String),
+    /// El motivo de una congelación que no cabe en una línea del testigo.
+    Motivo(&'static str),
     Escapado(shquote::ErrorEscapado),
 }
 
@@ -73,6 +85,11 @@ impl std::fmt::Display for ErrorForma {
                 f,
                 "«orbit exec» sin comando abre una shell interactiva, y aquí no hay terminal"
             ),
+            Self::ValorDeEntorno { clave, motivo } => {
+                write!(f, "el valor de {clave} {motivo}")
+            }
+            Self::ClaveRepetida(c) => write!(f, "{c} va dos veces en el mismo despliegue"),
+            Self::Motivo(m) => write!(f, "el motivo {m}"),
             Self::Escapado(e) => write!(f, "{e}"),
         }
     }
@@ -222,6 +239,77 @@ pub fn correo_valido(s: &str) -> bool {
     }
 }
 
+/// Un valor que **no se enseña**: el de una variable de entorno que viaja con
+/// `deploy --env`.
+///
+/// Es un tipo y no una `String` para que olvidarse sea difícil: su `Debug`
+/// dice «oculto», no implementa `Display`, y la única forma de leerlo es
+/// [`Secreto::exponer`], que se ve en una revisión. Un `{:?}` de un
+/// [`Comando`] en un mensaje de error o en un registro —la forma más corriente
+/// de filtrar una contraseña— no lo saca.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secreto(String);
+
+impl Secreto {
+    pub fn nuevo(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+
+    /// El valor de verdad. Sólo lo llama quien construye el `argv`.
+    pub fn exponer(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secreto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secreto(«oculto»)")
+    }
+}
+
+/// Lo que se enseña en lugar de un valor. Siempre igual, y no del largo del
+/// valor: la longitud de una contraseña también es un dato sobre ella.
+pub const OCULTO: &str = "••••••";
+
+/// Una variable que se pone en el `.env` **antes del build** con
+/// `orbit deploy --env CLAVE=valor`. 1.3.8.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VariableNueva {
+    pub clave: String,
+    pub valor: Secreto,
+}
+
+/// Las mismas reglas que `_env_value_problem` en el servidor, para que un
+/// valor que no se puede guardar se diga aquí y no a mitad de un despliegue:
+/// ni saltos de línea —un `.env` es una variable por línea— ni comilla simple,
+/// que bash y systemd escapan distinto. Y ni un byte nulo, que no cruza un
+/// `argv`.
+fn problema_del_valor(v: &str) -> Option<&'static str> {
+    if v.contains('\n') || v.contains('\r') {
+        return Some("lleva saltos de línea, y en un .env cada variable es una línea");
+    }
+    if v.contains('\'') {
+        return Some("lleva una comilla simple, y systemd y bash no la escapan igual");
+    }
+    if v.contains('\0') {
+        return Some("lleva un byte nulo");
+    }
+    None
+}
+
+/// El motivo de `orbit lock -m`. El servidor ya cambia los saltos de línea por
+/// espacios y lo corta en 200: aquí se rechaza en vez de recortarse, porque un
+/// motivo recortado en silencio dice otra cosa que el que se escribió.
+pub fn motivo_valido(m: &str) -> Result<(), ErrorForma> {
+    if m.chars().count() > 200 {
+        return Err(ErrorForma::Motivo("pasa de 200 caracteres"));
+    }
+    if m.chars().any(|c| c.is_control()) {
+        return Err(ErrorForma::Motivo("tiene que caber en una línea"));
+    }
+    Ok(())
+}
+
 /// Qué hacer con un campo que Orbit sabe detectar solo.
 ///
 /// Son tres estados y no dos, y la diferencia no es cosmética: **`--build ''`
@@ -353,6 +441,29 @@ pub enum Comando {
     Desplegar {
         app: String,
         progreso: bool,
+        /// Lo que se pone en el `.env` antes del build (`--env`). Es la forma de
+        /// dar una variable **obligatoria** sin terminal: sin ella el despliegue
+        /// se para antes del build, porque con `--json` no hay a quién
+        /// preguntar. Vacío casi siempre.
+        ///
+        /// **Viaja en el `argv`**, y eso tiene un coste que no se puede tapar
+        /// desde aquí: mientras dura el despliegue, el valor se ve en `ps` del
+        /// servidor, y si el usuario SSH no es root, `sudo` lo apunta en su
+        /// registro. Orbit no ofrece hoy otra vía —`--env-file` exige un
+        /// fichero en el servidor, y escribir uno es justo lo que este cliente
+        /// no hace—. Está en THREAT-MODEL, y la pantalla lo dice.
+        entorno: Vec<VariableNueva>,
+        /// `--force`: desplegar aunque esté congelada. **No la descongela**: se
+        /// despliega esa vez y la congelación sigue. Es una decisión, y por eso
+        /// en la interfaz es un botón aparte, nunca una casilla.
+        forzar: bool,
+        /// Mandar `entorno` por la **entrada estándar** (`--env-stdin`, Orbit
+        /// 1.4.9) en vez de por el `argv`. Con esto el valor viaja por el canal
+        /// cifrado de SSH y no toca ni `ps` ni el registro de `sudo`: es lo que
+        /// cierra THREAT-MODEL T-13. Lo decide quien sabe la versión del
+        /// servidor; con uno anterior, `--env-stdin` no existe y el servidor
+        /// se negaría entero —que es un fallo seguro, no una fuga—.
+        por_entrada: bool,
     },
     /// Una pasada por todas las apps del servidor.
     ///
@@ -377,6 +488,35 @@ pub enum Comando {
     DesplegarTodo {
         progreso: bool,
         solo_si_cambia: bool,
+    },
+    /// Lo que la app declara frente a lo que tiene, **sin un solo valor**.
+    /// 1.3.8. Es la comprobación previa al despliegue: si falta una
+    /// obligatoria, la interfaz la pide antes de lanzar nada.
+    EntornoComprobar {
+        app: String,
+    },
+    /// Las tareas programadas que declara el `orbit.json`. 1.3.9.
+    Tareas {
+        app: String,
+    },
+    /// Congela los despliegues de una app. 1.4.3.
+    ///
+    /// El autodespliegue y `deploy --all` la saltan, y `deploy` a mano se niega
+    /// sin `--force`. **El rollback sigue permitido**: es la salida de
+    /// emergencia. Sin `--json`, porque `lock` no lo habla: con él delante,
+    /// el servidor se niega entero.
+    Congelar {
+        app: String,
+        motivo: Option<String>,
+    },
+    Descongelar {
+        app: String,
+    },
+    /// Que el autodespliegue y `deploy --all` esperen a la CI de GitHub.
+    /// 1.4.3. `orbit deploy` a mano no espera nunca: sólo avisa.
+    EsperarCi {
+        app: String,
+        esperar: bool,
     },
     /// Ejecuta algo dentro de una app.
     ///
@@ -622,13 +762,85 @@ impl Comando {
                     v.push("--nginx".into());
                 }
             }
-            Self::Desplegar { app, progreso } => {
+            Self::Desplegar {
+                app,
+                progreso,
+                entorno,
+                forzar,
+                por_entrada,
+            } => {
                 json(&mut v);
                 v.push("deploy".into());
                 v.push(app_ok(app)?);
                 if *progreso {
                     v.push("--progress".into());
                 }
+                if *forzar {
+                    v.push("--force".into());
+                }
+                let mut vistas: Vec<&str> = Vec::new();
+                for e in entorno {
+                    if !clave_de_entorno_valida(&e.clave) {
+                        return Err(ErrorForma::ClaveDeEntorno(e.clave.clone()));
+                    }
+                    if vistas.contains(&e.clave.as_str()) {
+                        return Err(ErrorForma::ClaveRepetida(e.clave.clone()));
+                    }
+                    vistas.push(&e.clave);
+                    if let Some(motivo) = problema_del_valor(e.valor.exponer()) {
+                        return Err(ErrorForma::ValorDeEntorno {
+                            clave: e.clave.clone(),
+                            motivo,
+                        });
+                    }
+                    if !*por_entrada {
+                        // Un solo argumento `CLAVE=valor`, como lo parte el
+                        // servidor (`${kv%%=*}`): un `=` dentro del valor llega
+                        // entero, porque sólo se corta por el primero.
+                        v.push("--env".into());
+                        v.push(format!("{}={}", e.clave, e.valor.exponer()));
+                    }
+                }
+                // Por la entrada: en el `argv` sólo va la bandera, y los
+                // valores los escribe el transporte por stdin (ver
+                // [`Comando::entrada`]). Sin variables no se pasa: `--env-stdin`
+                // gasta la entrada y apaga las preguntas, y no hay nada que leer.
+                if *por_entrada && !entorno.is_empty() {
+                    v.push("--env-stdin".into());
+                }
+            }
+            Self::EntornoComprobar { app } => {
+                json(&mut v);
+                v.extend(["env".into(), "check".into()]);
+                v.push(app_ok(app)?);
+            }
+            Self::Tareas { app } => {
+                json(&mut v);
+                v.extend(["cron".into(), "list".into()]);
+                v.push(app_ok(app)?);
+            }
+            Self::Congelar { app, motivo } => {
+                v.push("lock".into());
+                v.push(app_ok(app)?);
+                if let Some(m) = motivo {
+                    motivo_valido(m)?;
+                    // Con su bandera y no suelto detrás del nombre, aunque el
+                    // servidor acepte las dos: así un motivo que empiece por
+                    // guion es el valor de `-m` y no una opción que no existe.
+                    if !m.trim().is_empty() {
+                        v.push("-m".into());
+                        v.push(m.clone());
+                    }
+                }
+            }
+            Self::Descongelar { app } => {
+                v.push("unlock".into());
+                v.push(app_ok(app)?);
+            }
+            Self::EsperarCi { app, esperar } => {
+                v.extend(["autodeploy".into(), "checks".into()]);
+                v.push(if *esperar { "on" } else { "off" }.into());
+                v.push(app_ok(app)?);
             }
             Self::DesplegarTodo {
                 progreso,
@@ -786,6 +998,71 @@ impl Comando {
     pub fn linea(&self, binario: &str) -> Result<String, ErrorForma> {
         let argv = self.argv(binario)?;
         shquote::build(&argv).map_err(ErrorForma::Escapado)
+    }
+
+    /// Lo que hay que escribir por la **entrada estándar** de la orden, si algo.
+    ///
+    /// Sólo un despliegue con `por_entrada` y variables lo usa: una línea
+    /// `CLAVE="valor"` por variable, que es lo que lee `--env-stdin` —el mismo
+    /// formato que `--env-file`—. Las comillas dobles no son estilo: Orbit pasa
+    /// cada valor por `_env_unquote`, que **sin comillas** corta un ` #` como
+    /// comentario y quita los espacios del final, así que `p@ss #1` llegaría
+    /// como `p@ss`. Entre comillas dobles sólo se interpretan `\"` y `\\`, y
+    /// por eso son los dos únicos que se escapan. Una comilla simple, un salto
+    /// de línea o un nulo ya los rechaza [`Comando::argv`] antes de llegar aquí.
+    ///
+    /// Es un [`Secreto`]: lleva los valores.
+    pub fn entrada(&self) -> Option<Secreto> {
+        match self {
+            Self::Desplegar {
+                entorno,
+                por_entrada: true,
+                ..
+            } if !entorno.is_empty() => {
+                let mut s = String::new();
+                for e in entorno {
+                    let v = e.valor.exponer().replace('\\', "\\\\").replace('"', "\\\"");
+                    s.push_str(&e.clave);
+                    s.push_str("=\"");
+                    s.push_str(&v);
+                    s.push_str("\"\n");
+                }
+                Some(Secreto::nuevo(s))
+            }
+            _ => None,
+        }
+    }
+
+    /// El `argv` **para enseñarlo**: el mismo que [`Comando::argv`], con cada
+    /// valor de `--env` cambiado por [`OCULTO`].
+    ///
+    /// Sale del `argv` de verdad y no de una plantilla aparte, a propósito: la
+    /// hoja de comando existe para que lo que se lee sea lo que se ejecuta, y
+    /// dos funciones que construyen la misma orden acaban construyendo dos.
+    /// Sólo se tapa lo que va detrás de un `--env`, y sólo después del `=`: la
+    /// clave se ve, porque decidir si se manda hace falta leerla.
+    pub fn argv_visible(&self, binario: &str) -> Result<Vec<String>, ErrorForma> {
+        let mut v = self.argv(binario)?;
+        if matches!(self, Self::Desplegar { .. }) {
+            let mut tras_env = false;
+            for a in v.iter_mut() {
+                if tras_env {
+                    if let Some((k, _)) = a.split_once('=') {
+                        *a = format!("{k}={OCULTO}");
+                    }
+                    tras_env = false;
+                } else {
+                    tras_env = a == "--env";
+                }
+            }
+        }
+        Ok(v)
+    }
+
+    /// La línea que se enseña en la hoja de comando: escapada como la de
+    /// verdad, y con los valores secretos tapados.
+    pub fn linea_visible(&self, binario: &str) -> Result<String, ErrorForma> {
+        shquote::build(&self.argv_visible(binario)?).map_err(ErrorForma::Escapado)
     }
 
     /// Si la respuesta es un único objeto JSON o un flujo NDJSON. `logs` es la
@@ -1092,7 +1369,10 @@ mod tests {
         assert!(!Comando::Lista.es_flujo());
         assert!(!Comando::Desplegar {
             app: "web".into(),
-            progreso: true
+            progreso: true,
+            entorno: vec![],
+            forzar: false,
+            por_entrada: false,
         }
         .es_flujo());
     }
@@ -1339,5 +1619,244 @@ mod tests {
         let i = v.iter().position(|x| x == "--progress").unwrap();
         let j = v.iter().position(|x| x == "--json").unwrap();
         assert!(j < i, "'--json' va delante del subcomando");
+    }
+
+    // ── 1.3.8 a 1.4.8 ───────────────────────────────────────────────────────
+
+    fn por_entrada(entorno: Vec<(&str, &str)>) -> Comando {
+        match desplegar_con(entorno, false) {
+            Comando::Desplegar {
+                app,
+                progreso,
+                entorno,
+                forzar,
+                ..
+            } => Comando::Desplegar {
+                app,
+                progreso,
+                entorno,
+                forzar,
+                por_entrada: true,
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn por_la_entrada_el_argv_no_lleva_ni_un_valor_ni_una_clave() {
+        let c = por_entrada(vec![("DB_PASSWORD", "hunter2"), ("MODE", "a=b")]);
+        let v = c.argv(B).unwrap();
+        assert_eq!(
+            v,
+            [B, "--json", "deploy", "tienda", "--progress", "--env-stdin"]
+        );
+        assert!(!v.join(" ").contains("hunter2"));
+        assert!(!v.iter().any(|a| a == "--env"));
+        // Lo que se enseña es lo mismo: no hay nada que tapar.
+        assert_eq!(c.argv_visible(B).unwrap(), v);
+    }
+
+    #[test]
+    fn la_entrada_va_entre_comillas_dobles_para_que_orbit_no_la_recorte() {
+        let c = por_entrada(vec![
+            ("A", r#"p@ss w"ord #no-es-comentario  "#),
+            ("B", r"back\slash\"),
+            ("C", ""),
+        ]);
+        let e = c.entrada().expect("hay entrada");
+        assert_eq!(
+            e.exponer(),
+            "A=\"p@ss w\\\"ord #no-es-comentario  \"\nB=\"back\\\\slash\\\\\"\nC=\"\"\n"
+        );
+        // Y no se deja imprimir.
+        assert!(!format!("{e:?}").contains("p@ss"));
+    }
+
+    #[test]
+    fn sin_variables_o_por_el_argv_no_hay_entrada() {
+        assert!(por_entrada(vec![]).entrada().is_none());
+        assert!(!por_entrada(vec![])
+            .argv(B)
+            .unwrap()
+            .contains(&"--env-stdin".to_string()));
+        assert!(desplegar_con(vec![("A", "1")], false).entrada().is_none());
+        assert!(Comando::Lista.entrada().is_none());
+    }
+
+    #[test]
+    fn por_la_entrada_tambien_se_valida_antes_de_mandar() {
+        assert!(matches!(
+            por_entrada(vec![("A", "dos\nlíneas")]).argv(B),
+            Err(ErrorForma::ValorDeEntorno { .. })
+        ));
+    }
+
+    fn desplegar_con(entorno: Vec<(&str, &str)>, forzar: bool) -> Comando {
+        Comando::Desplegar {
+            app: "tienda".into(),
+            progreso: true,
+            entorno: entorno
+                .into_iter()
+                .map(|(k, v)| VariableNueva {
+                    clave: k.into(),
+                    valor: Secreto::nuevo(v),
+                })
+                .collect(),
+            forzar,
+            por_entrada: false,
+        }
+    }
+
+    #[test]
+    fn un_despliegue_normal_no_lleva_ni_env_ni_force() {
+        let v = desplegar_con(vec![], false).argv(B).unwrap();
+        assert_eq!(v, [B, "--json", "deploy", "tienda", "--progress"]);
+    }
+
+    #[test]
+    fn las_variables_viajan_como_un_argumento_clave_valor() {
+        let v = desplegar_con(vec![("DATABASE_URL", "postgres://u:p@h/db?a=b")], false)
+            .argv(B)
+            .unwrap();
+        let i = v.iter().position(|x| x == "--env").unwrap();
+        // Un `=` dentro del valor llega entero: el servidor corta por el primero.
+        assert_eq!(v[i + 1], "DATABASE_URL=postgres://u:p@h/db?a=b");
+    }
+
+    #[test]
+    fn forzar_se_ve_en_la_orden() {
+        let v = desplegar_con(vec![], true).argv(B).unwrap();
+        assert!(v.contains(&"--force".to_string()));
+    }
+
+    #[test]
+    fn un_valor_que_el_servidor_rechazaria_se_dice_aqui_y_sin_el_valor() {
+        for malo in ["a\nb", "a\rb", "it's", "a\0b"] {
+            let e = desplegar_con(vec![("CLAVE", malo)], false)
+                .argv(B)
+                .unwrap_err();
+            assert!(matches!(e, ErrorForma::ValorDeEntorno { .. }), "{malo:?}");
+            // El mensaje nombra la clave y nunca el valor.
+            let m = e.to_string();
+            assert!(m.contains("CLAVE"));
+            assert!(!m.contains(malo), "el error enseña el valor: {m}");
+        }
+    }
+
+    #[test]
+    fn una_clave_inventada_o_repetida_no_sale_de_aqui() {
+        assert!(matches!(
+            desplegar_con(vec![("MAL-CLAVE", "x")], false).argv(B),
+            Err(ErrorForma::ClaveDeEntorno(_))
+        ));
+        assert!(matches!(
+            desplegar_con(vec![("A", "1"), ("A", "2")], false).argv(B),
+            Err(ErrorForma::ClaveRepetida(_))
+        ));
+    }
+
+    #[test]
+    fn la_orden_que_se_ensena_tapa_los_valores_y_nada_mas() {
+        let c = desplegar_con(vec![("DB_PASSWORD", "hunter2"), ("MODE", "a=b")], true);
+        let visible = c.argv_visible(B).unwrap();
+        let de_verdad = c.argv(B).unwrap();
+        let unida = visible.join(" ");
+        assert!(!unida.contains("hunter2"));
+        assert!(!unida.contains("a=b"));
+        assert!(unida.contains(&format!("DB_PASSWORD={OCULTO}")));
+        assert!(unida.contains(&format!("MODE={OCULTO}")));
+        // El resto, idéntico: lo que se lee es lo que se ejecuta.
+        assert_eq!(visible.len(), de_verdad.len());
+        for (a, b) in visible.iter().zip(&de_verdad) {
+            if !a.contains(OCULTO) {
+                assert_eq!(a, b);
+            }
+        }
+        assert!(!c.linea_visible(B).unwrap().contains("hunter2"));
+    }
+
+    #[test]
+    fn un_comando_con_secretos_no_los_suelta_por_debug() {
+        // La forma más corriente de filtrar una contraseña: un `{:?}` en un
+        // mensaje de error o en un registro.
+        let c = desplegar_con(vec![("DB_PASSWORD", "hunter2")], false);
+        let d = format!("{c:?}");
+        assert!(!d.contains("hunter2"), "{d}");
+        assert!(d.contains("DB_PASSWORD"));
+    }
+
+    #[test]
+    fn congelar_lleva_el_motivo_con_su_bandera_y_sin_json() {
+        let v = Comando::Congelar {
+            app: "tienda".into(),
+            motivo: Some("-black friday".into()),
+        }
+        .argv(B)
+        .unwrap();
+        // `lock` no habla JSON: con `--json` delante el servidor se niega.
+        assert_eq!(v, [B, "lock", "tienda", "-m", "-black friday"]);
+        let sin = Comando::Congelar {
+            app: "tienda".into(),
+            motivo: None,
+        }
+        .argv(B)
+        .unwrap();
+        assert_eq!(sin, [B, "lock", "tienda"]);
+        // Un motivo en blanco es no decir motivo.
+        let blanco = Comando::Congelar {
+            app: "tienda".into(),
+            motivo: Some("   ".into()),
+        }
+        .argv(B)
+        .unwrap();
+        assert_eq!(blanco, [B, "lock", "tienda"]);
+    }
+
+    #[test]
+    fn un_motivo_que_no_cabe_en_el_testigo_se_rechaza_en_vez_de_recortarse() {
+        for malo in ["dos\nlíneas".to_string(), "x".repeat(201)] {
+            let r = Comando::Congelar {
+                app: "tienda".into(),
+                motivo: Some(malo),
+            }
+            .argv(B);
+            assert!(matches!(r, Err(ErrorForma::Motivo(_))));
+        }
+        // 200 justos caben, y con acentos se cuentan caracteres, no bytes.
+        assert!(motivo_valido(&"á".repeat(200)).is_ok());
+    }
+
+    #[test]
+    fn las_ordenes_nuevas_llevan_la_app_y_json_donde_lo_hablan() {
+        let ec = Comando::EntornoComprobar { app: "web".into() }
+            .argv(B)
+            .unwrap();
+        assert_eq!(ec, [B, "--json", "env", "check", "web"]);
+        let t = Comando::Tareas { app: "web".into() }.argv(B).unwrap();
+        assert_eq!(t, [B, "--json", "cron", "list", "web"]);
+        let u = Comando::Descongelar { app: "web".into() }.argv(B).unwrap();
+        assert_eq!(u, [B, "unlock", "web"]);
+        let ci = Comando::EsperarCi {
+            app: "web".into(),
+            esperar: true,
+        }
+        .argv(B)
+        .unwrap();
+        assert_eq!(ci, [B, "autodeploy", "checks", "on", "web"]);
+        let no = Comando::EsperarCi {
+            app: "web".into(),
+            esperar: false,
+        }
+        .argv(B)
+        .unwrap();
+        assert_eq!(no[3], "off");
+        // Y ninguna admite una app sin nombre.
+        for c in [
+            Comando::EntornoComprobar { app: String::new() },
+            Comando::Tareas { app: String::new() },
+            Comando::Descongelar { app: String::new() },
+        ] {
+            assert!(c.argv(B).is_err());
+        }
     }
 }

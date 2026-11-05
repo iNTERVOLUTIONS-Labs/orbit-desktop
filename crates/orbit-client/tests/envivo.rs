@@ -36,6 +36,9 @@ fn el_progreso_llega_segun_ocurre_y_no_al_final() {
     let c = Comando::Desplegar {
         app: "mi-web".into(),
         progreso: true,
+        entorno: vec![],
+        forzar: false,
+        por_entrada: false,
     };
     let r = ejecutar_en_vivo_local(
         &falso(),
@@ -79,6 +82,9 @@ fn lo_servido_y_lo_acumulado_dicen_lo_mismo() {
     let c = Comando::Desplegar {
         app: "mi-web".into(),
         progreso: true,
+        entorno: vec![],
+        forzar: false,
+        por_entrada: false,
     };
     let r = ejecutar_en_vivo_local(
         &falso(),
@@ -114,6 +120,9 @@ fn se_puede_cancelar_un_despliegue_en_curso() {
         let c = Comando::Desplegar {
             app: "mi-web".into(),
             progreso: true,
+            entorno: vec![],
+            forzar: false,
+            por_entrada: false,
         };
         ejecutar_en_vivo_local(
             &falso(),
@@ -248,6 +257,9 @@ fn quien_lleva_json_habla_por_stderr_y_quien_no_por_stdout() {
         Comando::Desplegar {
             app: "web".into(),
             progreso: true,
+            entorno: vec![],
+            forzar: false,
+            por_entrada: false,
         },
         Comando::EntornoLista { app: "web".into() },
         Comando::EntornoValor {

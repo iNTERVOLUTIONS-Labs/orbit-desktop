@@ -42,6 +42,33 @@ export interface Estado {
   releases: number | null
   last_deploy: string | null
   last_deploy_sha: string | null
+
+  // ── Lo que llegó después de la línea base (1.3.6) ────────────────────────
+  //
+  // Opcionales, y **opcional no quiere decir «por defecto falso»**: que un
+  // 1.3.6 no diga `locked` no significa que la app no esté congelada, significa
+  // que ese servidor no sabe congelar. `undefined` es «este servidor no lo
+  // dice», `null` es «lo dice y no hay». Son dos respuestas distintas y se
+  // pintan distinto — la misma regla de siempre, en el eje de la versión.
+
+  /** De quién es el certificado. `'origin'` es el de Cloudflare, que **sólo
+   *  vale detrás de su proxy**: quien entre a la IP del servidor sin pasar por
+   *  Cloudflare ve un error de certificado. 1.4.7. */
+  cert_type?: 'letsencrypt' | 'origin' | string | null
+  /** El autodespliegue y `deploy --all` esperan a la CI de GitHub. 1.4.3. */
+  checks?: boolean
+  /** Los despliegues están congelados (`orbit lock`). **No es un estado de lo
+   *  que se sirve**: una congelada atiende igual. 1.4.3. */
+  locked?: boolean
+  /** Quién, cuándo y por qué. `null` sin congelación. Cada campo de dentro
+   *  puede ser `null`: un `touch` a mano del testigo no dice quién. */
+  lock?: Congelacion | null
+}
+
+export interface Congelacion {
+  at: string | null
+  by: string | null
+  reason: string | null
 }
 
 export interface App {
@@ -269,10 +296,20 @@ export interface Despliegue {
   duration_s: number
   failed_step: string | null
   error: string | null
+  /** Las variables que siguen sin valor tras el despliegue. 1.3.8; `undefined`
+   *  en un servidor anterior, que **no es «no falta ninguna»**. Cuando falta
+   *  una obligatoria el despliegue se para antes del build, y la forma de
+   *  seguir es volver a lanzarlo con `--env CLAVE=valor`. */
+  env_missing?: string[]
 }
 
+/** Los finales de una pasada. Eran seis; la 1.4.3 añadió los cinco de las
+ *  puertas. Y se admite cualquier otra cadena: un final que no conozcamos
+ *  tiene que poder llegar a la pantalla en vez de tumbar el lote. */
 export type FinalDeLote =
   | 'deployed' | 'failed' | 'unchanged' | 'unreachable' | 'gone' | 'skipped'
+  | 'locked' | 'ignored' | 'ci_pending' | 'ci_failed' | 'ci_unknown'
+  | (string & {})
 
 export interface AppDelLote {
   app: string
@@ -294,11 +331,116 @@ export interface Lote {
   unreachable: number
   gone: number
   skipped: number
+  // Los cinco de las puertas, 1.4.3. Ausentes en un servidor anterior: ése no
+  // puede producirlos, y un cero diría que ha mirado.
+  locked?: number
+  ignored?: number
+  ci_pending?: number
+  ci_failed?: number
+  ci_unknown?: number
   /** La **misma regla que el código de salida**: ni fallidas, ni sin contacto,
-   *  ni ramas desaparecidas. Existe para que quien mire el objeto y quien mire
-   *  el rc no puedan discrepar nunca. */
+   *  ni ramas desaparecidas, ni CI a la que no se ha podido preguntar. Existe
+   *  para que quien mire el objeto y quien mire el rc no puedan discrepar
+   *  nunca. */
   ok: boolean
   duration_s: number
+}
+
+// ── lo que declara el repositorio ──────────────────────────────────────────
+
+/** `orbit env check <app> --json`. 1.3.8. **Sin un solo valor.**
+ *
+ *  Mira la release que **está sirviendo**: si el commit nuevo declara una
+ *  variable más, esto no la ve todavía. Es una comprobación previa, y la última
+ *  palabra la tiene el despliegue con `env_missing`. */
+export interface ComprobacionDeEntorno {
+  schema: number
+  app: string
+  file: string
+  ok: boolean
+  vars: VariableDeclarada[]
+}
+
+export interface VariableDeclarada {
+  key: string
+  /** Si el `.env` la tiene. **Nunca el valor.** */
+  set: boolean
+  required: boolean
+  /** `orbit.json` o `example`: las del `.env.example` nunca son obligatorias. */
+  source: 'orbit.json' | 'example' | string
+}
+
+/** Las que pararían el próximo despliegue antes del build. */
+export function obligatoriasSinValor(c: ComprobacionDeEntorno): string[] {
+  return c.vars.filter((v) => v.required && !v.set).map((v) => v.key)
+}
+
+/** `orbit cron list <app> --json`. 1.3.9. */
+export interface Tareas {
+  schema: number
+  app: string
+  tasks: Tarea[]
+}
+
+export interface Tarea {
+  name: string
+  /** Como lo da systemd (`Thu 2026-11-05 03:00:00 UTC`), no ISO-8601. `null`
+   *  es «no ha corrido nunca», que no es una fecha vacía. */
+  last_run: string | null
+  next_run: string | null
+  /** El `Result` de systemd de la última pasada: `success`, `exit-code`… */
+  result: string | null
+}
+
+// ── qué sabe hacer un servidor ─────────────────────────────────────────────
+
+/** Lo que no estaba en la línea base, y desde qué versión de Orbit. Es el
+ *  gemelo de `Capacidad` en `contrato.rs`, y los números salen del CHANGELOG
+ *  de Orbit, comprobados contra el código. */
+export const CAPACIDADES = {
+  /** `env check --json`, `deploy --env` y `env_missing`. */
+  entornoDeclarado: [1, 3, 8],
+  /** `cron list --json`. */
+  tareas: [1, 3, 9],
+  /** `lock`/`unlock`, `deploy --force` y `state.locked`. */
+  congelar: [1, 4, 3],
+  /** `autodeploy checks on|off` y `state.checks`. */
+  esperarCi: [1, 4, 3],
+  /** `state.cert_type`. */
+  tipoDeCertificado: [1, 4, 7],
+  /** `deploy --env-stdin`: las variables por la entrada, fuera del `argv`. */
+  entornoPorEntrada: [1, 4, 9],
+} as const
+
+export type Capacidad = keyof typeof CAPACIDADES
+
+/** La versión por componentes. `null` si no es semver: entonces no se sabe. */
+export function semver(v: string | null | undefined): [number, number, number] | null {
+  if (!v) return null
+  const base = v.split(/[-+]/)[0]!
+  const p = base.split('.')
+  if (p.length < 2 || p.length > 3) return null
+  const n = p.map((x) => (/^\d+$/.test(x) ? Number(x) : NaN))
+  if (n.some((x) => Number.isNaN(x))) return null
+  return [n[0]!, n[1]!, n[2] ?? 0]
+}
+
+/** Si un servidor sabe hacer algo, por su versión de Orbit.
+ *
+ *  Por versión y no por contrato: el contrato sigue en 1, porque todo esto se
+ *  ha **añadido** sin romper nada, que es justamente lo que promete. Con una
+ *  versión que no se entiende la respuesta es **no**: ofrecer un botón que el
+ *  servidor no entiende es peor que no ofrecerlo. Lo que se lee de una
+ *  respuesta —`locked`, `cert_type`— no pasa por aquí: manda que el campo
+ *  esté, que es más fiable que cualquier tabla. */
+export function sabe(version: string | null | undefined, c: Capacidad): boolean {
+  const v = semver(version)
+  if (!v) return false
+  const d = CAPACIDADES[c]
+  for (let i = 0; i < 3; i++) {
+    if (v[i]! !== d[i]!) return v[i]! > d[i]!
+  }
+  return true
 }
 
 // ── el entorno ─────────────────────────────────────────────────────────────

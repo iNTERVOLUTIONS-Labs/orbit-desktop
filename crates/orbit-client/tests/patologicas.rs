@@ -154,6 +154,9 @@ fn p09_un_despliegue_que_falla_contesta_y_el_objeto_no_se_descarta() {
     let c = Comando::Desplegar {
         app: "mi-web".into(),
         progreso: false,
+        entorno: vec![],
+        forzar: false,
+        por_entrada: false,
     };
     let r = falso("fallo-con-objeto", &c).expect("el objeto llega aunque el rc sea 1");
     let d: Despliegue = r.leer().unwrap();
@@ -169,6 +172,9 @@ fn p10_si_el_rc_y_el_objeto_discrepan_manda_el_objeto() {
     let c = Comando::Desplegar {
         app: "mi-web".into(),
         progreso: false,
+        entorno: vec![],
+        forzar: false,
+        por_entrada: false,
     };
     let r = falso("incoherente", &c).unwrap();
     let d: Despliegue = r.leer().unwrap();
@@ -620,6 +626,9 @@ fn el_progreso_va_por_stderr_y_el_objeto_por_stdout() {
     let c = Comando::Desplegar {
         app: "mi-web".into(),
         progreso: true,
+        entorno: vec![],
+        forzar: false,
+        por_entrada: false,
     };
     let r = falso("deploy-progreso", &c).unwrap();
 

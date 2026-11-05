@@ -8,15 +8,50 @@
 //! donde no pasa nada, y eso enseña a la gente a ignorar las alarmas*.
 //!
 //! Aquí eso se traduce en `Option<T>` en todos los sitios donde el contrato dice
-//! `|null`, y en que **no hay ningún `#[serde(default)]`**. Un campo que falte es
-//! un error de la respuesta, no un cero: la promesa de Orbit es que los campos se
-//! añaden y nunca se renombran, así que si el que esperábamos no está, o el
-//! servidor habla otro contrato o alguien nos está contestando otra cosa.
+//! `|null`, y en que **ningún campo de la línea base lleva `#[serde(default)]`**.
+//! La línea base es lo que ya hablaba Orbit 1.3.6, el primer servidor contra el
+//! que se escribió este cliente: un campo de ahí que falte es un error de la
+//! respuesta, no un cero, porque la promesa de Orbit es que los campos se añaden
+//! y nunca se renombran.
+//!
+//! **Los campos que llegaron después son otra cosa, y tienen otro tipo.** Un
+//! parque de servidores tarda meses en actualizarse, así que hablar con un 1.3.6
+//! es el caso normal y no puede ser un error. Pero tampoco se puede leer su
+//! silencio como un valor: que un 1.3.6 no diga `locked` **no quiere decir que
+//! la app no esté congelada**, quiere decir que ese servidor no sabe congelar.
+//! Así que cada campo nuevo lleva **un nivel más de `Option`** que su tipo del
+//! contrato, y el de fuera es «¿lo dice este servidor?»:
+//!
+//! | En el JSON              | `locked: Option<bool>` | `cert_type: Option<Option<String>>` |
+//! |-------------------------|------------------------|-------------------------------------|
+//! | el campo no está        | `None`                 | `None`                              |
+//! | `null`                  | —                      | `Some(None)`                        |
+//! | un valor                | `Some(v)`              | `Some(Some(v))`                     |
+//!
+//! Es la misma regla de siempre —lo que no se sabe no se pinta como un valor—
+//! aplicada a un eje que la línea base no tenía: la versión del servidor.
 //!
 //! Los campos **desconocidos sí se ignoran**, en silencio y sin avisar, porque
 //! ésa es la otra mitad de la misma promesa.
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+
+/// Lee un campo que **puede faltar** y **puede ser `null`**, sin confundir las
+/// dos cosas. Va con `#[serde(default, deserialize_with = "presente")]`: si el
+/// campo no está, `default` deja `None`; si está, esto lo envuelve en `Some`,
+/// también cuando su valor es `null`.
+///
+/// Existe porque serde, a secas, colapsa «no está» y «es `null`» en el mismo
+/// `None` —ya costó un fallo en el puente de la interfaz, con las anulaciones
+/// del asistente— y aquí esa diferencia es justo la que separa «este servidor
+/// es anterior a la 1.4.7» de «esta app no tiene certificado».
+fn presente<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
+}
 
 /// La versión del contrato que este cliente entiende.
 pub const CONTRATO_CONOCIDO: u32 = 1;
@@ -83,6 +118,56 @@ impl Version {
         }
         Some((a, b, c))
     }
+
+    /// Si este servidor sabe hacer algo que no estaba en la línea base.
+    ///
+    /// Por **versión de Orbit** y no por contrato: el contrato sigue siendo el 1
+    /// —los campos y las órdenes se han añadido sin romper nada, que es
+    /// justamente lo que el contrato promete— así que el número que dice qué hay
+    /// es el otro.
+    ///
+    /// Con una versión que no es semver la respuesta es **no**: no se sabe, y
+    /// ofrecer un botón que el servidor no entiende es peor que no ofrecerlo.
+    /// Lo que se lee de una respuesta —`locked`, `cert_type`— no pasa por aquí:
+    /// ahí manda que el campo esté, que es más fiable que cualquier tabla.
+    pub fn sabe(&self, c: Capacidad) -> bool {
+        match self.semver() {
+            Some(v) => v >= c.desde(),
+            None => false,
+        }
+    }
+}
+
+/// Lo que un servidor puede saber hacer según su versión. Cada una dice desde
+/// cuándo, y el número sale del CHANGELOG de Orbit, comprobado contra el código.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capacidad {
+    /// `orbit env check --json`, `deploy --env K=V` y `env_missing` en el
+    /// objeto del despliegue. 1.3.8.
+    EntornoDeclarado,
+    /// `orbit cron list --json`: las tareas que declara el `orbit.json`. 1.3.9.
+    Tareas,
+    /// `orbit lock|unlock`, `deploy --force` y `state.locked`. 1.4.3.
+    Congelar,
+    /// `orbit autodeploy checks on|off` y `state.checks`. 1.4.3.
+    EsperarCi,
+    /// `state.cert_type`: de quién es el certificado. 1.4.7.
+    TipoDeCertificado,
+    /// `deploy --env-stdin`: las variables por la entrada estándar, sin tocar
+    /// el `argv`. 1.4.9. Es lo que cierra THREAT-MODEL T-13.
+    EntornoPorEntrada,
+}
+
+impl Capacidad {
+    pub fn desde(&self) -> (u32, u32, u32) {
+        match self {
+            Self::EntornoDeclarado => (1, 3, 8),
+            Self::Tareas => (1, 3, 9),
+            Self::Congelar | Self::EsperarCi => (1, 4, 3),
+            Self::TipoDeCertificado => (1, 4, 7),
+            Self::EntornoPorEntrada => (1, 4, 9),
+        }
+    }
 }
 
 /// Lo que Orbit **observa** de una app, preguntándole a systemd, al disco y a
@@ -115,6 +200,43 @@ pub struct Estado {
     pub releases: Option<u32>,
     pub last_deploy: Option<String>,
     pub last_deploy_sha: Option<String>,
+
+    // ── Lo que llegó después de la línea base ──────────────────────────────
+    // El `Option` de fuera es «¿lo dice este servidor?». Ver la cabecera.
+    /// De quién es el certificado: `"letsencrypt"`, `"origin"` (Cloudflare,
+    /// que **sólo vale detrás de su proxy**) o `null` sin certificado. 1.4.7.
+    #[serde(default, deserialize_with = "presente")]
+    pub cert_type: Option<Option<String>>,
+    /// Que el autodespliegue y `deploy --all` esperan a la CI de GitHub. 1.4.3.
+    #[serde(default)]
+    pub checks: Option<bool>,
+    /// Que los despliegues están congelados (`orbit lock`). 1.4.3.
+    ///
+    /// **No es un estado de lo que se sirve**: una app congelada atiende igual.
+    /// Por eso no entra en [`Salud`] y va aparte, como faceta.
+    #[serde(default)]
+    pub locked: Option<bool>,
+    /// Quién, cuándo y por qué. `Some(None)` sin congelación —«lo que no
+    /// existe es `null`»— y cada campo de dentro también puede ser `null`: un
+    /// `touch` a mano del testigo no dice quién.
+    #[serde(default, deserialize_with = "presente")]
+    pub lock: Option<Option<Congelacion>>,
+}
+
+/// La congelación de una app, tal como la cuenta `state.lock`.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct Congelacion {
+    pub at: Option<String>,
+    pub by: Option<String>,
+    pub reason: Option<String>,
+}
+
+impl Estado {
+    /// Si está congelada, con los tres valores posibles y no dos: `None` es
+    /// «este servidor no sabe congelar», que no es «no está congelada».
+    pub fn congelada(&self) -> Option<bool> {
+        self.locked
+    }
 }
 
 /// Cómo se pinta el estado de una app, resuelto **con un orden de precedencia
@@ -278,16 +400,29 @@ pub struct Lista {
     pub apps: Vec<App>,
 }
 
-/// Los **seis** finales de `orbit deploy --all`.
+/// Los finales de `orbit deploy --all`: **once** desde la 1.4.3.
 ///
-/// Son seis y no dos a propósito, y el motivo es un fallo real: confundir
-/// «no hay cambios» con «no he podido preguntar» hizo que un remoto caído se
+/// Eran seis, y son seis y no dos a propósito por un fallo real: confundir «no
+/// hay cambios» con «no he podido preguntar» hizo que un remoto caído se
 /// anunciara como «nada que hacer» cada cinco minutos. El contrato los separa
 /// para que un cliente no pueda repetirlo, así que **agruparlos está prohibido**
 /// — y aquí no hay ningún método que devuelva un booleano por final, para que
 /// ni siquiera sea cómodo hacerlo.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
+///
+/// La 1.4.3 añadió los cinco de las puertas, y cada uno dice una cosa distinta
+/// de las otras diez: congelada a propósito, sin cambios en lo vigilado, y los
+/// tres de la CI —esperando, en rojo, y **sin poder preguntar**, que es el
+/// `unreachable` de la CI y por eso pone `ok` a `false`—.
+///
+/// Y **un final que no conocemos no rompe la respuesta**: llega como
+/// [`FinalDespliegue::Otro`] con su nombre. La primera versión de este enumerado
+/// era cerrado, y el día que el servidor añadió el séptimo final el lote entero
+/// dejó de leerse —una pasada de cuarenta apps convertida en «no he entendido la
+/// respuesta» por una sola fila—. Es exactamente el modo de fallo que la promesa
+/// de «los campos se añaden» existe para evitar, y un valor nuevo de un campo
+/// que ya existía es la misma clase de añadido.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(from = "String")]
 pub enum FinalDespliegue {
     Deployed,
     Failed,
@@ -295,6 +430,58 @@ pub enum FinalDespliegue {
     Unreachable,
     Gone,
     Skipped,
+    /// Congelada con `orbit lock`. Ni se pregunta al remoto. 1.4.3.
+    Locked,
+    /// Hay commits nuevos y ninguno toca las rutas vigiladas (`watch`). 1.4.3.
+    Ignored,
+    /// La CI del commit sigue corriendo. 1.4.3.
+    CiPending,
+    /// La CI del commit ha fallado: no se despliega. 1.4.3.
+    CiFailed,
+    /// **No se ha podido preguntar a GitHub.** No es «pendiente» ni «en rojo»:
+    /// es no saber, y por eso pone `ok` a `false` igual que `unreachable`.
+    CiUnknown,
+    /// Un final que este cliente no conoce todavía, con su nombre tal cual.
+    Otro(String),
+}
+
+impl From<String> for FinalDespliegue {
+    fn from(s: String) -> Self {
+        match s.as_str() {
+            "deployed" => Self::Deployed,
+            "failed" => Self::Failed,
+            "unchanged" => Self::Unchanged,
+            "unreachable" => Self::Unreachable,
+            "gone" => Self::Gone,
+            "skipped" => Self::Skipped,
+            "locked" => Self::Locked,
+            "ignored" => Self::Ignored,
+            "ci_pending" => Self::CiPending,
+            "ci_failed" => Self::CiFailed,
+            "ci_unknown" => Self::CiUnknown,
+            _ => Self::Otro(s),
+        }
+    }
+}
+
+impl FinalDespliegue {
+    /// El nombre tal como lo escribe el servidor.
+    pub fn como_texto(&self) -> &str {
+        match self {
+            Self::Deployed => "deployed",
+            Self::Failed => "failed",
+            Self::Unchanged => "unchanged",
+            Self::Unreachable => "unreachable",
+            Self::Gone => "gone",
+            Self::Skipped => "skipped",
+            Self::Locked => "locked",
+            Self::Ignored => "ignored",
+            Self::CiPending => "ci_pending",
+            Self::CiFailed => "ci_failed",
+            Self::CiUnknown => "ci_unknown",
+            Self::Otro(s) => s,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -328,6 +515,15 @@ pub struct Despliegue {
     pub duration_s: u64,
     pub failed_step: Option<String>,
     pub error: Option<String>,
+    /// Las variables que siguen sin valor tras el despliegue —las obligatorias
+    /// y las que no—. 1.3.8, y `None` en un servidor anterior: no es «no falta
+    /// ninguna», es que ese servidor no lo cuenta.
+    ///
+    /// Es lo que un cliente tiene que pedirle a quien mira. Cuando falta una
+    /// obligatoria el despliegue se para **antes del build** con `ok:false`, y
+    /// la forma de seguir es volver a lanzarlo con `--env CLAVE=valor`.
+    #[serde(default)]
+    pub env_missing: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -352,11 +548,86 @@ pub struct Lote {
     pub unreachable: u32,
     pub gone: u32,
     pub skipped: u32,
+    // Los cinco recuentos de las puertas, 1.4.3. `None` en un servidor
+    // anterior: ése no puede producir esos finales, y un cero diría que ha
+    // mirado.
+    #[serde(default)]
+    pub locked: Option<u32>,
+    #[serde(default)]
+    pub ignored: Option<u32>,
+    #[serde(default)]
+    pub ci_pending: Option<u32>,
+    #[serde(default)]
+    pub ci_failed: Option<u32>,
+    #[serde(default)]
+    pub ci_unknown: Option<u32>,
     /// La **misma regla que el código de salida**: ni fallidas, ni mudas, ni
-    /// ramas desaparecidas. Existe para que un cliente que mire el objeto y otro
-    /// que mire el rc no puedan discrepar nunca.
+    /// ramas desaparecidas, ni CI a la que no se ha podido preguntar. Existe
+    /// para que un cliente que mire el objeto y otro que mire el rc no puedan
+    /// discrepar nunca.
     pub ok: bool,
     pub duration_s: u64,
+}
+
+/// `orbit env check <app> --json`: lo que la app declara frente a lo que tiene,
+/// **sin un solo valor**. 1.3.8.
+///
+/// Mira la release que **está sirviendo**, no la que se va a desplegar: si el
+/// commit nuevo declara una variable más, esto no la ve todavía. Por eso es una
+/// comprobación previa y no la última palabra — la última la dice el propio
+/// despliegue con `env_missing`.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct ComprobacionDeEntorno {
+    pub schema: u32,
+    pub app: String,
+    /// El fichero, relativo a `shared/`. `.env` salvo que el `orbit.json` diga
+    /// otro.
+    pub file: String,
+    /// Ninguna obligatoria sin valor.
+    pub ok: bool,
+    pub vars: Vec<VariableDeclarada>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct VariableDeclarada {
+    pub key: String,
+    /// Si el `.env` la tiene. **Nunca el valor.**
+    pub set: bool,
+    pub required: bool,
+    /// `"orbit.json"` o `"example"` (el `.env.example` del repositorio). Las
+    /// del ejemplo nunca son obligatorias: sólo se ofrecen.
+    pub source: String,
+}
+
+impl ComprobacionDeEntorno {
+    /// Las que pararían el próximo despliegue antes del build.
+    pub fn obligatorias_sin_valor(&self) -> Vec<&str> {
+        self.vars
+            .iter()
+            .filter(|v| v.required && !v.set)
+            .map(|v| v.key.as_str())
+            .collect()
+    }
+}
+
+/// `orbit cron list <app> --json`: las tareas que declara el `orbit.json`, con
+/// la última y la próxima pasada. 1.3.9.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct Tareas {
+    pub schema: u32,
+    pub app: String,
+    pub tasks: Vec<Tarea>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct Tarea {
+    pub name: String,
+    /// Tal como lo da systemd (`Wed 2026-11-05 12:00:00 UTC`), **no ISO-8601**.
+    /// `null` si no ha corrido nunca: no es una fecha vacía.
+    pub last_run: Option<String>,
+    pub next_run: Option<String>,
+    /// El `Result` de systemd de la última pasada (`success`, `exit-code`…).
+    pub result: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -501,15 +772,96 @@ mod tests {
     }
 
     #[test]
-    fn los_seis_finales_son_seis() {
-        let j = r#"["deployed","failed","unchanged","unreachable","gone","skipped"]"#;
+    fn los_once_finales_son_once_y_distintos() {
+        let j = r#"["deployed","failed","unchanged","unreachable","gone","skipped",
+                    "locked","ignored","ci_pending","ci_failed","ci_unknown"]"#;
         let f: Vec<FinalDespliegue> = serde_json::from_str(j).unwrap();
-        assert_eq!(f.len(), 6);
+        assert_eq!(f.len(), 11);
         // Y son todos distintos entre sí: nada de agrupar.
         for i in 0..f.len() {
             for k in (i + 1)..f.len() {
                 assert_ne!(f[i], f[k]);
             }
         }
+        // Ninguno de los conocidos cae en «otro».
+        assert!(!f.iter().any(|x| matches!(x, FinalDespliegue::Otro(_))));
+        // Y el nombre vuelve tal cual, que es lo que pinta el terminal.
+        assert_eq!(f[10].como_texto(), "ci_unknown");
+    }
+
+    #[test]
+    fn un_final_que_no_conocemos_no_tumba_el_lote() {
+        // El modo de fallo de la primera versión: un enumerado cerrado hacía
+        // que un final nuevo convirtiera la pasada entera en un error.
+        let f: FinalDespliegue = serde_json::from_str(r#""queued""#).unwrap();
+        assert_eq!(f, FinalDespliegue::Otro("queued".into()));
+        assert_eq!(f.como_texto(), "queued");
+    }
+
+    #[test]
+    fn un_servidor_viejo_no_dice_si_esta_congelada_y_eso_no_es_un_no() {
+        // La línea base (1.3.6) no tiene `locked`. Leerlo como `false` diría
+        // «no está congelada» de un servidor que no sabe congelar.
+        let e = estado(BASE);
+        assert_eq!(e.locked, None);
+        assert_eq!(e.congelada(), None);
+        assert_eq!(e.cert_type, None, "ausente no es «sin certificado»");
+        assert_eq!(e.lock, None);
+    }
+
+    #[test]
+    fn ausente_y_null_son_dos_respuestas_distintas() {
+        let nuevo = BASE.replace(
+            "\"releases\":1",
+            "\"releases\":1,\"cert_type\":null,\"checks\":false,\"locked\":false,\"lock\":null",
+        );
+        let e = estado(&nuevo);
+        // Un 1.4.8 sin certificado y sin congelar: lo dice, y dice que no.
+        assert_eq!(e.cert_type, Some(None));
+        assert_eq!(e.locked, Some(false));
+        assert_eq!(e.lock, Some(None));
+        assert_eq!(e.checks, Some(false));
+    }
+
+    #[test]
+    fn la_congelacion_trae_quien_cuando_y_por_que_y_cada_uno_puede_faltar() {
+        let j = BASE.replace(
+            "\"releases\":1",
+            "\"releases\":1,\"locked\":true,\"lock\":{\"at\":\"2026-11-05T09:00:00+00:00\",\"by\":null,\"reason\":null}",
+        );
+        let e = estado(&j);
+        assert_eq!(e.congelada(), Some(true));
+        let l = e.lock.clone().unwrap().unwrap();
+        assert_eq!(l.at.as_deref(), Some("2026-11-05T09:00:00+00:00"));
+        // Un `touch` a mano no dice quién, y eso no se rellena con nada.
+        assert_eq!(l.by, None);
+        assert_eq!(l.reason, None);
+        // Y congelar no cambia lo que se sirve.
+        assert_eq!(e.salud(), Salud::SinProceso);
+    }
+
+    #[test]
+    fn la_capacidad_sale_de_la_version_de_orbit_y_no_del_contrato() {
+        let v = |s: &str| Version {
+            schema: 1,
+            version: s.into(),
+            contract: 1,
+        };
+        assert!(!v("1.3.6").sabe(Capacidad::Congelar));
+        assert!(v("1.4.3").sabe(Capacidad::Congelar));
+        assert!(v("1.4.8").sabe(Capacidad::TipoDeCertificado));
+        assert!(!v("1.4.6").sabe(Capacidad::TipoDeCertificado));
+        assert!(v("1.3.8").sabe(Capacidad::EntornoDeclarado));
+        assert!(!v("1.4.8").sabe(Capacidad::EntornoPorEntrada));
+        assert!(v("1.4.9").sabe(Capacidad::EntornoPorEntrada));
+        assert!(v("1.5.0").sabe(Capacidad::EntornoPorEntrada));
+        assert!(!v("1.3.7").sabe(Capacidad::EntornoDeclarado));
+        assert!(
+            v("1.10.0").sabe(Capacidad::Tareas),
+            "por componentes, no como texto"
+        );
+        // Una versión que no es semver no se sabe, y lo que no se sabe no se
+        // ofrece.
+        assert!(!v("desarrollo").sabe(Capacidad::Congelar));
     }
 }

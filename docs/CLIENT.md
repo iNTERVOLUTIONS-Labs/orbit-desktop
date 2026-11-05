@@ -1393,6 +1393,15 @@ curl -fsSL https://raw.githubusercontent.com/iNTERVOLUTIONS-Labs/orbit/main/inst
 primera vez que Orbit Desktop escribe en el servidor algo que no es una invocación de `orbit`, y
 la regla dura nº 1 no admite un «pero es el instalador». Se copia el comando; lo ejecuta la persona.
 
+**Dentro del contrato 1 también hay versiones, y no se tratan como una sola.** Orbit 1.3.8–1.4.7
+añadieron órdenes y campos sin subir el contrato —que es lo que el contrato promete—, así que un
+cliente que hable con un parque mezclado tiene dos preguntas distintas. Lo que se **lee** de una
+respuesta decide por la presencia del campo: un `state.locked` que no está no es un `false`, es un
+servidor que no sabe congelar. Lo que se **ofrece** —un botón que lanza una orden nueva— decide por
+la versión de Orbit, con la tabla de `Capacidad` en `contrato.rs` y su gemela `sabe()` en
+`contrato.ts`; una versión que no se entiende no ofrece nada. El detalle, en
+[CONTRACT.md](CONTRACT.md) §1.16.
+
 **La matriz completa**, que es lo que se implementa:
 
 | `version --json` | Clasificación | Qué se permite |

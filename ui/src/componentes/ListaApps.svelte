@@ -1,6 +1,7 @@
 <script lang="ts">
   import ChipEstado from './ChipEstado.svelte'
   import FacetaSsl from './FacetaSsl.svelte'
+  import Faceta from './Faceta.svelte'
   import { marcarInvisibles, nombreOperable, salud, num, type App } from '../lib/contrato'
 
   let {
@@ -84,7 +85,21 @@
               >
             {/if}
           </td>
-          <td><ChipEstado estado={app.state} /></td>
+          <td>
+            <ChipEstado estado={app.state} />
+            {#if app.state.locked === true}
+              <!-- Detrás del chip y como faceta, no en su lugar: una congelada
+                   atiende igual, lo congelado son sus despliegues. Es lo que
+                   hace `orbit list`, que lo pone al final de la fila. -->
+              <Faceta
+                texto="congelada"
+                tono="aviso"
+                titulo={app.state.lock?.reason
+                  ? `Despliegues congelados: «${app.state.lock.reason}»`
+                  : 'Despliegues congelados con «orbit lock»'}
+              />
+            {/if}
+          </td>
           <td class="tenue" title={app.domain}>{app.domain}</td>
           <td class="tenue">{app.type}</td>
           <!-- `null` no es 0. Una web estática no tiene puerto, y el 0 sería un

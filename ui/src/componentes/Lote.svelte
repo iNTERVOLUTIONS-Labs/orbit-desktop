@@ -1,10 +1,15 @@
 <script lang="ts">
-  import { finalDe, recuentos } from '../lib/despliegue'
+  import { faltanVariables, finalDe, necesitanMirada, recuentos, retenidas, textoDeFinal } from '../lib/despliegue'
   import type { Lote } from '../lib/contrato'
 
   let { lote, servidor }: { lote: Lote; servidor: string } = $props()
 
-  const cuentas = $derived(recuentos(lote))
+  // Las cinco de las puertas sólo si el servidor las cuenta: en uno anterior a
+  // la 1.4.3 no son cero, no existen, y una celda con un cero diría que ha
+  // mirado. Las seis de siempre van siempre, también a cero.
+  const cuentas = $derived(recuentos(lote).filter((c) => c.n !== null))
+  const mirar = $derived(necesitanMirada(lote))
+  const quietas = $derived(retenidas(lote))
 
   function dur(s: number): string {
     return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`
@@ -32,7 +37,7 @@
   -->
   <ul class="recuentos">
     {#each cuentas as c (c.id)}
-      <li class="cuenta lote--{c.id}" class:cuenta--cero={c.n === 0} title={c.frase}>
+      <li class="cuenta lote--{c.id}" class:cuenta--cero={c.n === 0} title={c.frase} data-final={c.id}>
         <span class="n">{c.n}</span>
         <span class="etiqueta"><span class="glifo" aria-hidden="true">{c.glifo}</span> {c.texto}</span>
       </li>
@@ -44,11 +49,22 @@
   <p class="veredicto" role="status">
     {#if lote.ok}
       Todas contestaron y ninguna falló.
+    {:else if mirar > 0}
+      {mirar === 1 ? 'Hay una app que necesita una mirada.' : `Hay ${mirar} apps que necesitan una mirada.`}
     {:else}
-      {@const n = lote.failed + lote.unreachable + lote.gone}
-      {n === 1 ? 'Hay una app que necesita una mirada.' : `Hay ${n} apps que necesitan una mirada.`}
+      <!-- `ok:false` sin nada que lo explique: un final que este cliente no
+           conoce. Se dice en vez de inventarse un número. -->
+      El servidor da la pasada por mala, por un motivo que esta versión no sabe contar. Mira la tabla.
     {/if}
   </p>
+  {#if quietas > 0}
+    <!-- Ni fallos ni «al día»: no se han desplegado a propósito. Sin esta frase,
+         «ninguna falló» se leería como «todo está publicado». -->
+    <p class="retenidas">
+      {quietas === 1 ? 'Una no se ha desplegado' : `${quietas} no se han desplegado`} a
+      propósito: congeladas o esperando a una CI que todavía corre o está en rojo.
+    </p>
+  {/if}
 
   <table class="tabla">
     <caption class="sr">Resultado por app en {servidor}</caption>
@@ -59,10 +75,15 @@
       {#each lote.apps as a (a.app)}
         <tr>
           <td class="nombre">{a.app}</td>
-          <td><span class="chip lote--{a.status}">{a.status}</span></td>
+          <td><span class="chip lote--{a.status}" title={a.status}>{textoDeFinal(a.status)}</span></td>
           <td class="que">
             {#if a.result}
-              {#if finalDe(a.result) === 'revertido'}
+              {#if finalDe(a.result) === 'negado'}
+                No se ha empezado: {a.result.error ?? 'el servidor se negó sin decir por qué'}.
+              {:else if finalDe(a.result) === 'faltan'}
+                Se paró antes del build: faltan
+                <code>{faltanVariables(a.result).join(', ')}</code>. Su web sigue como estaba.
+              {:else if finalDe(a.result) === 'revertido'}
                 Falló en <code>{a.result.failed_step}</code> y volvió a
                 <code>{a.result.previous}</code>: su web sigue en pie.
               {:else if finalDe(a.result) === 'recuperado'}
@@ -92,7 +113,9 @@
   .reloj { margin: 0; font-family: var(--mono); font-size: 13px; color: var(--fg-muted); }
   .recuentos {
     list-style: none; margin: var(--e-4) 0 0; padding: 0;
-    display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--e-2);
+    /* Seis celdas con un servidor viejo y once con uno de la 1.4.3: la rejilla
+       se reparte sola en vez de suponer cuántas hay. */
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: var(--e-2);
   }
   .cuenta {
     padding: var(--e-3); border-radius: var(--r-2);
@@ -103,6 +126,7 @@
   .etiqueta { display: block; font-size: 11px; color: var(--fg-muted); margin-top: 2px; }
   .glifo { font-family: var(--mono); }
   .veredicto { margin: var(--e-4) 0 var(--e-3); font-size: 13px; color: var(--fg); }
+  .retenidas { margin: calc(-1 * var(--e-2)) 0 var(--e-3); font-size: 12px; color: var(--fg-muted); }
   .tabla { width: 100%; border-collapse: collapse; font-size: 13px; }
   .tabla th {
     text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .04em;

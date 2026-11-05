@@ -1,7 +1,8 @@
 # El contrato `--json`, tal y como ES
 
 > Auditoría de la superficie que Orbit Desktop consume: `orbit … --json` sobre
-> Orbit v1.3.6. **Está ejecutada, no leída.** Cuando el comportamiento no se
+> Orbit v1.3.6, **puesta al día con la v1.4.8 en [§1.16](#116-de-136-a-148-lo-que-cambió-y-cómo-lo-lee-el-cliente)**.
+> **Está ejecutada, no leída.** Cuando el comportamiento no se
 > deduce de la lectura, se montó un banco y se llamó a `main()` — que es justo
 > la parte que las pruebas del repositorio de Orbit no ejercitan, porque
 > `tests/lib.sh` carga el script con `sed '$ d'`, sin su última línea.
@@ -1141,5 +1142,159 @@ campo**, así que una fila cuya descripción está vacía sale con cuatro column
 servidor no lo nota porque `$( )` recorta saltos y no tabuladores, y porque su lector usa `read -r`
 con `IFS=$'\t'`; un cliente que haga `trimEnd()` sobre esa salida sí lo nota, y de la peor forma:
 pierde el último campo de la última variable.
----
 
+### 1.16 De 1.3.6 a 1.4.8: lo que cambió, y cómo lo lee el cliente
+
+Once versiones de Orbit sin subir el contrato, que sigue en el 1: **todo se ha añadido**, que es
+exactamente lo que el contrato promete. Las formas de abajo salen de ejecutar el Orbit 1.4.8 de
+`main` en el banco de `tools/bench` (con `need_root` neutralizado en una copia, para poder pedir
+`env check` y `cron list`), y se comprobaron contra un servidor 1.4.8 de verdad con llamadas de sólo
+lectura. Están en `tests/fakeserver/fixtures/*-1.4*.json`, `env-check.json`, `cron.json` y
+`deploy-*.json`, y el servidor falso las sirve con `ORBIT_FAKE_CASE=orbit-1.4`.
+
+**Con qué versiones habla cada versión del cliente** (la tabla de CLIENT.md §8.5):
+
+| Orbit Desktop | Orbit | Comprobado | Notas |
+|---|---|---|---|
+| 0.1.0 | 1.3.6 | 2026-08 | Contra 1.4.3+ no podía leer una pasada con una app congelada |
+| 0.1.1 | 1.3.6 – 1.4.9 | 2026-11-05 | Lo que no existe en el servidor no se ofrece, y su silencio no se lee como un «no». Con 1.4.9, las variables van por la entrada estándar |
+
+#### Los campos nuevos de `state` (`list`, `status` e `info`)
+
+| Campo | Desde | Valores | Cómo lo lee el cliente |
+|---|---|---|---|
+| `cert_type` | 1.4.7 | `"letsencrypt"`, `"origin"`, `null` | `origin` es el de Cloudflare: **sólo vale detrás de su proxy** y no lo renueva certbot. Se ve en la lista («HTTPS · origen CF») y se explica en el detalle |
+| `checks` | 1.4.3 | booleano | El autodespliegue y `deploy --all` esperan a la CI de GitHub |
+| `locked` | 1.4.3 | booleano | Congelada con `orbit lock`. **No es un estado de lo que se sirve**: va como faceta, nunca en lugar del chip |
+| `lock` | 1.4.3 | `{at, by, reason}` o `null` | Cada campo puede ser `null`: un `touch` a mano del testigo no dice quién |
+
+`app.config` gana `assets`, `checks`, `watch_seen`, `ci_seen`, `health_path`, `health_timeout`,
+`limit_mem` y `limit_cpu` — **todas cadenas**, como el resto de `config`, y el cliente no tuvo que
+cambiar el tipo. Y `env_spec` cambió de formato en la 1.3.8: siete campos separados por US
+(`\x1f`) en vez de cinco por tabuladores. El generador de `orbit.json` lee los dos.
+
+**La regla para lo que llega después de la línea base.** En el núcleo, cada campo nuevo lleva un
+nivel más de `Option` que su tipo del contrato (`locked: Option<bool>`, `cert_type:
+Option<Option<String>>`), y en TypeScript es opcional. El de fuera es «¿lo dice este servidor?».
+Que un 1.3.6 no diga `locked` **no quiere decir que la app no esté congelada**: quiere decir que
+ese servidor no sabe congelar, y entonces no se pinta ni se ofrece nada. Es §6 de ARCHITECTURE en
+el eje de la versión.
+
+#### Las órdenes nuevas que usa el cliente
+
+| Orden | Desde | Forma | Notas |
+|---|---|---|---|
+| `orbit --json env check <app>` | 1.3.8 | `{schema, app, file, ok, vars:[{key, set, required, source}]}` | **Sin un solo valor.** Mira la release que **sirve**, no la que se va a desplegar. Sale con 0 también con `ok:false` |
+| `orbit --json cron list <app>` | 1.3.9 | `{schema, app, tasks:[{name, last_run, next_run, result}]}` | Las fechas son de systemd (`Thu 2026-11-05 03:00:00 UTC`), no ISO. `null` es «nunca» |
+| `orbit lock <app> [-m motivo]` | 1.4.3 | prosa por stdout | Sin `--json`: `lock` no lo habla y con él delante el servidor se niega entero |
+| `orbit unlock <app>` | 1.4.3 | prosa por stdout | Idem |
+| `orbit autodeploy checks on\|off <app>` | 1.4.3 | prosa por stdout | Con `on`, avisa si `gh` no tiene sesión, y guarda igual |
+| `orbit --json deploy <app> --force` | 1.4.3 | el objeto de siempre | Despliega una congelada **sin descongelarla** |
+| `orbit --json deploy <app> --env K=V` | 1.3.8 | el objeto de siempre | Repetible. Se escribe en el `.env` antes del build |
+
+Lo que el cliente **sabe ofrecer** sale de la versión de Orbit (`Capacidad` en el núcleo, `sabe()`
+en la interfaz), pedida una vez por servidor y sesión en paralelo con la portada. Lo que se lee de
+una respuesta no pasa por esa tabla: manda que el campo esté.
+
+#### El despliegue: `env_missing`, y dos finales que no son fallos
+
+`deploy --json` gana `env_missing` (1.3.8): las variables que siguen sin valor tras el despliegue,
+obligatorias o no. Y aparecen dos formas del objeto que antes no existían, y que pintadas como un
+fallo mandarían a buscar el problema donde no está:
+
+- **Se negó antes de empezar** —congelada, u otro despliegue de la misma app en curso—: `ok:false`
+  con `release:null` **y** `failed_step:null`. No se ha tocado nada. Salida real del banco en
+  `deploy-congelada.json`.
+- **Se paró antes del build porque falta una obligatoria**: `ok:false`, `failed_step:"release"`,
+  `env_missing` con las que faltan y un `error` que **nombra** las obligatorias. El cliente lo
+  reconoce por el paso y porque el error contiene uno de los nombres —que no se traducen— y nunca
+  leyendo la frase, que sí.
+
+Sin terminal, `_env_can_ask` es falso: con `--json` **nadie pregunta**. Así que la interfaz pide
+`env check` antes de lanzar, y si falta una obligatoria la pide en la hoja y la manda con `--env`.
+
+**El coste, dicho donde se decide.** `--env` lleva el valor en el `argv`: mientras dura el
+despliegue se ve en `ps` del servidor —también desde los usuarios aislados de las apps— y, si el
+usuario SSH no es root, `sudo` lo apunta en su registro. `--env-file` exige un fichero regular en el
+servidor (`[[ -f "$2" ]]`, así que `/dev/stdin` no vale), y escribirlo es justo lo que este cliente
+no hace. **Desde Orbit 1.4.9 existe `--env-stdin`** (abajo), y con esos servidores el cliente ya no
+usa `--env`; con 1.4.3–1.4.8 la hoja lo avisa y THREAT-MODEL T-13 lo cuenta.
+
+#### 1.4.9: `deploy --env-stdin`, y la CI por defecto en el autodespliegue
+
+**`orbit --json deploy <app> --progress --env-stdin`** lee las mismas líneas `CLAVE=valor` que
+`--env-file`, de la entrada estándar, con la misma validación que `--env`. Compone con `--json` y
+`--progress`, apaga las preguntas —la entrada queda gastada— y rechaza `--pick` y el selector de
+app. Con un servidor 1.4.9 o posterior el cliente manda **siempre** las variables así:
+
+- En el `argv` sólo va `--env-stdin`, y sólo si hay variables: sin ellas no se pasa, porque gasta
+  la entrada y no hay nada que leer.
+- Por la entrada, una línea `CLAVE="valor"` por variable. **Las comillas dobles no son estilo**:
+  Orbit pasa cada valor por `_env_unquote`, que sin comillas corta un ` #` como comentario y quita
+  los espacios del final (`p@ss #1` llegaría como `p@ss`). Entre comillas dobles sólo interpreta
+  `\"` y `\\`, que son los dos que se escapan; comilla simple, salto de línea y nulo ya se
+  rechazan antes. Comprobado ejecutando `_env_unquote` y `_deploy_env_lines` de la 1.4.9.
+- La entrada **se cierra** al terminar de escribir: Orbit lee hasta el final.
+- Lo decide el envoltorio preguntando la versión justo antes, no la interfaz; con una versión que
+  no se puede leer no se manda nada.
+
+Lo demás de la 1.4.9 que toca al cliente:
+
+- **`orbit autodeploy enable` enciende la espera a la CI por defecto** en un repositorio de GitHub
+  (`--no-checks` para no esperarla). El cliente no ofrece `autodeploy enable`, así que no cambia
+  ninguna orden; lo que sí hace ahora el detalle es decir cuándo una app se despliega sola **sin**
+  esperar a la CI, que desde la 1.4.9 ya no es lo normal y `orbit doctor` cuenta. No hay migración:
+  las apps que ya estaban en automático siguen como estaban.
+- `autodeploy status` dice por app si espera a la CI, pero no habla `--json`; el cliente lo lee de
+  `state.checks`, que ya tenía.
+- **Ningún emisor del contrato cambia**: `_app_state_json`, `_deploy_json`, `_dall_json` y
+  `_json_capable` son idénticos a los de la 1.4.8 (comprobado con `diff`), y `check-contract.py`
+  pasa contra la 1.4.9.
+
+#### `deploy --all --json`: once finales
+
+Los seis de siempre más `locked`, `ignored`, `ci_pending`, `ci_failed` y `ci_unknown`, **cada uno
+con su recuento**, y los seis de antes no cambian. `ok` sigue siendo la regla del código de
+salida, ahora también `false` con alguna `ci_unknown`: no haber podido preguntar a GitHub es el
+`unreachable` de la CI.
+
+Dos cosas que cambian lo que la pantalla puede prometer, y que salen de leer `cmd_deploy_all`:
+
+- **Una congelada se salta antes de nada**, también sin `--if-changed`: ni se le pregunta al
+  remoto.
+- **Una app con la puerta de la CI le pregunta al remoto aunque no se pida `--if-changed`** —la CI
+  necesita saber qué commit mirar—, así que sin esa bandera también pueden salir `unreachable`,
+  `gone` y los tres de la CI. Lo que sigue sin poder salir es `unchanged` e `ignored`, que son las
+  dos respuestas a «¿ha cambiado?».
+
+El cliente sabe si el servidor tiene las puertas **por la respuesta** —el lote trae `locked`, o la
+lista trae `state.locked`— y no por una tabla de versiones. Un servidor anterior sigue con la regla
+vieja, que para él sigue siendo verdad.
+
+`tools/bench/check-contract.py` lo comprueba en cada CI contra el Orbit de `main`: congela todas
+las apps del banco con el testigo que lee Orbit —así la pasada no despliega ni pregunta a nadie— y
+mira que el objeto traiga los once recuentos y que reconstruyan el total.
+
+#### Elevación: `orbit admin` y el entorno que no cruza
+
+- **`orbit admin add <usuario>`** (1.4.6) crea el grupo `orbit-admin` con
+  `NOPASSWD: /usr/local/bin/orbit`. Es exactamente la fila «camino feliz, y el que hay que
+  documentar» de la tabla de §1.9. **Equivale a root**, y Orbit lo dice. El cliente no cambia cómo
+  se eleva —invoca `/usr/local/bin/orbit`, que se eleva solo con `exec sudo` y la ruta real, que es
+  la que nombra la regla— y su mensaje de «sudo pide contraseña» dice ahora cómo se arregla. También
+  reconoce el mensaje de `sudo -n` (`a password is required`).
+- **Al elevarse, Orbit limpia el entorno** (1.4.6): sólo sobreviven la identidad, `ORBIT_LANG`,
+  `NO_COLOR`, `UI_GLYPHS`, el tamaño del terminal y la configuración regional. El cliente **no pasa
+  ninguna variable** al otro lado —ya no lo hacía: para el idioma está `--lang`, que es un
+  argumento— así que no hay nada que cambiar. Queda escrito para que nadie empiece a hacerlo.
+- **Sin UTF-8, el glifo de los errores es ASCII.** `G_ERR` es `✗` con UTF-8 y `x` sin él, y por SSH
+  sin terminal y con `LANG=C` sale el segundo: `  x Faltan variables…`. El transporte quita los dos.
+
+#### Lo que no se usa todavía, a propósito
+
+- **`orbit github status|repos|branches --json`** está en `main` sin publicar (el `[No publicado]`
+  del CHANGELOG de Orbit, camino de la 1.4.9). Es lo que el asistente de web nueva necesita para
+  ofrecer los repositorios **de la cuenta del servidor**; se usará cuando salga en una versión.
+- **`orbit ssl <app> --dry-run`** (1.4.7) y **`--origin`** hablan en prosa y tardan entre segundos y
+  minutos. No tienen pantalla todavía.
+- **`orbit metrics prom …`** (1.4.6) es configuración del servidor, no algo que mirar.

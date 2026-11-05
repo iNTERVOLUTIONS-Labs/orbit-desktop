@@ -172,11 +172,19 @@ describe('el lote', () => {
   const l = lote as Lote
 
   it('los seis finales se cuentan por separado', () => {
-    const c = recuentos(l)
+    const c = recuentos(l).filter((x) => x.n !== null)
     expect(c.length).toBe(6)
     expect(c.map((x) => x.id)).toEqual([
       'deployed', 'failed', 'unchanged', 'unreachable', 'gone', 'skipped',
     ])
+  })
+
+  it('un servidor anterior a la 1.4.3 no cuenta las puertas, y eso no es un cero', () => {
+    // `lote` es de un 1.3.6: no trae `locked` ni los de la CI. Un cero diría
+    // que ha mirado.
+    const nuevas = recuentos(l).filter((x) => !x.base)
+    expect(nuevas.map((x) => x.id)).toEqual(['locked', 'ignored', 'ci_pending', 'ci_failed', 'ci_unknown'])
+    expect(nuevas.every((x) => x.n === null)).toBe(true)
   })
 
   it('«sin contacto» y «al día» NO son lo mismo', () => {
@@ -219,12 +227,16 @@ describe('el lote', () => {
 })
 
 describe('lo que sólo se vio mirando una captura', () => {
-  it('los seis finales no comparten glifo', () => {
+  it('los once finales no comparten glifo', () => {
     // `failed` y `gone` compartían el `✕` Y el color: dos celdas idénticas
     // salvo por la palabra, que es justo lo que la regla de «el color nunca va
-    // solo» existe para evitar.
+    // solo» existe para evitar. Y los cinco de la 1.4.3 tampoco repiten.
     const glifos = recuentos(lote as Lote).map((c) => c.glifo)
-    expect(new Set(glifos).size).toBe(6)
+    expect(glifos).toHaveLength(11)
+    expect(new Set(glifos).size).toBe(11)
+    // Ninguno de los que la fuente de emoji en color se queda: traen su propio
+    // color, ocupan dos celdas, y NO_COLOR no los apaga. La lección es de Orbit.
+    for (const g of glifos) expect(['✔', '✖', '❄', '⚠']).not.toContain(g)
   })
 
   it('el veredicto se declina, sin «app(s)»', () => {

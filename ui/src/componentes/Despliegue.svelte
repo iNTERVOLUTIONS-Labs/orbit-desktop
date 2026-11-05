@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { finalDe, ofreceRollback, QUE_MIRAR, type Progreso } from '../lib/despliegue'
+  import { faltanVariables, finalDe, ofreceRollback, QUE_MIRAR, type Progreso } from '../lib/despliegue'
   import type { Despliegue } from '../lib/contrato'
 
   let {
@@ -8,12 +8,16 @@
     progreso,
     resultado = null,
     crudo = '',
+    alDarVariables = null,
   }: {
     app: string
     servidor: string
     progreso: Progreso
     resultado?: Despliegue | null
     crudo?: string
+    /** Volver a desplegar dando las variables que faltaron. `null` donde no
+     *  hay a quién pedírselas (la galería, un servidor sin puente). */
+    alDarVariables?: ((faltan: string[]) => void) | null
   } = $props()
 
   let verCrudo = $state(false)
@@ -93,6 +97,21 @@
           Orbit reconoció el fallo del build, lo arregló y reintentó una vez. El
           arreglo queda apuntado, así que el próximo sale a la primera.
         </p>
+      {:else if final === 'negado'}
+        <!-- No ha fallado nada: el servidor no empezó. Pintarlo como un fallo
+             mandaría a buscar una avería que no existe. -->
+        <p class="titular">No se ha desplegado: el servidor no ha empezado.</p>
+        <p class="detalle">
+          {resultado.error ?? 'Se negó sin decir por qué.'} La web es exactamente la de antes.
+        </p>
+      {:else if final === 'faltan'}
+        {@const faltan = faltanVariables(resultado)}
+        <p class="titular">Se ha parado antes del build: faltan variables.</p>
+        <p class="detalle">
+          {faltan.length === 1 ? 'Le falta' : 'Le faltan'} <code>{faltan.join(', ')}</code>,
+          y sin nadie al teclado no hay a quién preguntárselas. No se ha tocado
+          nada: la web sigue como estaba.
+        </p>
       {:else if final === 'revertido'}
         <!-- La primera línea NO habla del fallo. Es lo único que hace falta
              saber en el primer segundo, y ponerlo debajo del error sería
@@ -112,7 +131,15 @@
       {/if}
 
       <div class="acciones">
-        {#if resultado.failed_step && QUE_MIRAR[resultado.failed_step]}
+        {#if final === 'faltan'}
+          {#if alDarVariables}
+            <!-- Lo único que hace falta, y por eso es la acción primaria: no
+                 hay un log que mirar ni un diagnóstico que abrir. -->
+            <button type="button" class="primaria" onclick={() => alDarVariables!(faltanVariables(resultado!))}>
+              Darlas y volver a desplegar
+            </button>
+          {/if}
+        {:else if resultado.failed_step && QUE_MIRAR[resultado.failed_step]}
           <button type="button" class="primaria">{QUE_MIRAR[resultado.failed_step]!.accion}</button>
         {/if}
         {#if ofreceRollback(resultado)}

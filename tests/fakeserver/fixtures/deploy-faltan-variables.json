@@ -1,0 +1,1 @@
+{"schema":1,"app":"tienda","ok":false,"release":"20261105-101500","previous":null,"commit":{"sha":"9f8e7d6c5b4a","subject":"leer la base de datos de DATABASE_URL","ref":null},"env_missing":["DATABASE_URL","MAIL_FROM"],"rolled_back":false,"recovered":false,"duration_s":4,"failed_step":"release","error":"faltan variables obligatorias: DATABASE_URL"}

@@ -29,14 +29,31 @@ import type { AppInfo } from './contrato'
 
 /** Un registro del `env_spec` del descriptor.
  *
- *  Viaja como TSV dentro de una cadena del contrato:
- *  `CLAVE<TAB>modo<TAB>argumento<TAB>secreto<TAB>descripción`. */
+ *  Viaja dentro de una cadena del contrato, **en dos formatos**, según la
+ *  versión de Orbit que escribió el descriptor:
+ *
+ *  · hasta la 1.3.7, TSV de cinco campos:
+ *    `CLAVE<TAB>modo<TAB>argumento<TAB>secreto<TAB>descripción`;
+ *  · desde la 1.3.8, siete campos separados por US (`\x1f`), con
+ *    `obligatoria` y `por defecto` al final. El cambio de separador no es
+ *    cosmético: con tabuladores, `read` funde dos seguidos y una descripción
+ *    vacía corría los campos de detrás —una obligatoria salía como opcional—.
+ *
+ *  Un descriptor escrito por una versión y leído por otra es lo normal: el
+ *  fichero no se reescribe hasta el siguiente despliegue. */
 export interface Variable {
   clave: string
   modo: 'generate' | 'prompt' | 'skip'
   argumento: string
   secreta: boolean
   descripcion: string
+  /** `"required": true`. Sólo existe en el formato de la 1.3.8: perderlo al
+   *  regenerar el fichero convertiría una variable sin la que la app no
+   *  arranca en una que se puede saltar. */
+  obligatoria: boolean
+  /** `"default"`. `null` es «no tiene». Un valor por defecto vacío y «no
+   *  tiene» se escriben igual en el descriptor, y Orbit los trata igual. */
+  porDefecto: string | null
 }
 
 /**
@@ -52,6 +69,22 @@ export function leerEspecificacion(spec: string): Variable[] {
   const fuera: Variable[] = []
   for (const linea of spec.split('\n')) {
     if (linea.trim() === '') continue
+    if (linea.includes('\x1f')) {
+      // El formato de la 1.3.8. Siete campos y ninguno puede llevar un US
+      // dentro: el `gsub` del servidor los quita antes de unirlos.
+      const [clave, modo, argumento, secreto, desc, req, def] = linea.split('\x1f')
+      if (!clave) continue
+      fuera.push({
+        clave,
+        modo: modo === 'generate' ? 'generate' : 'prompt',
+        argumento: argumento ?? '',
+        secreta: secreto === 'secret',
+        descripcion: desc ?? '',
+        obligatoria: req === 'required',
+        porDefecto: def === undefined || def === '' ? null : def,
+      })
+      continue
+    }
     const [clave, modo, argumento, secreto, ...resto] = linea.split('\t')
     if (!clave) continue
     fuera.push({
@@ -61,6 +94,8 @@ export function leerEspecificacion(spec: string): Variable[] {
       secreta: secreto === 'secret',
       // La descripción puede llevar tabuladores dentro; se recompone.
       descripcion: resto.join('\t'),
+      obligatoria: false,
+      porDefecto: null,
     })
   }
   return fuera
@@ -191,6 +226,11 @@ export function generar(info: AppInfo, nombresDeEntorno: string[] | null): Gener
       }
       if (v?.secreta) entrada.secret = true
       if (v && v.descripcion !== '') entrada.desc = v.descripcion
+      // Lo que añadió la 1.3.8, que es justo lo que no se puede aplanar: una
+      // obligatoria regenerada como opcional deja de parar el despliegue, y la
+      // web arranca sin su clave de base de datos.
+      if (v?.obligatoria) entrada.required = true
+      if (v && v.porDefecto !== null) entrada.default = v.porDefecto
       vars[k] = entrada
     }
 

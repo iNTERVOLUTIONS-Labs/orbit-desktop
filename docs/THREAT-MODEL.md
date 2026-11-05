@@ -1225,6 +1225,71 @@ móntales un sistema falso encima y mira qué queda tocado»*— aplicado al dis
 
 ---
 
+#### T-13 · Un secreto en la línea de órdenes del servidor
+**Actores:** C6 (otro usuario del servidor, incluidas las apps aisladas), el registro de `sudo`.
+**Severidad: Media. Cerrada con Orbit 1.4.9 o posterior; abierta, y avisada, con 1.4.3–1.4.8.**
+
+> **Estado.** Orbit 1.4.9 añadió `deploy --env-stdin`, y con un servidor 1.4.9 o posterior el
+> cliente lo usa siempre: en el `argv` sólo va la bandera, y los valores se escriben por la
+> entrada estándar del proceso `ssh`, que los lleva por el canal cifrado hasta Orbit. No tocan ni
+> `ps` ni el registro de `sudo`. Lo de abajo describe la amenaza tal como sigue siendo con un
+> servidor 1.4.3–1.4.8, donde sólo existe `--env`.
+
+Desde Orbit 1.3.8, una variable **obligatoria** que falta para el despliegue antes del build, y
+con `--json` no hay a quién preguntársela. La salida que da Orbit es `deploy --env CLAVE=valor`,
+y el cliente la usa: es lo que convierte «despliega, falla, entra por SSH, `orbit env set`, vuelve
+a desplegar» en un formulario. Pero el valor viaja **en el `argv`**, y eso tiene dos consecuencias
+que el cliente no puede tapar:
+
+- **Mientras dura el despliegue, se ve en `ps`** desde cualquier cuenta del servidor, también las
+  de las apps aisladas (§5.3 de Orbit). Un build son minutos.
+- **Si el usuario SSH no es root, `sudo` apunta la orden entera** en su registro (`auth.log`, el
+  journal), legible por el grupo `adm`. Ahí se queda.
+
+No hay una alternativa sin escribir en el servidor: `--env-file` exige un fichero regular
+(`[[ -f "$2" ]]`, así que `/dev/stdin` no vale), y crear uno es justo lo que la regla 2 prohíbe.
+`orbit env set` tiene la misma exposición.
+
+**Mitigación en el cliente:**
+
+1. **El valor no se escribe en ningún sitio de aquí.** Es un `Secreto` en el núcleo —su `Debug`
+   dice «oculto», no implementa `Display`, y la única forma de leerlo es `exponer()`, que se ve en
+   una revisión—, y la estructura que lo recibe del puente no tiene `Debug`. La hoja de comando lo
+   enseña como `CLAVE=••••••` (`Comando::argv_visible`), y una prueba compartida
+   (`tests/contrato/ordenes.json`) comprueba que el valor no aparece en lo que se enseña. Los
+   errores de validación nombran la clave y nunca el valor. El formulario se vacía al mandar y al
+   cerrar.
+2. **Se dice donde se decide.** La hoja del despliegue lleva la frase: los valores viajan en la
+   orden, se ven en la lista de procesos mientras dura, y quedan en el registro de `sudo` si no se
+   entra como root.
+3. **Sólo se pide lo que falta.** Nunca se reenvía una variable que ya tiene valor.
+
+**Lo que hacía falta era de Orbit, y llegó en la 1.4.9: `--env-stdin`.** Cómo lo usa el cliente,
+y qué se ha comprobado:
+
+4. **Quién decide el camino es el envoltorio, no la interfaz.** Justo antes de desplegar con
+   variables, le pregunta la versión al servidor (una llamada corta, por la conexión multiplexada);
+   con 1.4.9 o posterior manda `--env-stdin`, con 1.4.3–1.4.8 `--env` y el aviso de arriba. Si la
+   versión no se puede leer o no es semver, **no manda nada**: adivinar mal es poner la contraseña
+   en el `argv` de un servidor que sí sabía leerla por la entrada. Y si alguna vez llegara
+   `--env-stdin` a un servidor anterior, se negaría entero antes de empezar, sin que el valor haya
+   tocado el `argv` — un fallo seguro, no una fuga.
+5. **La entrada lleva una línea `CLAVE="valor"` por variable, entre comillas dobles**, porque Orbit
+   pasa cada valor por `_env_unquote` y sin comillas corta un ` #` como comentario y quita los
+   espacios del final. Comprobado contra las funciones de Orbit 1.4.9, y el servidor falso lleva su
+   `_env_unquote` copiado tal cual para que las pruebas lean igual que él.
+6. **La entrada se cierra** al terminar de escribir (`escribir_entrada`, en un hilo para no
+   bloquear la lectura de stdout y stderr). `--env-stdin` lee hasta el final, y con la tubería
+   abierta Orbit esperaría para siempre. El resto del catálogo sigue con la entrada a `null`.
+7. **Pruebas** (`crates/orbit-client/tests/entrada.rs`, y la de punta a punta por `sshd` con y sin
+   multiplexar): en el `argv` que recibe el servidor no hay ni un valor ni un `--env`; lo leído
+   por la entrada es exactamente lo escrito, con comillas, `#`, barras, `$(…)` y vacíos; y el falso
+   sale con 99 si la entrada no se cierra en cinco segundos. Comprobadas mutando el código: sin
+   comillas, o sin cerrar la entrada, se ponen en rojo. Y contra el Orbit 1.4.9 de verdad en el
+   banco, por el transporte: lee la entrada, no se cuelga (243 ms) y sigue hasta su respuesta.
+
+---
+
 ### 1.6 Resumen
 
 | ID | Amenaza | Actor | Activo | Sev. | Mitigación principal |
@@ -1241,6 +1306,7 @@ móntales un sistema falso encima y mira qué queda tocado»*— aplicado al dis
 | T-10 | Corte a mitad de despliegue | red | — | Media | No afirmar el resultado; no reintentar solo |
 | T-11 | Nombres que engañan | C3, C6 | — | Media | NFC, marcado, regla de forma |
 | T-12 | Persistencia accidental | C1 | A3 | Media-Alta | Lista blanca de lo que se guarda + prueba con `grep` |
+| T-13 | Secreto en el `argv` de `deploy --env` | C6, `sudo` | A3 | Media | **Cerrada con Orbit ≥ 1.4.9** (`--env-stdin`, decidido por la versión del servidor). Con 1.4.3–1.4.8: `Secreto` sin `Debug`, tapado en la hoja y avisado |
 
 ### 1.7 Lo que está fuera del modelo, dicho a propósito
 
@@ -1336,8 +1402,13 @@ dos ficheros y no existe en el binario. *Verificación:* §5.4b nivel 1, en el a
 
 **SEC-28 · El socket de `ControlMaster` vive en un directorio `0700` propio del usuario y
 tiene modo `0600`.** En Linux, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`, tmpfs, borrado al
-cerrar sesión). **Nunca `/tmp`.** *Verificación:* §5.1 H, comprobando el modo del fichero,
-no la ruta escrita en el código.
+cerrar sesión). Donde no existe —macOS— `~/.ssh/orbit-desktop`: la primera versión devolvía
+«sin multiplexar» y cada orden pagaba el saludo entero. **Nunca `/tmp` ni `$TMPDIR`**, que en
+macOS se pasa de los 104 bytes de `sun_path` con el sufijo temporal de `ssh`. Y la carpeta **se
+comprueba**: no puede ser un enlace, tiene que ser del dueño de la carpeta donde vive, y se
+cierra a `0700` si no lo está; si algo de eso falla, no se multiplexa. *Verificación:* §5.1 H,
+comprobando el modo del fichero, no la ruta escrita en el código, y la prueba
+`la_carpeta_de_los_sockets_es_privada_y_no_se_sigue_un_enlace`.
 
 **SEC-29 · `ControlPath` usa `%C`**, que no revela el nombre del servidor en el sistema de
 ficheros —o sea, no filtra A7 a quien liste el directorio— y no desborda los 104 bytes de

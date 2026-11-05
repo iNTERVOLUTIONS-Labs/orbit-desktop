@@ -90,9 +90,12 @@ describe('el estado semántico vive en estado.css', () => {
     expect(solidos[0]).toContain('sin-vhost')
   })
 
-  it('los seis finales del lote tienen su propia clase, sin agrupar', () => {
+  it('los once finales del lote tienen su propia clase, sin agrupar', () => {
     const c = sinComentarios(readFileSync(join(SRC, 'estilos', 'estado.css'), 'utf8'))
-    for (const f of ['deployed', 'failed', 'unchanged', 'unreachable', 'gone', 'skipped']) {
+    for (const f of [
+      'deployed', 'failed', 'unchanged', 'unreachable', 'gone', 'skipped',
+      'locked', 'ignored', 'ci_pending', 'ci_failed', 'ci_unknown',
+    ]) {
       expect(c, `falta .lote--${f}`).toContain(`.lote--${f}`)
     }
     // Y ninguna clase que los agrupe.

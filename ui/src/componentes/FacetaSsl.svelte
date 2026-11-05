@@ -3,6 +3,15 @@
   import type { Estado } from '../lib/contrato'
 
   let { estado }: { estado: Estado } = $props()
+
+  // El certificado de origen de Cloudflare (1.4.7) sólo lo acepta Cloudflare:
+  // quien entre a la IP del servidor sin pasar por su proxy ve un error de
+  // certificado. No es un aviso —en Full (strict) es lo correcto— pero sí es
+  // algo que hay que poder ver sin abrir el detalle, porque cambia qué pasa el
+  // día que alguien apague el proxy. `undefined` (un servidor anterior) y
+  // `letsencrypt` se pintan igual que siempre.
+  const origen = $derived(estado.cert_type === 'origin')
+  const de = $derived(origen ? 'Certificado de origen de Cloudflare: sólo vale detrás de su proxy. ' : '')
 </script>
 
 <!--
@@ -16,11 +25,19 @@
 {#if !estado.ssl}
   <Faceta texto="sin HTTPS" titulo="No tiene certificado. Se emite con «orbit ssl»." />
 {:else if estado.cert_days === null}
-  <Faceta texto="·" tono="desconocida" titulo="No se han mirado los días que le quedan al certificado. Los da «orbit info»." />
+  {#if origen}
+    <Faceta texto="origen CF" titulo="{de}No se han mirado los días que le quedan. Los da «orbit info»." />
+  {:else}
+    <Faceta texto="·" tono="desconocida" titulo="No se han mirado los días que le quedan al certificado. Los da «orbit info»." />
+  {/if}
 {:else if estado.cert_days < 0}
-  <Faceta texto="caducado" tono="aviso" titulo="El certificado caducó hace {Math.abs(estado.cert_days)} días." />
+  <Faceta texto="caducado" tono="aviso" titulo="{de}El certificado caducó hace {Math.abs(estado.cert_days)} días." />
 {:else if estado.cert_days < 10}
-  <Faceta texto="caduca en {estado.cert_days} d" tono="aviso" titulo="Renueva con «orbit ssl»." />
+  <Faceta
+    texto="caduca en {estado.cert_days} d"
+    tono="aviso"
+    titulo={origen ? `${de}No lo renueva certbot: pide otro con «orbit ssl --origin».` : 'Renueva con «orbit ssl».'}
+  />
 {:else}
-  <Faceta texto="HTTPS" titulo="Certificado válido {estado.cert_days} días más." />
+  <Faceta texto={origen ? 'HTTPS · origen CF' : 'HTTPS'} titulo="{de}Certificado válido {estado.cert_days} días más." />
 {/if}

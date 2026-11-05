@@ -34,7 +34,7 @@ use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crate::comando::{Comando, ErrorForma, Vena};
+use crate::comando::{Comando, ErrorForma, Secreto, Vena};
 
 /// Cuánto se acepta de una respuesta antes de cortar.
 ///
@@ -266,7 +266,9 @@ impl std::fmt::Display for ErrorTransporte {
             ),
             Self::OrbitNoEsta { ruta, .. } => write!(f, "no hay un orbit ejecutable en {ruta}"),
             Self::SudoPideClave => write!(
-                f, "ese usuario necesita contraseña para sudo, y aquí no hay terminal donde escribirla"),
+                f, "ese usuario necesita contraseña para sudo, y aquí no hay terminal donde escribirla. \
+                    Desde Orbit 1.4.6 se arregla una vez, como root en el servidor: \
+                    orbit admin add <usuario> (equivale a darle root, y Orbit lo dice)"),
             Self::Orbit { stderr, codigo, .. } => {
                 let m = primera_linea(stderr);
                 if m.is_empty() { write!(f, "orbit ha salido con {codigo}") } else { write!(f, "{m}") }
@@ -297,13 +299,33 @@ fn primera_linea(s: &str) -> String {
     // exists.» — un trozo de frase suelto. Es un fallo que Orbit ya cometió y
     // tuvo que arreglar dentro de su propio contrato.
     s.lines()
-        .map(|l| l.trim_start_matches("  ").trim_start_matches("✗ ").trim())
+        .map(sin_glifo)
         .find(|l| {
             // Con contenido, y que no sea puro marco de dibujo.
             !l.is_empty() && l.chars().any(|c| c.is_alphanumeric())
         })
         .unwrap_or("")
         .to_string()
+}
+
+/// Una línea de Orbit sin su sangría ni su glifo.
+///
+/// Orbit escribe `  <glifo> <mensaje>` y el glifo **depende de la terminal del
+/// servidor**: `✗` con UTF-8 y `x` sin él (`_ui_unicode`, la tabla `G_*`), y por
+/// SSH sin terminal y con `LANG=C` —un VPS recién creado— sale el de ASCII. La
+/// versión anterior sólo quitaba `✗ `, así que contra ese servidor cada error
+/// empezaba por «x Faltan variables…». Se quita sólo con la sangría delante,
+/// que es la forma exacta de Orbit: una frase que empiece por «x » sin ella no
+/// es un glifo.
+fn sin_glifo(l: &str) -> &str {
+    if let Some(resto) = l.strip_prefix("  ") {
+        for g in ["✗ ", "✓ ", "! ", "· ", "x ", "+ ", ". "] {
+            if let Some(m) = resto.strip_prefix(g) {
+                return m.trim();
+            }
+        }
+    }
+    l.trim()
 }
 
 /// Lo que llegó del otro lado, con los dos canales separados.
@@ -401,7 +423,12 @@ pub fn ejecutar(
     for (k, v) in entorno {
         cmd.env(k, v);
     }
-    ejecutar_proceso(cmd, tope_de_tiempo(comando), &servidor.binario)
+    ejecutar_proceso(
+        cmd,
+        tope_de_tiempo(comando),
+        &servidor.binario,
+        comando.entrada(),
+    )
 }
 
 /// El mismo camino sin `ssh`, para las pruebas: se ejecuta el binario en local.
@@ -431,7 +458,7 @@ pub fn ejecutar_local(
     for (k, v) in entorno {
         cmd.env(k, v);
     }
-    ejecutar_proceso(cmd, tope_de_tiempo(comando), binario)
+    ejecutar_proceso(cmd, tope_de_tiempo(comando), binario, comando.entrada())
 }
 
 /// Un despliegue en curso, para poder cancelarlo.
@@ -516,6 +543,7 @@ pub fn ejecutar_en_vivo(
         tope_de_tiempo(comando),
         &servidor.binario,
         comando.vena_humana(),
+        comando.entrada(),
         en_curso,
         al_llegar,
     )
@@ -569,6 +597,7 @@ pub fn ejecutar_crudo_en_vivo(
         Duration::MAX,
         &servidor.binario,
         Vena::Stdout,
+        None,
         en_curso,
         al_llegar,
     )
@@ -589,7 +618,7 @@ pub fn ejecutar_crudo(
     cmd.arg(&servidor.destino);
     cmd.arg(linea);
     // Mismo motor que el resto, pero **sin clasificar**: ver abajo.
-    let r = match ejecutar_proceso(cmd, Duration::from_secs(30), &servidor.binario) {
+    let r = match ejecutar_proceso(cmd, Duration::from_secs(30), &servidor.binario, None) {
         Ok(r) => r,
         // `clasificar` traduce los códigos de `orbit`, y aquí puede que ni
         // exista: un 127 «command not found» es lo NORMAL en un servidor sin
@@ -644,13 +673,56 @@ pub fn ejecutar_crudo(
 /// abierta con las credenciales de quien la abrió, así que un directorio que no
 /// se puede cerrar es un directorio en el que no se pone nada. Devolver `None`
 /// significa «sin multiplexar», que es más lento y correcto.
+///
+/// **Dónde**, por orden: `$XDG_RUNTIME_DIR/orbit-desktop` —el sitio que Linux
+/// tiene para esto, en memoria y sólo del usuario— y, si no existe,
+/// `~/.ssh/orbit-desktop`. Lo segundo es por macOS, que no define
+/// `XDG_RUNTIME_DIR`: la primera versión devolvía `None` allí, o sea que **en
+/// un Mac cada orden pagaba el saludo entero**, los 246 ms en vez de 13. No se
+/// usa `$TMPDIR`: en macOS es una ruta de unos cincuenta caracteres, y con el
+/// hash de `%C` y el sufijo temporal que `ssh` añade al crear el socket se pasa
+/// de los 104 bytes que admite una ruta de socket.
+///
+/// En Windows no se multiplexa: el OpenSSH de Windows no tiene `ControlMaster`.
+///
+/// Y la carpeta **se comprueba, no sólo se crea**: que sea una carpeta y no un
+/// enlace, que sea del mismo dueño que la carpeta donde vive, y `0700`. Un
+/// enlace puesto ahí por otro haría que nuestras sesiones se abrieran en un
+/// sitio que no es nuestro.
 pub fn dir_control() -> Option<String> {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")?;
-    let d = std::path::Path::new(&base).join("orbit-desktop");
-    std::fs::create_dir_all(&d).ok()?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        let (base, nombre) = match std::env::var_os("XDG_RUNTIME_DIR") {
+            Some(b) if !b.is_empty() => (std::path::PathBuf::from(b), "orbit-desktop"),
+            _ => (
+                std::path::PathBuf::from(std::env::var_os("HOME")?).join(".ssh"),
+                "orbit-desktop",
+            ),
+        };
+        dir_privado(&base, nombre)
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+#[cfg(unix)]
+fn dir_privado(base: &std::path::Path, nombre: &str) -> Option<String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let dueno = std::fs::metadata(base).ok()?.uid();
+    let d = base.join(nombre);
+    match std::fs::DirBuilder::new().mode(0o700).create(&d) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(_) => return None,
+    }
+    // `symlink_metadata`, que no sigue el enlace: es justo lo que se mira.
+    let md = std::fs::symlink_metadata(&d).ok()?;
+    if !md.file_type().is_dir() || md.uid() != dueno {
+        return None;
+    }
+    if md.mode() & 0o777 != 0o700 {
         std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).ok()?;
     }
     Some(d.to_string_lossy().into_owned())
@@ -675,6 +747,7 @@ pub fn ejecutar_en_vivo_local(
         tope_de_tiempo(comando),
         binario,
         comando.vena_humana(),
+        comando.entrada(),
         en_curso,
         al_llegar,
     )
@@ -685,16 +758,22 @@ fn ejecutar_sirviendo(
     tope: Duration,
     binario: &str,
     vena: Vena,
+    entrada: Option<Secreto>,
     en_curso: EnCurso,
     mut al_llegar: impl FnMut(String) + Send + 'static,
 ) -> Result<Respuesta, ErrorTransporte> {
     use std::io::BufRead;
     use std::sync::Arc;
 
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.stdin(if entrada.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
     let mut hijo = cmd.spawn().map_err(ErrorTransporte::NoSePudoLanzar)?;
+    let h_entrada = escribir_entrada(&mut hijo, entrada);
 
     let so: Box<dyn std::io::Read + Send> = Box::new(hijo.stdout.take().unwrap());
     let se: Box<dyn std::io::Read + Send> = Box::new(hijo.stderr.take().unwrap());
@@ -763,6 +842,9 @@ fn ejecutar_sirviendo(
 
     let (guardada, corto) = h_guardada.join().unwrap()?;
     let _ = h_servida.join();
+    if let Some(h) = h_entrada {
+        let _ = h.join();
+    }
     if corto {
         return Err(ErrorTransporte::Demasiado {
             tope: TOPE_RESPUESTA,
@@ -794,12 +876,19 @@ fn ejecutar_proceso(
     mut cmd: Command,
     tope: Duration,
     binario: &str,
+    entrada: Option<Secreto>,
 ) -> Result<Respuesta, ErrorTransporte> {
-    cmd.stdin(Stdio::null()) // nadie va a contestar a un selector
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    // Sin entrada, `null`: nadie va a contestar a un selector.
+    cmd.stdin(if entrada.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
 
     let mut hijo = cmd.spawn().map_err(ErrorTransporte::NoSePudoLanzar)?;
+    let h_entrada = escribir_entrada(&mut hijo, entrada);
 
     // Los dos descriptores, a la vez y en hilos. Leerlos en serie es un bloqueo
     // mutuo en cuanto el que no se lee llena su tubería, y con --json el Orbit
@@ -829,6 +918,9 @@ fn ejecutar_proceso(
 
     let (stdout, corto_o) = h1.join().unwrap()?;
     let (stderr, _) = h2.join().unwrap()?;
+    if let Some(h) = h_entrada {
+        let _ = h.join();
+    }
     if corto_o {
         return Err(ErrorTransporte::Demasiado {
             tope: TOPE_RESPUESTA,
@@ -866,7 +958,12 @@ fn clasificar(r: Respuesta, binario: &str) -> Result<Respuesta, ErrorTransporte>
             stderr: r.stderr,
         });
     }
-    if e.contains("a terminal is required to read the password") || e.contains("askpass") {
+    // La segunda es la de `sudo -n`, que es como se eleva quien tiene un sudoers
+    // que no casa con la regla de `orbit admin`: no pregunta, falla con eso.
+    if e.contains("a terminal is required to read the password")
+        || e.contains("askpass")
+        || e.contains("sudo: a password is required")
+    {
         return Err(ErrorTransporte::SudoPideClave);
     }
     // 255 es el código propio de ssh cuando no llega. Es distinto de que orbit
@@ -896,6 +993,34 @@ fn clasificar(r: Respuesta, binario: &str) -> Result<Respuesta, ErrorTransporte>
         stdout: r.stdout,
         stderr: r.stderr,
     })
+}
+
+/// Escribe la entrada de la orden **y la cierra**.
+///
+/// En un hilo y no aquí mismo por lo de siempre: si el otro lado no lee —se
+/// muere antes, o escribe mucho antes de leer— una escritura que no cabe en la
+/// tubería se quedaría esperando mientras nadie lee stdout ni stderr.
+///
+/// Y cerrarla no es un detalle: `--env-stdin` lee **hasta el final**, y con la
+/// tubería abierta Orbit esperaría para siempre a una línea que no va a llegar
+/// —un despliegue colgado antes de empezar, con un tope de una hora—. El cierre
+/// es el `drop` del extremo, que pasa al terminar el hilo; por SSH se convierte
+/// en el EOF del canal.
+///
+/// Un error al escribir —el otro lado ya se ha ido— no se convierte en el error
+/// de la orden: el código de salida y stderr cuentan mejor qué pasó.
+fn escribir_entrada(
+    hijo: &mut std::process::Child,
+    entrada: Option<Secreto>,
+) -> Option<std::thread::JoinHandle<()>> {
+    use std::io::Write;
+    let e = entrada?;
+    let mut tubo = hijo.stdin.take()?;
+    Some(std::thread::spawn(move || {
+        let _ = tubo.write_all(e.exponer().as_bytes());
+        let _ = tubo.flush();
+        drop(tubo);
+    }))
 }
 
 fn leer_hasta(mut f: impl Read, tope: usize) -> Result<(String, bool), ErrorTransporte> {
@@ -980,6 +1105,75 @@ mod tests {
     }
 
     #[test]
+    fn el_glifo_de_orbit_se_quita_tambien_el_de_ascii() {
+        // Por SSH sin terminal y con LANG=C, Orbit escribe «x» en vez de «✗».
+        let ascii = "  x Faltan variables obligatorias (DATABASE_URL).\n";
+        assert_eq!(
+            primera_linea(ascii),
+            "Faltan variables obligatorias (DATABASE_URL)."
+        );
+        let utf = "  ✗ «tienda» está congelada.\n  · Para desplegar igualmente: …";
+        assert_eq!(primera_linea(utf), "«tienda» está congelada.");
+        // Sin la sangría de Orbit, una «x » es parte de la frase.
+        assert_eq!(primera_linea("x marks the spot"), "x marks the spot");
+    }
+
+    #[test]
+    fn sudo_sin_contrasena_y_sudo_n_son_el_mismo_caso() {
+        for e in [
+            "sudo: a terminal is required to read the password; either use the -S option",
+            "sudo: a password is required",
+        ] {
+            let r = Respuesta {
+                stdout: String::new(),
+                stderr: e.into(),
+                codigo: 1,
+            };
+            assert!(matches!(
+                clasificar(r, "/usr/local/bin/orbit"),
+                Err(ErrorTransporte::SudoPideClave)
+            ));
+        }
+        // Y el mensaje dice cómo se arregla desde 1.4.6.
+        assert!(ErrorTransporte::SudoPideClave
+            .to_string()
+            .contains("orbit admin add"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn la_carpeta_de_los_sockets_es_privada_y_no_se_sigue_un_enlace() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("orbit-cm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        let d = dir_privado(&base, "orbit-desktop").expect("se crea");
+        let m = std::fs::metadata(&d).unwrap().permissions().mode() & 0o777;
+        assert_eq!(m, 0o700);
+        // Una segunda vez vale igual: ya existe y es nuestra.
+        assert_eq!(
+            dir_privado(&base, "orbit-desktop").as_deref(),
+            Some(d.as_str())
+        );
+
+        // Un enlace en su sitio no se usa, aunque apunte a una carpeta nuestra.
+        let otra = base.join("otra");
+        std::fs::create_dir_all(&otra).unwrap();
+        std::os::unix::fs::symlink(&otra, base.join("enlace")).unwrap();
+        assert_eq!(dir_privado(&base, "enlace"), None);
+
+        // Y una carpeta abierta se cierra.
+        let abierta = base.join("abierta");
+        std::fs::create_dir_all(&abierta).unwrap();
+        std::fs::set_permissions(&abierta, std::fs::Permissions::from_mode(0o755)).unwrap();
+        dir_privado(&base, "abierta").unwrap();
+        let m = std::fs::metadata(&abierta).unwrap().permissions().mode() & 0o777;
+        assert_eq!(m, 0o700);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn el_mensaje_es_la_primera_linea_util_no_la_ultima() {
         // El fallo que Orbit ya cometió: quedarse con la última línea de git
         // daba «and the repository exists.», un trozo de frase suelto.
@@ -1021,7 +1215,10 @@ mod tests {
             tope_de_tiempo(&Comando::Doctor)
                 < tope_de_tiempo(&Comando::Desplegar {
                     app: "x".into(),
-                    progreso: false
+                    progreso: false,
+                    entorno: vec![],
+                    forzar: false,
+                    por_entrada: false,
                 })
         );
         // Y un log en vivo no tiene plazo, porque no terminar es lo que hace.

@@ -1,0 +1,79 @@
+{
+  "_": [
+    "Los argumentos exactos de las órdenes de Orbit 1.3.8–1.4.3 que la interfaz",
+    "enseña antes de lanzar, sin el binario y TAL COMO SE ENSEÑAN: con cada valor",
+    "de --env tapado.",
+    "",
+    "Mismo motivo que orden-de-new.json: la orden se construye dos veces —en el",
+    "catálogo de Rust, que es la que se ejecuta, y en la interfaz, que la enseña",
+    "en la hoja de comando— y enseñar una cosa y ejecutar otra es el peor fallo",
+    "posible de una pantalla cuyo argumento es «mira lo que va a pasar».",
+    "",
+    "Las dos se comparan contra este fichero: crates/orbit-client/tests/ordenes.rs",
+    "(con Comando::argv_visible) y ui/tests/ordenes.test.ts.",
+    "",
+    "Y los valores de entrada NO aparecen en ningún «argv»: es la otra mitad de",
+    "lo que se comprueba. Una contraseña que se enseña en la hoja de comando es",
+    "una contraseña en la próxima captura que alguien pegue en un issue."
+  ],
+  "casos": [
+    {
+      "nombre": "un despliegue normal",
+      "orden": { "tipo": "desplegar", "app": "tienda", "entorno": [], "forzar": false },
+      "argv": ["--json", "deploy", "tienda", "--progress"]
+    },
+    {
+      "nombre": "forzado y con dos variables",
+      "orden": {
+        "tipo": "desplegar", "app": "tienda", "forzar": true,
+        "entorno": [
+          { "clave": "DATABASE_URL", "valor": "postgres://tienda:s3cr3t@localhost/tienda" },
+          { "clave": "MAIL_FROM", "valor": "web@ejemplo.com" }
+        ]
+      },
+      "argv": ["--json", "deploy", "tienda", "--progress", "--force",
+               "--env", "DATABASE_URL=••••••", "--env", "MAIL_FROM=••••••"]
+    },
+    {
+      "nombre": "con dos variables por la entrada estándar (Orbit 1.4.9)",
+      "orden": {
+        "tipo": "desplegar", "app": "tienda", "forzar": false, "por_entrada": true,
+        "entorno": [
+          { "clave": "DATABASE_URL", "valor": "postgres://tienda:s3cr3t@localhost/tienda" },
+          { "clave": "MAIL_FROM", "valor": "web@ejemplo.com" }
+        ]
+      },
+      "argv": ["--json", "deploy", "tienda", "--progress", "--env-stdin"]
+    },
+    {
+      "nombre": "congelar con motivo",
+      "orden": { "tipo": "congelar", "app": "tienda", "motivo": "black friday: no tocar" },
+      "argv": ["lock", "tienda", "-m", "black friday: no tocar"]
+    },
+    {
+      "nombre": "congelar con un motivo que empieza por guion",
+      "orden": { "tipo": "congelar", "app": "tienda", "motivo": "-hasta el lunes" },
+      "argv": ["lock", "tienda", "-m", "-hasta el lunes"]
+    },
+    {
+      "nombre": "congelar con el motivo en blanco",
+      "orden": { "tipo": "congelar", "app": "tienda", "motivo": "   " },
+      "argv": ["lock", "tienda"]
+    },
+    {
+      "nombre": "descongelar",
+      "orden": { "tipo": "descongelar", "app": "tienda" },
+      "argv": ["unlock", "tienda"]
+    },
+    {
+      "nombre": "esperar a la CI",
+      "orden": { "tipo": "esperar_ci", "app": "tienda", "esperar": true },
+      "argv": ["autodeploy", "checks", "on", "tienda"]
+    },
+    {
+      "nombre": "dejar de esperar a la CI",
+      "orden": { "tipo": "esperar_ci", "app": "tienda", "esperar": false },
+      "argv": ["autodeploy", "checks", "off", "tienda"]
+    }
+  ]
+}

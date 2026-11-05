@@ -1,0 +1,1 @@
+{"schema":1,"app":"tienda","tasks":[{"name":"limpiar-sesiones","last_run":"Thu 2026-11-05 03:00:00 UTC","next_run":"Fri 2026-11-06 03:00:00 UTC","result":"success"},{"name":"informe","last_run":null,"next_run":"Mon 2026-11-09 08:00:00 UTC","result":null},{"name":"sincronizar","last_run":"Thu 2026-11-05 11:45:00 UTC","next_run":"Thu 2026-11-05 12:00:00 UTC","result":"exit-code"}]}

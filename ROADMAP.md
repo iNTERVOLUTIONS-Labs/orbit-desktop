@@ -425,6 +425,38 @@ La suite de punta a punta corre contra el mismo sshd del banco y **con tres
 servidores a propósito**: con uno el abanico no existe y la prueba pasaría sin
 comprobar nada.
 
+## Fase 6d · Orbit 1.4 ✅
+
+El cliente se escribió contra Orbit 1.3.6, y Orbit siguió: once versiones sin
+subir el contrato, que es lo que el contrato promete. Ponerse al día destapó que
+**la promesa tiene dos mitades y el cliente sólo cumplía una**: ignoraba los
+campos nuevos, pero no los *valores* nuevos de un campo que ya existía. Una sola
+app congelada en un 1.4.3 convertía una pasada de cuarenta apps en «no he
+entendido la respuesta».
+
+Lo que entra, con las formas sacadas del Orbit de verdad en el banco:
+
+- **Congelar y descongelar** desde el detalle, con el motivo; «desplegar
+  igualmente» como botón propio, con `--force`, que no descongela.
+- **Las variables obligatorias, antes del despliegue**: `env check` al abrir la
+  hoja, el formulario, y `--env`. Con el coste dicho donde se decide —el valor
+  viaja en el `argv`— y contado en THREAT-MODEL T-13.
+- **La puerta de la CI**, y sus tres finales separados en la pasada.
+- **El certificado de origen de Cloudflare**, las **tareas programadas** y la
+  salud y los límites en el detalle.
+
+Y lo que salió por el camino, que no era de Orbit sino de aquí: la ventana se
+congelaba esperando al servidor, una respuesta tardía de un servidor se pintaba
+bajo el nombre de otro, el monitor podía encolar peticiones, en macOS no se
+multiplexaba nunca, y los servidores añadidos a mano no salían en el rail.
+
+Y lo que Orbit añadió para esto: con un servidor 1.4.9 las variables van por la
+entrada estándar (`--env-stdin`) y no tocan el `argv`; con uno 1.4.3–1.4.8, por
+`--env` y avisándolo.
+
+Lo que queda para cuando Orbit lo publique: la lista de repositorios de la
+cuenta del servidor (`orbit github repos --json`, en `main` sin versión).
+
 ## Fase 7 y más allá 💭
 
 - 💭 **Gráficas históricas**, que exigirían que el cliente guarde algo. Es una
