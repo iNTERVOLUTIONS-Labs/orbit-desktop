@@ -1225,6 +1225,44 @@ móntales un sistema falso encima y mira qué queda tocado»*— aplicado al dis
 
 ---
 
+#### T-13 · Un secreto en la línea de órdenes del servidor
+**Actores:** C6 (otro usuario del servidor, incluidas las apps aisladas), el registro de `sudo`.
+**Severidad: Media.**
+
+Desde Orbit 1.3.8, una variable **obligatoria** que falta para el despliegue antes del build, y
+con `--json` no hay a quién preguntársela. La salida que da Orbit es `deploy --env CLAVE=valor`,
+y el cliente la usa: es lo que convierte «despliega, falla, entra por SSH, `orbit env set`, vuelve
+a desplegar» en un formulario. Pero el valor viaja **en el `argv`**, y eso tiene dos consecuencias
+que el cliente no puede tapar:
+
+- **Mientras dura el despliegue, se ve en `ps`** desde cualquier cuenta del servidor, también las
+  de las apps aisladas (§5.3 de Orbit). Un build son minutos.
+- **Si el usuario SSH no es root, `sudo` apunta la orden entera** en su registro (`auth.log`, el
+  journal), legible por el grupo `adm`. Ahí se queda.
+
+No hay una alternativa sin escribir en el servidor: `--env-file` exige un fichero regular
+(`[[ -f "$2" ]]`, así que `/dev/stdin` no vale), y crear uno es justo lo que la regla 2 prohíbe.
+`orbit env set` tiene la misma exposición.
+
+**Mitigación en el cliente:**
+
+1. **El valor no se escribe en ningún sitio de aquí.** Es un `Secreto` en el núcleo —su `Debug`
+   dice «oculto», no implementa `Display`, y la única forma de leerlo es `exponer()`, que se ve en
+   una revisión—, y la estructura que lo recibe del puente no tiene `Debug`. La hoja de comando lo
+   enseña como `CLAVE=••••••` (`Comando::argv_visible`), y una prueba compartida
+   (`tests/contrato/ordenes.json`) comprueba que el valor no aparece en lo que se enseña. Los
+   errores de validación nombran la clave y nunca el valor. El formulario se vacía al mandar y al
+   cerrar.
+2. **Se dice donde se decide.** La hoja del despliegue lleva la frase: los valores viajan en la
+   orden, se ven en la lista de procesos mientras dura, y quedan en el registro de `sudo` si no se
+   entra como root.
+3. **Sólo se pide lo que falta.** Nunca se reenvía una variable que ya tiene valor.
+
+**Lo que haría falta, y es de Orbit:** un `--env-stdin`, o que `--env-file -` lea la entrada
+estándar. Con eso el valor iría por el canal cifrado de SSH y no tocaría ni `ps` ni el registro.
+
+---
+
 ### 1.6 Resumen
 
 | ID | Amenaza | Actor | Activo | Sev. | Mitigación principal |
@@ -1241,6 +1279,7 @@ móntales un sistema falso encima y mira qué queda tocado»*— aplicado al dis
 | T-10 | Corte a mitad de despliegue | red | — | Media | No afirmar el resultado; no reintentar solo |
 | T-11 | Nombres que engañan | C3, C6 | — | Media | NFC, marcado, regla de forma |
 | T-12 | Persistencia accidental | C1 | A3 | Media-Alta | Lista blanca de lo que se guarda + prueba con `grep` |
+| T-13 | Secreto en el `argv` de `deploy --env` | C6, `sudo` | A3 | Media | `Secreto` sin `Debug`, tapado en la hoja, dicho donde se decide; falta `--env-stdin` en Orbit |
 
 ### 1.7 Lo que está fuera del modelo, dicho a propósito
 
@@ -1336,8 +1375,13 @@ dos ficheros y no existe en el binario. *Verificación:* §5.4b nivel 1, en el a
 
 **SEC-28 · El socket de `ControlMaster` vive en un directorio `0700` propio del usuario y
 tiene modo `0600`.** En Linux, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`, tmpfs, borrado al
-cerrar sesión). **Nunca `/tmp`.** *Verificación:* §5.1 H, comprobando el modo del fichero,
-no la ruta escrita en el código.
+cerrar sesión). Donde no existe —macOS— `~/.ssh/orbit-desktop`: la primera versión devolvía
+«sin multiplexar» y cada orden pagaba el saludo entero. **Nunca `/tmp` ni `$TMPDIR`**, que en
+macOS se pasa de los 104 bytes de `sun_path` con el sufijo temporal de `ssh`. Y la carpeta **se
+comprueba**: no puede ser un enlace, tiene que ser del dueño de la carpeta donde vive, y se
+cierra a `0700` si no lo está; si algo de eso falla, no se multiplexa. *Verificación:* §5.1 H,
+comprobando el modo del fichero, no la ruta escrita en el código, y la prueba
+`la_carpeta_de_los_sockets_es_privada_y_no_se_sigue_un_enlace`.
 
 **SEC-29 · `ControlPath` usa `%C`**, que no revela el nombre del servidor en el sistema de
 ficheros —o sea, no filtra A7 a quien liste el directorio— y no desborda los 104 bytes de
