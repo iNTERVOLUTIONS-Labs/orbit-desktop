@@ -1,0 +1,1 @@
+{"schema":1,"app":"tienda","file":".env","ok":false,"vars":[{"key":"DATABASE_URL","set":false,"required":true,"source":"orbit.json"},{"key":"APP_KEY","set":true,"required":false,"source":"orbit.json"},{"key":"MAIL_FROM","set":false,"required":false,"source":"orbit.json"},{"key":"MAIL_HOST","set":false,"required":false,"source":"example"}]}

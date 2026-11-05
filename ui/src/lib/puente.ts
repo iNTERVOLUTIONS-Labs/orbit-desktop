@@ -13,17 +13,23 @@
 // pueden divergir.
 
 import { listaDeAlias, type Borrador } from './asistente'
+import type { VariableNueva } from './despliegue'
 import {
   leerLog,
-  type App, type Despliegue, type Doctor, type Entorno,
+  type App, type ComprobacionDeEntorno, type Despliegue, type Doctor, type Entorno,
   type Envoltorio, type Lista, type Log, type Lote, type Metricas, type Monitor,
-  type AppInfo, type Info, type SalidaDeExec, type Saludo, type Trafico,
+  type AppInfo, type Info, type SalidaDeExec, type Saludo, type Tareas, type Trafico,
+  type Version,
 } from './contrato'
 
 import listaSana from './muestras/list.json'
 import listaEstados from './muestras/list-estados.json'
 import listaHostil from './muestras/list-nombre-hostil.json'
 import listaVacia from './muestras/list-vacia.json'
+import lista14 from './muestras/list-1.4.json'
+import info14 from './muestras/info-1.4.json'
+import comprobacionMuestra from './muestras/env-check.json'
+import tareasMuestra from './muestras/cron.json'
 
 export interface ErrorDelPuente {
   /** Un identificador estable. La interfaz decide **con esto** y nunca leyendo
@@ -40,6 +46,15 @@ export const MUESTRAS: Record<string, Lista> = {
   pruebas: listaEstados as Lista,
   comprometido: listaHostil as Lista,
   'recien-instalado': listaVacia as Lista,
+  // Un 1.4.8: congeladas, la puerta de la CI y el certificado de origen. Los
+  // otros cuatro siguen siendo de un 1.3.6, a propósito: hablar con un
+  // servidor viejo es el caso normal y la interfaz se mira también así.
+  produccion: lista14 as Lista,
+}
+
+/** La versión de Orbit de cada muestra, para lo que depende de ella. */
+function versionDeMuestra(alias: string): string {
+  return alias === 'produccion' ? '1.4.8' : '1.3.6'
 }
 
 /** Si hay envoltorio de escritorio detrás. */
@@ -86,6 +101,17 @@ export async function portada(alias: string): Promise<{ apps: App[] }> {
   return invocar<{ apps: App[] }>('portada', { alias })
 }
 
+/** El saludo corto: qué versión de Orbit tiene un servidor.
+ *
+ *  Es la llamada más barata del contrato (72 ms en el banco, ~13 con la
+ *  conexión multiplexada) y se pide **una vez por servidor y sesión**: de ella
+ *  sale qué botones se pueden ofrecer, y la versión de un servidor no cambia
+ *  mientras se mira salvo que alguien lo actualice — y entonces se olvida. */
+export async function version(alias: string): Promise<Version> {
+  if (!hayPuente()) return { schema: 1, version: versionDeMuestra(alias), contract: 1 }
+  return invocar<Version>('version', { alias })
+}
+
 import doctorMuestra from './muestras/doctor.json'
 import logMuestra from './muestras/logs.ndjson?raw'
 
@@ -130,9 +156,49 @@ export async function arreglar(alias: string): Promise<Doctor> {
  * al terminar convertiría tres minutos de información en un bloque de texto que
  * llega cuando ya no sirve.
  */
-export async function desplegar(alias: string, app: string): Promise<Despliegue> {
+export async function desplegar(
+  alias: string,
+  app: string,
+  opciones: { entorno?: VariableNueva[]; forzar?: boolean } = {},
+): Promise<Despliegue> {
   if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
-  return invocar<Despliegue>('desplegar', { alias, app })
+  // Los valores cruzan el puente una vez y no se guardan aquí: quien llama
+  // tiene que olvidarlos en cuanto esto vuelve, haya ido como haya ido.
+  return invocar<Despliegue>('desplegar', {
+    alias,
+    app,
+    entorno: opciones.entorno ?? [],
+    forzar: opciones.forzar ?? false,
+  })
+}
+
+/** Lo que la app declara frente a lo que tiene, **sin un solo valor**. 1.3.8. */
+export async function comprobarEntorno(alias: string, app: string): Promise<ComprobacionDeEntorno> {
+  if (!hayPuente()) return { ...(comprobacionMuestra as ComprobacionDeEntorno), app }
+  return invocar<ComprobacionDeEntorno>('comprobar_entorno', { alias, app })
+}
+
+/** Las tareas programadas de una app. 1.3.9. */
+export async function tareas(alias: string, app: string): Promise<Tareas> {
+  if (!hayPuente()) return { ...(tareasMuestra as Tareas), app }
+  return invocar<Tareas>('tareas', { alias, app })
+}
+
+/** Congela los despliegues de una app. El rollback sigue permitido. 1.4.3. */
+export async function congelar(alias: string, app: string, motivo: string | null): Promise<Resultado> {
+  if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
+  return invocar<Resultado>('congelar', { alias, app, motivo })
+}
+
+export async function descongelar(alias: string, app: string): Promise<Resultado> {
+  if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
+  return invocar<Resultado>('descongelar', { alias, app })
+}
+
+/** Que el autodespliegue y `deploy --all` esperen a la CI de GitHub. 1.4.3. */
+export async function esperarCi(alias: string, app: string, esperar: boolean): Promise<Resultado> {
+  if (!hayPuente()) throw { clase: 'sin-puente', mensaje: 'no hay envoltorio de escritorio' }
+  return invocar<Resultado>('esperar_ci', { alias, app, esperar })
 }
 
 /** Cancela un despliegue en curso. Devuelve si había uno que cancelar. */
@@ -230,7 +296,16 @@ import infoMuestra from './muestras/info.json'
 /** El detalle de una app. De aquí sale el inventario de lo que se pierde al
  *  borrarla, y se pide **en ese momento**. */
 export async function detalle(alias: string, app: string): Promise<AppInfo> {
-  if (!hayPuente()) return { ...(infoMuestra as Info).app, name: app }
+  if (!hayPuente()) {
+    if (alias === 'produccion') {
+      // El estado de la muestra es el de la app que se pidió, no el de la que
+      // trae el fichero: una congelación pintada en otra app sería mentir.
+      const a = MUESTRAS.produccion!.apps.find((x) => x.name === app)
+      const i = (info14 as Info).app
+      return { ...i, name: app, state: a ? { ...a.state, cert_days: a.state.ssl ? 61 : null } : i.state }
+    }
+    return { ...(infoMuestra as Info).app, name: app }
+  }
   return (await invocar<Info>('detalle', { alias, app })).app
 }
 

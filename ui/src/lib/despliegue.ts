@@ -140,16 +140,50 @@ export function leerProgreso(
   }
 }
 
-/** Los cuatro finales visuales de un despliegue.
+/** Los finales visuales de un despliegue.
  *
- *  El objeto no tiene un campo «resultado» con cuatro valores: tiene `ok`,
- *  `rolled_back` y `recovered`, y su combinación da cuatro finales que **se ven
- *  distintos porque son distintos**. */
-export type FinalVisual = 'bien' | 'recuperado' | 'revertido' | 'roto'
+ *  El objeto no tiene un campo «resultado»: tiene `ok`, `rolled_back` y
+ *  `recovered`, y su combinación da cuatro finales que **se ven distintos
+ *  porque son distintos**. Desde la 1.3.8 hay dos más que no son fallos de
+ *  nada, y pintarlos como «roto» mandaría a buscar el problema donde no está:
+ *
+ *  · **`negado`**: el servidor se negó antes de empezar —la app está
+ *    congelada, u otro despliegue de la misma app no ha terminado—. No hay
+ *    release ni paso fallido, porque no se ha tocado nada. Es el único final
+ *    en el que la web es exactamente la de antes **por diseño**.
+ *  · **`faltan`**: se paró antes del build porque falta una variable
+ *    obligatoria. Lo que hay que hacer no es mirar un log, es dar el valor.
+ *    Se reconoce por el paso (`release`, que es donde se comprueba) y porque
+ *    el error **nombra** una de las de `env_missing`: los nombres de las
+ *    variables no se traducen, la frase sí, y decidir leyendo la frase se
+ *    rompería en el primer servidor en inglés. */
+export type FinalVisual = 'bien' | 'recuperado' | 'revertido' | 'roto' | 'negado' | 'faltan'
 
 export function finalDe(d: Despliegue): FinalVisual {
   if (d.ok) return d.recovered ? 'recuperado' : 'bien'
-  return d.rolled_back ? 'revertido' : 'roto'
+  if (d.rolled_back) return 'revertido'
+  if (d.release === null && d.failed_step === null) return 'negado'
+  if (faltanVariables(d).length > 0) return 'faltan'
+  return 'roto'
+}
+
+/** Las variables **obligatorias** por las que se paró el despliegue, si se
+ *  paró por eso.
+ *
+ *  `env_missing` trae todas las que siguen sin valor, obligatorias o no, y el
+ *  objeto no dice cuáles son cuáles. Lo dice el `error`, que nombra las
+ *  obligatorias (`faltan variables obligatorias: A B`): se buscan **como
+ *  palabras enteras**, porque con `includes` una `DB` declarada daría por
+ *  nombrada a `DB_PASSWORD`.
+ *
+ *  Vacío si no fue por eso, **aunque `env_missing` traiga algo**: una opcional
+ *  sin valor no para nada, y un despliegue que falla en el build con una
+ *  opcional pendiente sigue siendo un fallo del build. */
+export function faltanVariables(d: Despliegue): string[] {
+  const faltan = d.env_missing ?? []
+  if (d.ok || d.failed_step !== 'release' || faltan.length === 0) return []
+  const nombradas = new Set((d.error ?? '').split(/[^A-Za-z0-9_]+/))
+  return faltan.filter((k) => nombradas.has(k))
 }
 
 /** Cuándo se ofrece volver a la release anterior.
@@ -176,17 +210,22 @@ export const QUE_MIRAR: Record<string, { mira: string; accion: string }> = {
   nginx:    { mira: 'La salida de nginx -t.',                accion: 'Ir al diagnóstico' },
 }
 
-/** Los seis finales de un lote, con su glifo y su palabra.
+/** Los finales de un lote, con su glifo y su palabra.
  *
- *  Son seis y **no se agrupan nunca**: confundir «no hay cambios» con «no he
- *  podido preguntar» costó un fallo real —un remoto caído anunciado como «nada
- *  que hacer» cada cinco minutos— y el contrato los separa para que un cliente
- *  no pueda repetirlo. */
+ *  **No se agrupan nunca**: confundir «no hay cambios» con «no he podido
+ *  preguntar» costó un fallo real —un remoto caído anunciado como «nada que
+ *  hacer» cada cinco minutos— y el contrato los separa para que un cliente no
+ *  pueda repetirlo.
+ *
+ *  Los seis primeros son los de siempre y se enseñan siempre. Los cinco de las
+ *  puertas llegaron en la 1.4.3 y **sólo se enseñan si el servidor los
+ *  cuenta**: en un servidor anterior su recuento no es cero, no existe, y una
+ *  celda con un cero diría que ha mirado. */
 export const FINALES_DEL_LOTE = [
-  { id: 'deployed',    glifo: '●', texto: 'desplegadas',   frase: 'Se han desplegado.' },
-  { id: 'failed',      glifo: '✕', texto: 'fallidas',      frase: 'Se han intentado y han fallado.' },
-  { id: 'unchanged',   glifo: '—', texto: 'al día',        frase: 'El remoto no ha avanzado.' },
-  { id: 'unreachable', glifo: '▲', texto: 'sin contacto',  frase: 'No he podido preguntarle al remoto. NO es lo mismo que «al día».' },
+  { id: 'deployed',    glifo: '●', texto: 'desplegadas',   frase: 'Se han desplegado.', base: true },
+  { id: 'failed',      glifo: '✕', texto: 'fallidas',      frase: 'Se han intentado y han fallado.', base: true },
+  { id: 'unchanged',   glifo: '—', texto: 'al día',        frase: 'El remoto no ha avanzado.', base: true },
+  { id: 'unreachable', glifo: '▲', texto: 'sin contacto',  frase: 'No he podido preguntarle al remoto. NO es lo mismo que «al día».', base: true },
   // Glifo propio, y no el `✕` de `failed`. La primera versión compartía los dos
   // —color y glifo— y se vio mirando una captura: dos celdas idénticas salvo
   // por la palabra, que es justo lo que la regla de «el color nunca va solo»
@@ -197,15 +236,54 @@ export const FINALES_DEL_LOTE = [
   // un sexto para esto sería añadir un color que nadie sabría nombrar. Las dos
   // cosas quieren decir «algo va mal y hay que mirarlo»; lo que las separa es
   // el glifo y la palabra, que es donde tiene que estar.
-  { id: 'gone',        glifo: '↯', texto: 'rama perdida',  frase: 'La rama configurada ya no existe en el remoto.' },
-  { id: 'skipped',     glifo: '·', texto: 'saltadas',      frase: 'Este commit ya rompió el build; se espera al siguiente.' },
+  { id: 'gone',        glifo: '↯', texto: 'rama perdida',  frase: 'La rama configurada ya no existe en el remoto.', base: true },
+  { id: 'skipped',     glifo: '·', texto: 'saltadas',      frase: 'Este commit ya rompió el build; se espera al siguiente.', base: true },
+  // Las cinco puertas de la 1.4.3. Cada una con su glifo, por la misma regla:
+  // ninguno es un emoji en las fuentes de color —`✗` y no `✖`, que Orbit ya
+  // aprendió que se lo queda la fuente de emoji— y todos están en DejaVu Sans
+  // Mono.
+  { id: 'locked',      glifo: '■', texto: 'congeladas',    frase: 'Alguien las congeló con «orbit lock»: ni se le pregunta al remoto. El rollback sigue permitido.', base: false },
+  { id: 'ignored',     glifo: '○', texto: 'sin cambios vigilados', frase: 'Hay commits nuevos, pero ninguno toca las rutas que vigila su orbit.json.', base: false },
+  { id: 'ci_pending',  glifo: '…', texto: 'esperando a la CI', frase: 'La CI de GitHub de ese commit sigue corriendo. Se desplegará en una pasada siguiente.', base: false },
+  { id: 'ci_failed',   glifo: '✗', texto: 'CI en rojo',    frase: 'La CI de ese commit ha fallado y no se despliega. Se desplegará el siguiente que pase.', base: false },
+  // El `unreachable` de la CI, con su color: no es «pendiente» ni «en rojo»,
+  // es no saber. Por eso pone `ok` a `false`.
+  { id: 'ci_unknown',  glifo: '?', texto: 'CI sin respuesta', frase: 'No he podido preguntarle a GitHub por la CI. NO es lo mismo que «esperando».', base: false },
 ] as const
 
-export function recuentos(l: Lote): Array<{ id: string; glifo: string; texto: string; frase: string; n: number }> {
+export type IdDeFinal = (typeof FINALES_DEL_LOTE)[number]['id']
+
+/** La palabra de un final para una fila. Uno que no conozcamos se enseña tal
+ *  cual lo manda el servidor: es mejor una palabra en inglés que una fila que
+ *  dice otra cosa. */
+export function textoDeFinal(id: string): string {
+  return FINALES_DEL_LOTE.find((f) => f.id === id)?.texto ?? id
+}
+
+/** Los recuentos, con `n: null` cuando el servidor no lo cuenta. */
+export function recuentos(
+  l: Lote,
+): Array<{ id: IdDeFinal; glifo: string; texto: string; frase: string; base: boolean; n: number | null }> {
+  const r = l as unknown as Record<string, number | undefined>
   return FINALES_DEL_LOTE.map((f) => ({
     ...f,
-    n: (l as unknown as Record<string, number>)[f.id] ?? 0,
+    n: typeof r[f.id] === 'number' ? r[f.id]! : f.base ? 0 : null,
   }))
+}
+
+/** Las que necesitan una mirada: la misma regla que `ok` y el código de
+ *  salida —fallidas, sin contacto, rama perdida y CI sin respuesta—. */
+export function necesitanMirada(l: Lote): number {
+  return l.failed + l.unreachable + l.gone + (l.ci_unknown ?? 0)
+}
+
+/** Las que no se han desplegado **a propósito**: congeladas o retenidas por
+ *  una CI que todavía corre o está en rojo. No ponen `ok` a `false` —el
+ *  servidor ha hecho lo que se le pidió— pero tampoco son «al día», y un
+ *  veredicto que dijera «ninguna falló» sin más se leería como «todo está
+ *  publicado». */
+export function retenidas(l: Lote): number {
+  return (l.locked ?? 0) + (l.ci_pending ?? 0) + (l.ci_failed ?? 0)
 }
 
 // ── La pasada por todas las apps ────────────────────────────────────────────
@@ -328,10 +406,92 @@ export function leerPasada(texto: string): Pasada {
  * `skipped` no aparece en ninguna de las dos: sólo lo produce `--auto`, que es
  * la bandera del autodespliegue y que este cliente no pasa nunca.
  */
-export function finalesPosibles(soloSiCambia: boolean): string[] {
+export function finalesPosibles(soloSiCambia: boolean, conPuertas = false): string[] {
+  if (!conPuertas) {
+    return soloSiCambia
+      ? ['deployed', 'failed', 'unchanged', 'unreachable', 'gone']
+      : ['deployed', 'failed']
+  }
+  // Desde la 1.4.3 la rama sin `--if-changed` ya no es sólo «desplegada o
+  // fallida». Una congelada se salta en las dos, antes de nada. Y una app con
+  // la puerta de la CI **sí le pregunta al remoto** aunque no se haya pedido
+  // `--if-changed` —la CI necesita saber qué commit mirar—, así que en esa
+  // rama también pueden salir «sin contacto», «rama perdida» y los tres de la
+  // CI. Lo que sigue sin poder salir sin `--if-changed` es «al día» y «sin
+  // cambios vigilados»: son las dos respuestas a «¿ha cambiado?», y esa
+  // pregunta no se hace.
+  //
+  // `conPuertas` sale de la respuesta y no de una versión: que el lote traiga
+  // `locked`, o que la lista traiga `state.locked`. Un servidor anterior sigue
+  // con la regla de arriba, que para él sigue siendo verdad.
   return soloSiCambia
-    ? ['deployed', 'failed', 'unchanged', 'unreachable', 'gone']
-    : ['deployed', 'failed']
+    ? ['deployed', 'failed', 'unchanged', 'unreachable', 'gone',
+       'locked', 'ignored', 'ci_pending', 'ci_failed', 'ci_unknown']
+    : ['deployed', 'failed', 'unreachable', 'gone',
+       'locked', 'ci_pending', 'ci_failed', 'ci_unknown']
+}
+
+// ── Las órdenes que se enseñan antes de lanzarlas ──────────────────────────
+
+/** Lo que se enseña en lugar de un valor. El mismo en el núcleo (`OCULTO`), y
+ *  siempre igual: la longitud de una contraseña también es un dato sobre ella. */
+export const OCULTO = '••••••'
+
+export interface VariableNueva {
+  clave: string
+  valor: string
+}
+
+/** Los argumentos de un despliegue **tal como se enseñan**: los mismos que
+ *  manda el núcleo (`Comando::argv_visible`), con cada valor de `--env`
+ *  tapado. Se comparan los dos contra `tests/contrato/ordenes.json`. */
+export function argvDeDespliegue(app: string, entorno: VariableNueva[] = [], forzar = false): string[] {
+  const v = ['--json', 'deploy', app, '--progress']
+  if (forzar) v.push('--force')
+  for (const e of entorno) v.push('--env', `${e.clave}=${OCULTO}`)
+  return v
+}
+
+/** `orbit lock`. Sin `--json`, que `lock` no habla. Un motivo en blanco es no
+ *  decir motivo, igual que en el núcleo. */
+export function argvDeCongelar(app: string, motivo: string | null): string[] {
+  const v = ['lock', app]
+  if (motivo !== null && motivo.trim() !== '') v.push('-m', motivo)
+  return v
+}
+
+export function argvDeDescongelar(app: string): string[] {
+  return ['unlock', app]
+}
+
+export function argvDeEsperarCi(app: string, esperar: boolean): string[] {
+  return ['autodeploy', 'checks', esperar ? 'on' : 'off', app]
+}
+
+/** La orden para leerla, entrecomillada lo justo. Sólo para enseñar: lo que
+ *  viaja son los argumentos, y el escapado de verdad lo hace el núcleo. */
+export function ordenLegible(argv: string[], binario = 'orbit'): string {
+  return [binario, ...argv]
+    .map((t) => (t === '' || /[^A-Za-z0-9_./:@=•-]/.test(t) ? `'${t.split("'").join(`'\\''`)}'` : t))
+    .join(' ')
+}
+
+/** Las mismas reglas que el núcleo y que `_env_value_problem` en el servidor:
+ *  lo que no se puede guardar se dice aquí, junto al campo, y no a mitad de un
+ *  despliegue. Devuelve el motivo, o `null`. **Nunca repite el valor.** */
+export function problemaDelValor(v: string): string | null {
+  if (/[\r\n]/.test(v)) return 'lleva saltos de línea, y en un .env cada variable es una línea'
+  if (v.includes("'")) return 'lleva una comilla simple, y systemd y bash no la escapan igual'
+  if (v.includes('\0')) return 'lleva un byte nulo'
+  return null
+}
+
+/** Lo mismo para el motivo de una congelación: una línea y 200 caracteres. */
+export function problemaDelMotivo(m: string): string | null {
+  if ([...m].length > 200) return 'pasa de 200 caracteres'
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(m)) return 'tiene que caber en una línea'
+  return null
 }
 
 /**

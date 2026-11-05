@@ -8,8 +8,11 @@
   // primera y se ignore la segunda, que es justo donde está la acción.
   const QUE_HACER: Record<string, string> = {
     'orbit-no-esta': `Compruébalo con «ssh ${alias} which orbit».`,
+    // Desde Orbit 1.4.6 hay una orden para esto, y la regla que pone es
+    // exactamente la que hace falta: sin contraseña y sólo para el binario.
+    // Se dice lo que es —equivale a root— porque Orbit también lo dice.
     'sudo-pide-clave':
-      'Entra como root, o dale a ese usuario sudo sin contraseña para /usr/local/bin/orbit.',
+      'Entra como root, o —con Orbit 1.4.6 o posterior— ejecuta una vez como root en el servidor «orbit admin add <usuario>». Equivale a darle root, igual que entrar como root.',
     'no-llego': `Prueba «ssh ${alias}» desde tu terminal: si eso también falla, no es cosa de Orbit Desktop.`,
     tarde: 'Vuelve a intentarlo, o mira si el servidor está cargado.',
     demasiado: 'No es normal: una respuesta del contrato no llega a 20 KB.',

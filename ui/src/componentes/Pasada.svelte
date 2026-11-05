@@ -1,6 +1,6 @@
 <script lang="ts">
   import LoteVista from './Lote.svelte'
-  import { finalesPosibles, leerPasada, FINALES_DEL_LOTE } from '../lib/despliegue'
+  import { finalesPosibles, leerPasada, textoDeFinal, FINALES_DEL_LOTE } from '../lib/despliegue'
   import type { App, Lote } from '../lib/contrato'
 
   let {
@@ -35,7 +35,13 @@
   const candidatas = $derived(apps.length - redirecciones)
 
   const pasada = $derived(leerPasada(crudo))
-  const posibles = $derived(finalesPosibles(modo !== 'todo'))
+  // Si el servidor tiene las puertas de la 1.4.3 se sabe por la respuesta, no
+  // por una tabla de versiones: el lote trae `locked`, o la lista
+  // `state.locked`. Cambia qué finales pueden salir sin `--if-changed`.
+  const conPuertas = $derived(
+    resultado ? 'locked' in resultado : apps.some((a) => a.state.locked !== undefined),
+  )
+  const posibles = $derived(finalesPosibles(modo !== 'todo', conPuertas))
   // Los que no podían salir **por no haber preguntado al remoto**. No se ocultan
   // del recuento —un cero es una respuesta— pero sí se dice por qué son cero,
   // que es distinto de que no haya pasado nada.
@@ -50,14 +56,23 @@
   // manda es el dato; esta lista es una predicción, y una predicción no pisa una
   // medida. Si sale uno que «no podía salir», el recuento se queda solo — que es
   // exactamente lo que hay que mirar ese día.
+  //
+  // Sólo de los finales que el servidor cuenta: de uno anterior a la 1.4.3 no
+  // se dice que «sin cambios vigilados» sea cero por no preguntar, porque ese
+  // servidor ni siquiera puede producirlo.
   const porNoPreguntar = $derived(
-    FINALES_DEL_LOTE.filter(
-      (f) =>
-        f.id !== 'skipped' &&
-        !posibles.includes(f.id) &&
-        ((resultado as unknown as Record<string, number> | null)?.[f.id] ?? 0) === 0,
-    ).map((f) => f.texto),
+    FINALES_DEL_LOTE.filter((f) => {
+      const n = (resultado as unknown as Record<string, number | undefined> | null)?.[f.id]
+      return f.id !== 'skipped' && !posibles.includes(f.id) && (f.base || n !== undefined) && (n ?? 0) === 0
+    }).map((f) => f.texto),
   )
+
+  // Las congeladas se saltan antes de nada, en las dos formas de la pasada, y
+  // eso se sabe ANTES de lanzar: lo dice `list --json`. Decirlo aquí evita que
+  // alguien lance cuarenta builds esperando que se despliegue una que no va a
+  // tocarse. `undefined` —un servidor anterior a la 1.4.3— no cuenta: no es
+  // «ninguna congelada», es que no se sabe congelar.
+  const congeladas = $derived(apps.filter((a) => a.state.locked === true))
 
   function dur(s: number): string {
     return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`
@@ -86,8 +101,12 @@
       <p class="matiz">
         En esta pasada {porNoPreguntar.length === 1 ? 'el recuento de' : 'los recuentos de'}
         <strong>{porNoPreguntar.join(', ')}</strong>
-        {porNoPreguntar.length === 1 ? 'es cero' : 'son cero'} porque no se le
-        preguntó a ningún remoto: se recompiló todo sin mirar si había cambiado.
+        {porNoPreguntar.length === 1 ? 'es cero' : 'son cero'}
+        {#if conPuertas}
+          porque no se preguntó si había cambiado: se recompiló todo sin mirarlo.
+        {:else}
+          porque no se le preguntó a ningún remoto: se recompiló todo sin mirar si había cambiado.
+        {/if}
       </p>
     {/if}
     {#if resultado.skipped === 0}
@@ -120,7 +139,7 @@
           <li>
             <span class="nombre">{a.app}</span>
             {#if a.final}
-              <span class="chip lote--{a.final}">{a.final}</span>
+              <span class="chip lote--{a.final}" title={a.final}>{textoDeFinal(a.final)}</span>
             {:else}
               <span class="haciendo">{a.paso ?? 'empezando'}</span>
             {/if}
@@ -163,6 +182,14 @@
       <code>list</code> no lo dice: puede que toque alguna menos de
       {candidatas}.
     </p>
+    {#if congeladas.length > 0}
+      <p class="ayuda congeladas">
+        <strong>{congeladas.length === 1 ? 'Una está congelada' : `${congeladas.length} están congeladas`}</strong>
+        y se saltará en las dos formas de la pasada:
+        {congeladas.map((a) => a.name).join(', ')}. Se levanta desde su detalle, o con
+        <code>orbit unlock</code>.
+      </p>
+    {/if}
 
     <div class="opcion">
       <button type="button" class="primaria" onclick={() => alLanzar(true)}>
@@ -197,11 +224,20 @@
           el repositorio —la versión de Node, un <code>.env</code> compartido, una
           librería del sistema— y no hay otra forma de decirlo.
         </p>
-        <p class="que">
-          Y no le pregunta a ningún remoto, así que <strong>sólo puede terminar
-          en «desplegadas» o «fallidas»</strong>: los otros cuatro finales salen
-          de preguntar.
-        </p>
+        {#if conPuertas}
+          <p class="que">
+            Y no pregunta si ha cambiado, así que <strong>nunca termina en «al
+            día»</strong>: ese final sale de preguntar. Sí puede terminar en
+            «congeladas», y —en las apps que esperan a la CI, que sí le preguntan
+            al remoto qué commit mirar— en «sin contacto» o en uno de los de la CI.
+          </p>
+        {:else}
+          <p class="que">
+            Y no le pregunta a ningún remoto, así que <strong>sólo puede terminar
+            en «desplegadas» o «fallidas»</strong>: los otros cuatro finales salen
+            de preguntar.
+          </p>
+        {/if}
       </div>
     </details>
   {/if}

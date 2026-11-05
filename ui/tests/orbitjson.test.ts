@@ -129,7 +129,24 @@ describe('no degradar un orbit.json que ya existía', () => {
       argumento: '48',
       secreta: true,
       descripcion: 'Clave de firma de la sesión',
+      // El formato de hasta la 1.3.7 no los tiene: no se inventan.
+      obligatoria: false,
+      porDefecto: null,
     })
+  })
+
+  it('lee también el formato de la 1.3.8, con obligatoria y por defecto', () => {
+    // Siete campos separados por US. Partirlo por tabuladores —lo que hacía la
+    // primera versión— metía la línea entera en `clave` y el fichero generado
+    // declaraba una variable llamada «DATABASE_URL\x1fprompt\x1f…».
+    const nuevo = [
+      ['DATABASE_URL', 'prompt', 'Postgres', 'secret', 'Postgres', 'required', ''].join('\x1f'),
+      ['MAIL_FROM', 'prompt', 'MAIL_FROM', 'plain', '', 'optional', 'web@ejemplo.com'].join('\x1f'),
+    ].join('\n')
+    const v = leerEspecificacion(nuevo)
+    expect(v.map((x) => x.clave)).toEqual(['DATABASE_URL', 'MAIL_FROM'])
+    expect(v[0]).toMatchObject({ obligatoria: true, secreta: true, porDefecto: null })
+    expect(v[1]).toMatchObject({ obligatoria: false, porDefecto: 'web@ejemplo.com' })
   })
 
   it('y la reproduce en vez de aplanarla a «prompt»', () => {

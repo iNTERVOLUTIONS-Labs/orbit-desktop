@@ -18,6 +18,15 @@
   import Desenlace from './componentes/Desenlace.svelte'
   import AsistenteNueva from './componentes/AsistenteNueva.svelte'
   import LoDetectado from './componentes/LoDetectado.svelte'
+  import DetalleApp from './componentes/DetalleApp.svelte'
+  import HojaDeDespliegue from './componentes/HojaDeDespliegue.svelte'
+  import lista14 from './lib/muestras/list-1.4.json'
+  import puertasMuestra from './lib/muestras/deploy-all-puertas.json'
+  import congeladaMuestra from './lib/muestras/deploy-congelada.json'
+  import faltanMuestra from './lib/muestras/deploy-faltan-variables.json'
+  import comprobacionMuestra from './lib/muestras/env-check.json'
+  import cronMuestra from './lib/muestras/cron.json'
+  import type { ComprobacionDeEntorno, Tareas } from './lib/contrato'
   import { borradorNuevo, clasificar, PASOS, type Borrador } from './lib/asistente'
   import type { AppInfo, Info } from './lib/contrato'
   import infoMuestra from './lib/muestras/info.json'
@@ -55,7 +64,12 @@
     ['caducado', e({ ssl: true, cert_days: -5 })],
     ['caduca pronto', e({ ssl: true, cert_days: 6 })],
     ['válido', e({ ssl: true, cert_days: 74 })],
+    ['origen de Cloudflare', e({ ssl: true, cert_days: 5400, cert_type: 'origin' })],
   ]
+
+  const APPS14 = (lista14 as Lista).apps
+  const app14 = (n: string): App => APPS14.find((a) => a.name === n)!
+  let hojaAbierta = $state(false)
 
   const LOG = leerLog(logCrudo)
   // El mismo diagnóstico, con y sin la capacidad de arreglar. Es la diferencia
@@ -325,7 +339,7 @@
     <code>ok</code>, <code>rolled_back</code> y <code>recovered</code>, y su
     combinación da cuatro finales que se ven distintos porque lo son.
   </p>
-  {#each [['Bien', OK], ['Al segundo intento', RECUPERADO], ['Falló y volvió atrás', REVERTIDO], ['Falló', ROTO]] as [titulo, r] (titulo)}
+  {#each [['Bien', OK], ['Al segundo intento', RECUPERADO], ['Falló y volvió atrás', REVERTIDO], ['Falló', ROTO], ['Congelada: no empezó', congeladaMuestra], ['Faltan variables: se paró antes del build', faltanMuestra]] as [titulo, r] (titulo)}
     <h3>{titulo}</h3>
     <div class="panel">
       <Despliegue app="tienda" servidor="vps-ovh" progreso={leerProgreso('')} resultado={r as Obj} />
@@ -493,6 +507,40 @@
       alCerrar={() => {}}
     />
   </div>
+
+  <h2>El lote de un 1.4.8, con las cinco puertas</h2>
+  <p class="nota">
+    Congelada, sin cambios vigilados, y los tres de la CI. Sólo se pintan si el
+    servidor los cuenta: en uno anterior a la 1.4.3 no son cero, no existen.
+  </p>
+  <div class="panel"><LoteVista lote={puertasMuestra as Lote} servidor="produccion" /></div>
+
+  <h2>Congelar, la CI, el certificado de origen y las tareas</h2>
+  <p class="nota">
+    La congelación es una faceta y no un estado: una congelada atiende igual.
+    Un `touch` a mano del testigo no dice quién, y no se inventa.
+  </p>
+  <div class="panel"><ListaApps apps={APPS14} servidor="produccion" /></div>
+  <div class="panel">
+    <DetalleApp app={app14('tienda')} servidor="produccion" tareas={cronMuestra as Tareas}
+      puedeCongelar puedeEsperarCi alCongelar={() => {}} alDescongelar={() => {}} alEsperarCi={() => {}} />
+  </div>
+  <div class="panel">
+    <DetalleApp app={app14('api')} servidor="produccion"
+      puedeCongelar puedeEsperarCi alCongelar={() => {}} alDescongelar={() => {}} alEsperarCi={() => {}} />
+  </div>
+
+  <h2>La hoja de un despliegue con variables que faltan</h2>
+  <p class="nota">
+    La obligatoria se pide antes de lanzar, y en la orden se ve la clave y nunca
+    el valor.
+  </p>
+  <button type="button" onclick={() => (hojaAbierta = true)}>Abrir la hoja</button>
+  {#if hojaAbierta}
+    <HojaDeDespliegue app={app14('tienda')} servidor="produccion"
+      comprobacion={comprobacionMuestra as ComprobacionDeEntorno} estadoComprobacion="hecho"
+      alConfirmar={() => (hojaAbierta = false)} alCancelar={() => (hojaAbierta = false)} />
+  {/if}
 
   <h2>El lote, con sus seis finales</h2>
   <p class="nota">

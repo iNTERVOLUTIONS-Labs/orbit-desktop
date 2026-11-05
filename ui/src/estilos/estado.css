@@ -87,6 +87,17 @@
 .lote--unreachable { --chip: var(--st-warn); }
 .lote--gone        { --chip: var(--st-error); }
 .lote--skipped     { --chip: var(--st-unknown); }
+/* Las cinco puertas de la 1.4.3. Ninguna es un fallo salvo la última, y por eso
+   ninguna toma el rojo de `failed` salvo la CI en rojo, que es literalmente
+   eso. Congelada y «sin cambios vigilados» son decisiones de alguien —neutras,
+   como «al día»—; esperando a la CI es «todavía no se sabe»; y la CI sin
+   respuesta toma el ámbar de «sin contacto», porque es lo mismo: no he podido
+   preguntar. Es la que pone `ok` a `false`. */
+.lote--locked      { --chip: var(--st-na); }
+.lote--ignored     { --chip: var(--st-na); }
+.lote--ci_pending  { --chip: var(--st-unknown); }
+.lote--ci_failed   { --chip: var(--st-error); }
+.lote--ci_unknown  { --chip: var(--st-warn); }
 
 /* Una fila cuyo nombre no pasa la regla de forma: llega del servidor y no se
    puede operar sobre ella. Se marca y no se «arregla»: un nombre arreglado ya
@@ -123,6 +134,12 @@
 /* Falló, pero la web sigue en pie — y eso es lo primero que se dice. */
 .final--revertido   { border-color: var(--st-warn); }
 .final--roto        { border-color: var(--st-error); }
+/* Los dos que no son fallos de nada. «Negado»: el servidor no empezó —la app
+   está congelada—, así que la web es la de antes POR DISEÑO; pintarlo de rojo
+   mandaría a buscar una avería que no existe. «Faltan»: se paró antes del build
+   esperando un valor; lo que hay que hacer es darlo, no mirar un log. */
+.final--negado      { border-color: var(--st-na); }
+.final--faltan      { border-color: var(--st-warn); }
 /* Por token y no anidado: una regla `.final--x .titular` y el `.titular` del
    <style> del componente tienen la misma especificidad, y ahí gana el
    componente. La variable hereda y no compite. */
@@ -130,6 +147,8 @@
 .final--recuperado { --titular: var(--st-warn); }
 .final--revertido  { --titular: var(--st-ok); }
 .final--roto       { --titular: var(--st-error); }
+.final--negado     { --titular: var(--fg); }
+.final--faltan     { --titular: var(--st-warn); }
 .paso--hecho    .glifo { color: var(--st-ok); }
 .paso--haciendo .glifo { color: var(--st-warn); }
 .paso--pendiente .glifo { color: var(--st-unknown); }
