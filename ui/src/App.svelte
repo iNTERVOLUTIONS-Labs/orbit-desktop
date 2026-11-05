@@ -539,7 +539,9 @@
         elegida = misma
         detalleApp = null
         tareasApp = null
-        if (misma) void verDetalle(misma)
+        // Sin cambiar de pestaña: si se está mirando el resultado de un
+        // despliegue, ahí se queda.
+        if (misma) void cargarDetalle(misma)
       }
     } catch (e) {
       if (t === turno && sigue(yo)) error = e as ErrorDelPuente
@@ -549,6 +551,10 @@
   /** El detalle de la app: `info` y sus tareas, a la vez y bajo demanda. */
   async function verDetalle(a: App) {
     pestana = 'detalle'
+    await cargarDetalle(a)
+  }
+
+  async function cargarDetalle(a: App) {
     const yo = alias
     if (detalleApp?.name === a.name && (tareasApp?.app === a.name || !sabe(versionActual, 'tareas'))) return
     const [d, t] = await Promise.all([
