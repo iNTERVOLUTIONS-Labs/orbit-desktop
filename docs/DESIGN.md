@@ -1123,7 +1123,7 @@ cumplen con margen.
   --border-strong: var(--o-slate-250);      /* bordes de control, 3,45:1 */
   --fg:            var(--o-ink-850);        /* 17,81:1 */
   --fg-muted:      #4A5878;                 /*  6,68:1 */
-  --fg-faint:      var(--o-slate-350);      /*  4,47:1 — sólo ≥16 px */
+  --fg-faint:      var(--o-slate-375);      /*  5,27:1; 4,95:1 sobre la superficie hundida */
   --accent:        var(--o-cyan-700);       /*  5,43:1 */
   --accent-text:   var(--o-cyan-800);       /*  7,95:1 */
   --accent-fill:   var(--o-cyan-700);
@@ -1133,8 +1133,8 @@ cumplen con margen.
   --st-ok:      var(--o-green-700);         /*  5,90:1 */
   --st-warn:    var(--o-amber-700);         /*  5,89:1 */
   --st-error:   var(--o-red-700);           /*  6,89:1 */
-  --st-unknown: var(--o-slate-350);         /*  4,47:1 */
-  --st-na:      var(--o-slate-350);
+  --st-unknown: var(--o-slate-375);         /*  4,78:1 dentro de su chip */
+  --st-na:      var(--o-slate-375);
   --on-solid:   var(--o-white);
   --shadow-1: 0 1px 2px rgba(11,16,32,.06), 0 1px 3px rgba(11,16,32,.08);
   --shadow-2: 0 4px 12px rgba(11,16,32,.10), 0 1px 3px rgba(11,16,32,.06);
@@ -1168,8 +1168,8 @@ cumplen con margen.
   --st-ok:      var(--o-green-400);          /* 11,03:1 */
   --st-warn:    var(--o-amber-400);          /* 10,44:1 */
   --st-error:   var(--o-red-400);            /*  7,46:1 */
-  --st-unknown: var(--o-slate-300);          /*  5,57:1 */
-  --st-na:      var(--o-slate-300);
+  --st-unknown: var(--o-slate-200);          /*  4,69:1 dentro de su chip */
+  --st-na:      var(--o-slate-200);
   --on-solid:   var(--o-ink-850);            /*  7,46:1 sobre el rojo */
   /* En oscuro la sombra casi no se ve: la elevación la hace la superficie. */
   --shadow-1: none;
@@ -1280,7 +1280,7 @@ eso.
 | `--st-ok` | `#4ADE9E` | 11,03 | 10,25 | 9,37 | AAA |
 | `--st-warn` | `#F5B544` | 10,44 | 9,70 | 8,86 | AAA |
 | `--st-error` | `#FF7A70` | 7,46 | 6,93 | 6,33 | AAA |
-| `--st-unknown` | `#7C8BB0` | 5,57 | 5,17 | 4,73 | AA cuerpo |
+| `--st-unknown` | `#8A9AC0` | 6,94 | 6,45 | 5,72 | AA cuerpo; 4,69 dentro de su chip |
 | violeta texto | `#9C90F4` | 6,95 | 6,46 | 5,90 | AA+ |
 | violeta marca | `#7C6CF0` | 4,74 | 4,41 | 4,03 | **descartado como texto** |
 | `#5A6B92` | | 3,56 | 3,31 | 3,03 | sólo no-texto |
@@ -1292,13 +1292,13 @@ eso.
 |---|---|---|---|---|
 | `--fg` | `#0B1020` | 17,81 | 18,93 | AAA |
 | `--fg-muted` | `#4A5878` | 6,68 | 7,10 | AAA |
-| `--fg-faint` | `#64729A` | 4,47 | 4,76 | AA sólo ≥16 px |
+| `--fg-faint` | `#58678E` | 5,27 | 5,61 | AA (4,95 sobre la superficie hundida `#EDF1F8`). Era `#64729A`: 4,20 sobre la hundida, por debajo del AA en el rail |
 | `--accent` | `#10707E` | 5,43 | 5,77 | AA |
 | `--accent-text` | `#0B5561` | 7,95 | 8,45 | AAA |
 | `--st-ok` | `#0E6E49` | 5,90 | 6,28 | AA+ |
 | `--st-warn` | `#8A5406` | 5,89 | 6,27 | AA+ |
 | `--st-error` | `#A32720` | 6,89 | 7,32 | AAA |
-| `--st-unknown` | `#64729A` | 4,47 | 4,76 | AA con reserva |
+| `--st-unknown`, `--st-na` | `#58678E` | 5,27 | 5,61 | AA, y 4,78 dentro de su chip tintado (era 4,10) |
 | violeta | `#4B3BC4` | 7,26 | 7,72 | AAA |
 | verde «obvio» | `#12885A` | 4,21 | 4,47 | **falla AA, descartado** |
 | ámbar «obvio» | `#A66508` | 4,40 | 4,68 | **falla AA, descartado** |

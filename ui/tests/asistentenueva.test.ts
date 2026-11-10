@@ -65,10 +65,16 @@ describe('los cinco pasos', () => {
     expect(botones.slice(1).every((x) => x.disabled)).toBe(true)
   })
 
-  it('«Siguiente» no se puede pulsar con el paso a medias', async () => {
+  it('«Siguiente» con el paso a medias no avanza: dice qué falta', async () => {
+    // Habilitado a propósito: uno deshabilitado no recibe el foco con el
+    // tabulador, y con el teclado ni se encontraba ni decía por qué.
     const { container } = montar('Origen')
     const siguiente = container.querySelector('.primaria') as HTMLButtonElement
-    expect(siguiente.disabled).toBe(true)
+    expect(siguiente.disabled).toBe(false)
+    siguiente.click()
+    await tick(); await tick()
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain('Origen')
+    expect(container.querySelector('.problema')).not.toBeNull()
   })
 
   it('y sí con el paso resuelto', () => {
@@ -76,9 +82,14 @@ describe('los cinco pasos', () => {
     expect((container.querySelector('.primaria') as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('el primer paso no se queja de lo que aún no se ha preguntado', () => {
+  it('el primer paso no se queja de lo que aún no se ha preguntado', async () => {
+    // Ni de lo de otros pasos ni, antes de tocar nada, de lo de éste: un
+    // formulario en rojo nada más abrirlo se lee como «esto está roto».
     const { container } = montar('Origen')
-    const p = container.querySelector('.problema')?.textContent ?? ''
+    expect(container.querySelector('.problema')).toBeNull()
+    ;(container.querySelector('.primaria') as HTMLButtonElement).click()
+    await tick(); await tick()
+    const p = [...container.querySelectorAll('.problema')].map((x) => x.textContent).join(' ')
     expect(p).toContain('repositorio')
     expect(p).not.toContain('dominio')
   })

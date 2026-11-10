@@ -15,22 +15,24 @@ on:
 jobs:
   escapado:
     # La pieza de la que depende que el nombre de una app no se convierta en un
-    # comando. Corre contra los cuatro shells a propósito: el shell de login del
-    # usuario remoto no lo elegimos nosotros, y el fallo que esta prueba encontró
-    # la primera vez que se ejecutó sólo se daba en zsh.
+    # comando. Corre contra cinco shells a propósito: el shell de login del
+    # usuario remoto no lo elegimos nosotros. El fallo que esta prueba encontró
+    # la primera vez que se ejecutó sólo se daba en zsh, y el de la 0.1.2 —una
+    # barra invertida dentro de comillas simples, que fish lee como escape y con
+    # la que se salía de ellas— sólo en fish.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Instalar los cuatro shells
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq dash zsh busybox
+      - name: Instalar los cinco shells
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq dash zsh busybox fish
 
-      - name: Modo estricto — ninguno de los cuatro puede faltar
+      - name: Modo estricto — ninguno de los cinco puede faltar
         # Una suite que se salta un shell y sale en verde es peor que una roja:
         # Orbit ya se comió esa lección con 'jq', 'rsync' y 'nginx', y por eso
         # existe su 'make test-strict'.
         run: |
-          for s in bash dash zsh busybox; do
+          for s in bash dash zsh busybox fish; do
             command -v "$s" >/dev/null || { echo "falta $s: la prueba no está completa"; exit 1; }
           done
 
@@ -76,8 +78,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Los cuatro shells, que la prueba de propiedad necesita
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq dash zsh busybox
+      - name: Los cinco shells, que la prueba de propiedad necesita
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq dash zsh busybox fish
 
       - name: Rust, el que ya trae el runner
         # Sin acción de terceros. La imagen de GitHub ya lleva rustup, así que
@@ -242,9 +244,15 @@ jobs:
         # Playwright no cubren todas las distribuciones —aquí se desarrolla en
         # una Ubuntu 26.04 donde no hay— así que el navegador se elige por
         # variable en los dos sitios.
+        #
+        # Con la galería: desde la 0.1.2 no entra en el build de la ventana
+        # —Tauri empaqueta todo `ui/dist`—, así que se compila aquí, después de
+        # medir el paquete para que su peso no cuente.
         env:
           CHROMIUM: /usr/bin/google-chrome
-        run: npx playwright test
+        run: |
+          npm run build:galeria
+          npx playwright test
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()

@@ -60,9 +60,16 @@ const escribir = (c: HTMLElement, id: string, v: string) => {
 }
 
 describe('añadir un servidor', () => {
-  it('no se puede guardar vacío', () => {
-    const { container } = montarAlta()
-    expect((container.querySelector('.primario') as HTMLButtonElement).disabled).toBe(true)
+  it('no se puede guardar vacío', async () => {
+    // El botón está habilitado —uno deshabilitado no se encuentra con el
+    // tabulador—, pero pulsarlo vacío no guarda: dice qué falta.
+    const { container, alGuardar } = montarAlta()
+    const b = container.querySelector('.primario') as HTMLButtonElement
+    expect(b.disabled).toBe(false)
+    b.click()
+    await Promise.resolve()
+    expect(alGuardar).not.toHaveBeenCalled()
+    expect(container.querySelectorAll('.mal').length).toBeGreaterThan(0)
   })
 
   it('con lo mínimo, sí', async () => {
@@ -81,13 +88,14 @@ describe('añadir un servidor', () => {
     // Es el accidente más caro de un cliente multiservidor: si el alias choca
     // con un Host del ~/.ssh/config, `ssh` resuelve el del fichero y la
     // aplicación enseña un servidor mientras habla con otro.
-    const { container } = montarAlta({ yaUsados: ['vps-ovh'] })
+    const { container, alGuardar } = montarAlta({ yaUsados: ['vps-ovh'] })
     escribir(container, 'ns-host', '203.0.113.10')
     escribir(container, 'ns-alias', 'vps-ovh')
     await Promise.resolve()
     const t = (container.textContent ?? '').replace(/\s+/g, ' ')
     expect(t).toContain('ssh usaría ése')
-    expect((container.querySelector('.primario') as HTMLButtonElement).disabled).toBe(true)
+    ;(container.querySelector('.primario') as HTMLButtonElement).click()
+    expect(alGuardar).not.toHaveBeenCalled()
   })
 
   it('el alias se propone a partir de la dirección', async () => {
@@ -173,7 +181,7 @@ describe('por dónde va la instalación', () => {
 const REQ = {
   git: true, root: true, sudo_sin_contrasena: false, ya_instalado: false,
   sistema: 'ubuntu-24.04', puede: true, impedimentos: [], avisos: [],
-  pasos: ['rm -rf /tmp/orbit-instalacion', 'git clone --depth 1 https://…/orbit.git /tmp/orbit-instalacion', 'cd /tmp/orbit-instalacion && sudo bash install.sh'],
+  pasos: ['d="$(mktemp -d)"', 'git clone --depth 1 https://…/orbit.git "$d/orbit"', 'cd "$d/orbit" && sudo bash install.sh'],
 }
 
 function montarInstalar(props: Record<string, unknown> = {}) {

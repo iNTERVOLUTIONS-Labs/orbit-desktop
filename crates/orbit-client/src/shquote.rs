@@ -14,8 +14,18 @@
 //!
 //! **La propiedad que sostiene todo:** para cualquier lista de cadenas,
 //! `argv → build → shell remoto → argv` es la identidad. Se comprueba contra
-//! `bash`, `dash`, `zsh` y `busybox ash`, porque **el shell de login del usuario
-//! remoto no lo elegimos nosotros**.
+//! `bash`, `dash`, `zsh`, `busybox ash` y `fish` (si está instalado), porque
+//! **el shell de login del usuario remoto no lo elegimos nosotros**.
+//!
+//! **`csh` y `tcsh` no están soportados.** Allí un salto de línea dentro de
+//! `'…'` no es texto: acaba la línea, la comilla queda sin cerrar («Unmatched
+//! '») y lo que venía detrás se lee como otra línea. Habría que escaparlo con
+//! `\` y de forma distinta que para el resto, y se descartó: ninguna
+//! distribución en la que se instala Orbit lo trae como shell de login por
+//! defecto, y
+//! soportarlo pediría un escapador por shell, que es justo lo que este módulo
+//! existe para no tener. Con uno de ellos como shell de login del usuario SSH,
+//! un argumento con salto de línea no está garantizado.
 //!
 //! **Y `printf %q` de bash no vale**, aunque sea lo primero que uno piensa:
 //! produce `$'\n'` para un salto de línea, que es sintaxis de bash y `dash` no
@@ -62,7 +72,18 @@ impl std::fmt::Display for ErrorEscapado {
 
 impl std::error::Error for ErrorEscapado {}
 
-/// Entrecomilla una cadena para un shell POSIX.
+/// Entrecomilla una cadena para el shell de login remoto.
+///
+/// **Ninguna barra invertida queda dentro de unas comillas simples.** En POSIX
+/// dentro de `'…'` no se interpreta nada, pero fish sí lee `\'` y `\\` como
+/// escapes ahí dentro: con la forma clásica `'\''`, la entrada `\'; id #`
+/// salía como `'\'\''; id #'` y fish ejecutaba `id`. Así que el texto se
+/// parte en tramos: lo que no es `'` ni `\` va entre comillas simples, y cada
+/// `'` y cada `\` va **fuera**, escapado con su barra (`\'`, `\\`), que
+/// sh, bash, dash, zsh, busybox y fish leen igual: un carácter literal.
+///
+/// Se descartó entrecomillar en dobles para fish: ahí dentro `$` expande en
+/// todos los shells, y habría que escapar distinto según quién lea.
 pub fn shquote(s: &str) -> Result<String, ErrorEscapado> {
     if s.contains('\0') {
         return Err(ErrorEscapado::ByteNulo);
@@ -73,19 +94,27 @@ pub fn shquote(s: &str) -> Result<String, ErrorEscapado> {
     if s.chars().all(es_seguro) {
         return Ok(s.to_string());
     }
-    // Comillas simples, y las internas se cierran, se escapan y se reabren.
-    // Dentro de comillas simples un shell POSIX no interpreta absolutamente
-    // nada, que es justo la propiedad que hace falta.
     let mut out = String::with_capacity(s.len() + 2);
-    out.push('\'');
+    let mut abierta = false;
     for c in s.chars() {
-        if c == '\'' {
-            out.push_str("'\\''");
+        if c == '\'' || c == '\\' {
+            if abierta {
+                out.push('\'');
+                abierta = false;
+            }
+            out.push('\\');
+            out.push(c);
         } else {
+            if !abierta {
+                out.push('\'');
+                abierta = true;
+            }
             out.push(c);
         }
     }
-    out.push('\'');
+    if abierta {
+        out.push('\'');
+    }
     Ok(out)
 }
 
@@ -130,6 +159,75 @@ mod tests {
     #[test]
     fn la_comilla_simple_se_cierra_y_se_reabre() {
         assert_eq!(shquote("a'b").unwrap(), r#"'a'\''b'"#);
+    }
+
+    #[test]
+    fn la_barra_invertida_va_fuera_de_las_comillas_por_fish() {
+        // fish lee `\'` y `\\` como escapes dentro de comillas simples: con la
+        // barra dentro, `\'; id #` cerraba la comilla y ejecutaba `id`.
+        assert_eq!(shquote(r"\'; id #").unwrap(), r"\\\''; id #'");
+        assert_eq!(shquote(r"a\\b").unwrap(), r"'a'\\\\'b'");
+        assert_eq!(shquote(r"abc\").unwrap(), r"'abc'\\");
+        assert_eq!(shquote(r"\").unwrap(), r"\\");
+        assert_eq!(shquote("'").unwrap(), r"\'");
+    }
+
+    /// Los tramos entre comillas simples de una salida de [`shquote`]. Fuera de
+    /// ellos sólo puede haber pares `\'` o `\\`.
+    fn tramos(q: &str) -> Result<Vec<String>, String> {
+        let mut dentro = Vec::new();
+        let mut cs = q.chars();
+        while let Some(c) = cs.next() {
+            match c {
+                '\'' => {
+                    let mut t = String::new();
+                    loop {
+                        match cs.next() {
+                            Some('\'') => break,
+                            Some(x) => t.push(x),
+                            None => return Err(format!("comilla sin cerrar en {q:?}")),
+                        }
+                    }
+                    dentro.push(t);
+                }
+                '\\' => match cs.next() {
+                    Some('\'') | Some('\\') => {}
+                    otro => return Err(format!("escape {otro:?} fuera de comillas en {q:?}")),
+                },
+                _ if es_seguro(c) => {}
+                _ => return Err(format!("{c:?} sin comillas en {q:?}")),
+            }
+        }
+        Ok(dentro)
+    }
+
+    #[test]
+    fn ninguna_barra_invertida_queda_dentro_de_comillas_simples() {
+        // Propiedad pura, sin shells: para entradas aleatorias del alfabeto
+        // que rompe escapados, ningún tramo entrecomillado lleva `\`, y fuera
+        // de comillas sólo hay caracteres seguros o `\'` y `\\`. Con eso fish
+        // no tiene nada que interpretar dentro de las comillas.
+        const ALFABETO: &[char] = &[
+            'a', 'Z', '9', ' ', '\t', '\n', '\'', '"', '\\', '$', '`', ';', '&', '|', '<', '>',
+            '(', ')', '*', '?', '~', '!', '#', '=', '-', '/', '.', 'ñ', '\u{202e}',
+        ];
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        for _ in 0..20_000 {
+            let mut s = String::new();
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            for i in 0..(x % 24) {
+                let k = (x.rotate_left(i as u32 * 5) % ALFABETO.len() as u64) as usize;
+                s.push(ALFABETO[k]);
+            }
+            let q = shquote(&s).unwrap();
+            let dentro = tramos(&q).unwrap_or_else(|e| panic!("{e}"));
+            assert!(
+                dentro.iter().all(|t| !t.contains('\\')),
+                "barra dentro de comillas: {s:?} → {q:?}"
+            );
+        }
     }
 
     #[test]

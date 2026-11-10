@@ -375,8 +375,8 @@ ssh -o ControlMaster=auto
     -o RequestTTY=no
     -o StrictHostKeyChecking=accept-new       # sólo tras el alta; en el alta, =yes
     -T
-    <alias>
-    -- /usr/local/bin/orbit --lang es --json list      # SEC-03: ruta absoluta, nunca por PATH
+    -- <alias>                                # el `--` va ANTES del destino: ver abajo
+    '/usr/local/bin/orbit' --lang es --json list      # SEC-03: ruta absoluta, nunca por PATH
 ```
 
 Tres de esas opciones son de la ronda 2 y vienen de las reglas duras del informe de QA:
@@ -417,7 +417,11 @@ Justificación opción por opción, porque cada una tapa un modo de fallo concre
   de tres minutos sobre una red inestable falle con un error en vez de quedarse eternamente.
 - **`-T`**. Nunca se pide TTY. Es lo que garantiza que `orbit` vea `[[ -t 1 ]]` falso y no pinte
   colores, animaciones ni fotogramas. La única excepción es la terminal embebida de `exec` (§3.6).
-- **`--`**. Fin de opciones antes de la orden.
+- **`--`**. Fin de opciones, **antes del destino** y no detrás. Puesto detrás no protege lo que
+  importa: un alias que empiece por guion —`-oProxyCommand=…`, llegado de la interfaz— lo lee `ssh`
+  como una opción, y `ProxyCommand` es ejecutar una orden local. Con el `--` delante es un nombre
+  de host y nada más. La implementación estuvo un tiempo sin él; ahora lo pone
+  `Servidor::orden_ssh`, el único sitio que construye la invocación.
 
 **El alta de un servidor** es el único momento donde la política es distinta: se ejecuta
 `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes <alias> true` y, si falla con
@@ -612,8 +616,20 @@ factor dice qué se está tolerando.
 | `doctor` | 1,42 s | **120 s** | ×85 | **40 `dig` contra un DNS que no contesta.** El primero de los tres intentos tardó 4,1 s con NXDOMAIN rápido; con un resolutor que agota su timeout son 5 s × 40 = 200 s en el peor caso, así que 120 s es un compromiso y el cliente lo dice al cancelar |
 | `traffic` | 2,0 s **con logs vacíos** | **300 s** | — | Descomprime hasta 15 ficheros rotados. El coste **no** depende de las apps sino de los bytes de log, y no se puede acotar por medida: 14 días de una web con tráfico son cientos de MB |
 | `top` | 2,1 s | 30 s | ×14 | Y el muestreo adaptativo de §5.4 lo protege por debajo |
-| Mutación corta (`restart`, `port`, `maintenance`, `env set`, `rollback`) | — | 60 s | — | `systemctl restart` + `health_wait` (hasta 30 s en `cmd_port`, línea 10927) |
-| `deploy`, `deploy --all`, `new`, `ssl`, `restore`, `backup` | — | **sin total** | — | Sólo *watchdog* de inactividad |
+| Mutación sobre una app (`rollback`, `remove [-y --purge]`, `lock`, `unlock`, `autodeploy checks`, `doctor --fix`) | — | **1.200 s** | — | El cerrojo por app: `rollback` espera hasta `DEPLOY_LOCK_WAIT` = 900 s a que termine un despliegue en curso, y +300 s para hacer lo suyo |
+| `exec` | — | 3.600 s | — | Una migración larga |
+| `deploy`, `new` | — | 3.600 s | — | Un build grande de un monorepo |
+| `deploy --all` | — | **6 h** | — | Su propio tope: cuarenta builds en serie no caben en el de uno solo |
+
+**Lo que se aprendió con la ronda adversa de la 0.1.2, y por qué la tabla cambió.** Las
+mutaciones caían en el plazo por defecto de 30 s. Pero cortar el `ssh` local con `-T` **no para la
+orden en el servidor**: un `rollback` esperando al cerrojo seguía allí y, cuando terminaba el
+despliegue en curso, revertía la release recién puesta, mientras la ventana decía «no ha
+contestado». Desde entonces el plazo de una mutación es más largo que el cerrojo que puede tener
+delante, y **si aun así vence, el mensaje dice que no se sabe cómo ha quedado** —puede terminar
+igualmente— en vez de dar a entender que no ha pasado nada. Y pasado el tope de 4 MB la salida se
+sigue leyendo y se descarta con una marca, en vez de cerrar la tubería: cerrarla mataba con
+`SIGPIPE` lo que estuviera corriendo al otro lado.
 
 **El *watchdog* de inactividad para lo largo, y por qué es la forma correcta.** No acota cuánto
 puede tardar: acota **cuánto puede estar callado**. 10 minutos sin un solo byte por ninguna de las

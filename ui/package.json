@@ -1,7 +1,7 @@
 {
   "name": "orbit-desktop-ui",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2-rc.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
-    "test:visual": "playwright test"
+    "test:visual": "playwright test",
+    "build:galeria": "vite build --mode galeria"
   },
   "devDependencies": {
     "@playwright/test": "1.56.1",

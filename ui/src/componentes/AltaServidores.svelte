@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { AliasSsh, ServidorPropio } from '../lib/puente'
   import type { Saludo } from '../lib/contrato'
+  import { consejoSsh } from '../lib/consejos'
 
   let {
     alias,
@@ -46,6 +47,9 @@
       titulo: 'Falta poder elevarse',
       que: 'Ese usuario necesita contraseña para sudo, y aquí no hay terminal donde escribirla. Entra como root, o dale sudo sin contraseña para /usr/local/bin/orbit.',
     },
+    // Sin frase fija: la dice `consejoSsh`, que lee lo que contestó ssh. Una
+    // frase fija aquí era el callejón de la primera pantalla: «No se llega» y
+    // el stderr en inglés, sin ningún paso siguiente.
     'no-se-llega': { titulo: 'No se llega', que: '' },
     'clave-de-host-cambiada': {
       titulo: 'La clave ha cambiado',
@@ -119,7 +123,11 @@
           </span>
         </div>
 
-        <div class="veredicto">
+        <!-- Una región viva por fila, que existe desde el principio: lo que
+             cambia es su texto, y así «comprobar» se oye al terminar sin tener
+             que ir a buscarlo. Atómica, para que diga también de quién es. -->
+        <div class="veredicto" role="status" aria-atomic="true">
+          <span class="sr">{f.alias}:</span>
           {#if comprobando === f.alias}
             <span class="tenue"><span class="giro" aria-hidden="true"></span> preguntando…</span>
           {:else if s === undefined}
@@ -133,21 +141,39 @@
         </div>
 
         <div class="acciones">
-          <button type="button" onclick={() => alComprobar(f.alias)}>comprobar</button>
+          <!-- Con nombre propio: en una lista de servidores, diez botones que se
+               anuncian «comprobar» son diez botones iguales. -->
+          <button type="button" aria-label="Comprobar {f.alias}" onclick={() => alComprobar(f.alias)}>comprobar</button>
           {#if s?.puede_leer}
-            <button type="button" class="usar" onclick={() => alUsar(f.alias)}>abrir</button>
+            <button type="button" class="usar" aria-label="Abrir {f.alias}" onclick={() => alUsar(f.alias)}>abrir</button>
           {/if}
           {#if f.fuente === 'propio'}
-            <button type="button" onclick={() => alOlvidar(f.alias)}>quitar</button>
+            <button type="button" aria-label="Quitar {f.alias}" onclick={() => alOlvidar(f.alias)}>quitar</button>
           {/if}
         </div>
 
         {#if s && s.clase !== 'ok'}
           <div class="detalle">
-            <p>
-              {TEXTO[s.clase]?.que}
-              {#if s.motivo}<span class="motivo">{s.motivo}</span>{/if}
-            </p>
+            {#if s.clase === 'no-se-llega'}
+              {@const c = consejoSsh(s.motivo ?? '', f.alias)}
+              <p>{c.que}</p>
+              <p class="hacer">{c.hacer}</p>
+            {:else}
+              <p>{TEXTO[s.clase]?.que}</p>
+            {/if}
+            {#if s.motivo}
+              {#if s.clase === 'no-se-llega' || s.clase === 'clave-de-host-cambiada'}
+                <!-- Lo que dijo ssh, plegado y tal cual: en inglés y con su
+                     jerga, pero es lo que alguien pegará en un buscador o en
+                     un issue. Es texto, nunca marcado. -->
+                <details class="crudo">
+                  <summary>Lo que dijo ssh</summary>
+                  <pre class="motivo">{s.motivo}</pre>
+                </details>
+              {:else}
+                <p class="motivo">Detalle: {s.motivo}</p>
+              {/if}
+            {/if}
             {#if s.clase === 'no-instalado' || s.clase === 'sin-contrato'}
               <!--
                 Antes aquí había un comando para copiar y una explicación de por
@@ -200,12 +226,14 @@
   }
 
   .cabecera {
-    display: flex; align-items: start; justify-content: space-between;
+    display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between;
     gap: var(--e-4); margin-bottom: var(--e-4);
   }
   .intro { margin: 0; font-size: 13px; color: var(--fg-muted); max-width: 68ch; }
 
-  .lista { list-style: none; margin: 0; padding: 0; }
+  /* Por contenedor y no por ventana: esta lista vive dentro de un panel cuyo
+     ancho decide App, y lo que importa es el sitio que le queda a ella. */
+  .lista { list-style: none; margin: 0; padding: 0; container-type: inline-size; }
   .fila {
     display: grid; grid-template-columns: 1fr auto auto;
     gap: var(--e-3); align-items: center;
@@ -220,10 +248,17 @@
     to { opacity: 1; transform: none; }
   }
 
+  @container (max-width: 30rem) {
+    .fila { grid-template-columns: 1fr; }
+    .veredicto { align-items: flex-start; }
+    .acciones { flex-wrap: wrap; }
+  }
+
   .quien { min-width: 0; }
   .alias { display: block; font-size: 14px; color: var(--fg); font-weight: 600; }
   .donde {
     display: block; font-family: var(--mono); font-size: 11px; color: var(--fg-faint);
+    overflow-wrap: anywhere;
   }
   .marca {
     font-family: var(--fuente); margin-left: var(--e-2);
@@ -253,7 +288,17 @@
     animation: entra-fila var(--t-normal) var(--e-entrada);
   }
   .detalle p { margin: 0; font-size: 12px; color: var(--fg-muted); max-width: 72ch; }
-  .motivo { display: block; font-family: var(--mono); margin-top: 2px; color: var(--fg-faint); }
+  .detalle .hacer { color: var(--fg); }
+  .motivo { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); overflow-wrap: anywhere; }
+  .crudo { font-size: 12px; color: var(--fg-muted); max-width: 72ch; }
+  .crudo summary { cursor: pointer; width: fit-content; }
+  .crudo summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  pre.motivo {
+    margin: var(--e-2) 0 0; padding: var(--e-2) var(--e-3);
+    background: var(--surface-sunken); border-radius: var(--r-1);
+    white-space: pre-wrap;
+  }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
   .primario {
     background: var(--accent-fill); color: var(--on-accent); border: 0;

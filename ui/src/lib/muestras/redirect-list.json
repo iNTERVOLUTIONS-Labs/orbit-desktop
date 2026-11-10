@@ -1,0 +1,1 @@
+{"schema":1,"redirects":[{"app":"viejo","kind":"domain","from":"viejo","to":"https://tienda.ejemplo.com","code":301,"query":true},{"app":"tienda","kind":"path","from":"/ofertas","to":"/black-friday","code":302,"query":false}]}

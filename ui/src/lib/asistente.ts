@@ -19,7 +19,7 @@
 // idioma del servidor**: analizar la prosa sería atarse a unas frases que pueden
 // cambiar en cualquier versión.
 
-import type { AppInfo } from './contrato'
+import { marcarInvisibles, proceso, type AppInfo } from './contrato'
 
 export type Final = 'F1' | 'F2' | 'F3' | 'F4' | 'F5' | 'F6' | 'F7'
 
@@ -98,7 +98,24 @@ export function clasificar(
     }
   }
 
-  if (s.service !== null && s.service !== 'active') {
+  // Por la misma tabla que la lista y el detalle, no comparando aquí con una
+  // palabra: la primera versión miraba `'active'` —la de systemd— y Orbit
+  // escribe `running`, así que toda web sana con proceso salía F4.
+  const p = proceso(s.service)
+  if (p === 'desconocido') {
+    // Ni en pie ni caído: systemd ha dicho algo que no esperamos. Se dice que
+    // no se sabe en vez de dar por buena o por rota una web.
+    return {
+      final: 'F4',
+      tono: 'atencion',
+      titulo: 'Publicada, pero no sé si el proceso está en pie',
+      existe: `La release está publicada y nginx tiene su vhost.`,
+      falta: `Saber cómo está el proceso: el servidor dice «${marcarInvisibles(s.service ?? '')}», que no es ni en marcha ni parado. El log lo aclara.`,
+      deshacer: `Nada que deshacer todavía: primero hay que saber qué le pasa.`,
+      accion: { texto: 'Ver el log', orden: `orbit logs ${app}` },
+    }
+  }
+  if (p === 'parado') {
     return {
       final: 'F4',
       tono: 'error',
@@ -485,7 +502,9 @@ const CAMPOS: [string, string][] = [
 ]
 
 export function loDetectado(config: Record<string, string>): Detectado[] {
-  return CAMPOS.filter(([k]) => k in config).map(([k, etiqueta]) => ({
+  // `hasOwn` y no `in`: las claves las escribe el servidor, y `in` también
+  // contesta que sí a lo que hereda cualquier objeto.
+  return CAMPOS.filter(([k]) => Object.hasOwn(config, k)).map(([k, etiqueta]) => ({
     campo: etiqueta,
     valor: config[k] ?? '',
     vacio: (config[k] ?? '') === '',

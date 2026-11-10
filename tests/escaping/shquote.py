@@ -2,9 +2,13 @@
 #
 # La propiedad que tiene que sostener: para cualquier lista de cadenas,
 #   argv  ->  build(argv)  ->  shell remoto  ->  argv
-# es la identidad. Se comprueba con prop_test.py contra bash, dash, zsh y
-# busybox ash, porque el shell de login del usuario remoto no lo elegimos
-# nosotros.
+# es la identidad. Se comprueba con prop_test.py contra bash, dash, zsh,
+# busybox ash y fish (si está instalado), porque el shell de login del usuario
+# remoto no lo elegimos nosotros.
+#
+# csh y tcsh NO están soportados: allí un salto de línea dentro de '...' acaba
+# la línea y lo que sigue se lee como otra. Ver el porqué en
+# crates/orbit-client/src/shquote.rs.
 #
 # El conjunto "seguro" es deliberadamente estrecho, y esa estrechez costó un
 # fallo real: con '=' dentro del conjunto, zsh expande las palabras que
@@ -26,7 +30,7 @@ _SAFE = frozenset(
 
 
 def shquote(s):
-    """Entrecomilla una cadena para un shell POSIX."""
+    """Entrecomilla una cadena para el shell de login remoto."""
     if not isinstance(s, str):
         raise TypeError("shquote espera str")
     if "\x00" in s:
@@ -37,7 +41,25 @@ def shquote(s):
         return "''"
     if all(c in _SAFE for c in s):
         return s
-    return "'" + s.replace("'", "'\\''") + "'"
+    # Ninguna barra invertida dentro de comillas simples: fish lee \' y \\
+    # como escapes ahí dentro, y con la forma clásica '\'' la entrada
+    # "\'; id #" ejecutaba `id`. Cada ' y cada \ va fuera, con su barra, que
+    # todos los shells probados leen como el carácter literal.
+    out, abierta = [], False
+    for c in s:
+        if c in "'\\":
+            if abierta:
+                out.append("'")
+                abierta = False
+            out.append("\\" + c)
+        else:
+            if not abierta:
+                out.append("'")
+                abierta = True
+            out.append(c)
+    if abierta:
+        out.append("'")
+    return "".join(out)
 
 
 def build(argv):

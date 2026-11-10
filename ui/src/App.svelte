@@ -11,6 +11,7 @@
   import HojaDeDespliegue from './componentes/HojaDeDespliegue.svelte'
   import AvisoDeCierre from './componentes/AvisoDeCierre.svelte'
   import * as vivos from './lib/vivos.svelte'
+  import * as historial from './lib/historial.svelte'
   import EntornoVista from './componentes/Entorno.svelte'
   import MonitorVista from './componentes/MonitorVista.svelte'
   import TraficoVista from './componentes/TraficoVista.svelte'
@@ -27,13 +28,22 @@
   import OrbitJson from './componentes/OrbitJson.svelte'
   import LoDetectado from './componentes/LoDetectado.svelte'
   import Desenlace from './componentes/Desenlace.svelte'
+  import ServidorVista from './componentes/ServidorVista.svelte'
+  import Paleta from './componentes/Paleta.svelte'
+  import Frontera from './componentes/Frontera.svelte'
+  import Consola from './componentes/Consola.svelte'
+  import { Salida } from './lib/consola'
+  import type { Accion } from './lib/paleta'
+  import { devolverFoco } from './lib/foco'
   import { clasificar, type Borrador, type Desenlace as Final } from './lib/asistente'
   import {
     argvDeCongelar, argvDeDescongelar, argvDeEsperarCi, ordenLegible, periodoDelMonitor,
+    chocaConPalabraDeOrbit,
     type VariableNueva,
   } from './lib/despliegue'
   import {
-    sabe,
+    sabe, seQuedaCorto, nombreOperable,
+    type Host, type ServicioDelHost,
     type App, type AppInfo, type ComprobacionDeEntorno, type Doctor, type Entorno, type Log,
     type Lote, type Metricas, type Monitor, type Saludo, type Tareas, type Trafico,
   } from './lib/contrato'
@@ -55,13 +65,25 @@
   let alias = $state('')
   let apps = $state<App[] | null>(null)
   let error = $state<ErrorDelPuente | null>(null)
+  // El error de la PORTADA, y sólo de ella. Lo de cada vista, cada pestaña y
+  // cada flujo va aparte: la primera versión lo metía todo aquí, y un `top` que
+  // fallaba una vez cambiaba la lista entera por una pantalla de fallo hasta
+  // cambiar de servidor, mientras la pestaña que había fallado se quedaba con
+  // su esqueleto para siempre. Y los fallos de crear una web o de la pasada se
+  // guardaban aquí y no se pintaban en ningún sitio.
+  let errorVista = $state<ErrorDelPuente | null>(null)
+  let errorPestana = $state<ErrorDelPuente | null>(null)
+  let errorFlujo = $state<ErrorDelPuente | null>(null)
   let cargando = $state(false)
   let elegida = $state<App | null>(null)
 
   // Qué se está mirando del servidor. Las apps son la portada y lo demás se
   // pide al entrar, no antes: abrir una pantalla no puede significar cuatro
   // llamadas SSH de las que tres no se van a mirar.
-  let vista = $state<'apps' | 'diagnostico' | 'monitor'>('apps')
+  let vista = $state<'apps' | 'diagnostico' | 'monitor' | 'servidor'>('apps')
+  // El host y sus servicios: llegan con la portada, en la misma llamada.
+  let host = $state<Host | null>(null)
+  let servicios = $state<ServicioDelHost[] | null>(null)
   let doctor = $state<Doctor | null>(null)
   let arreglando = $state(false)
 
@@ -129,13 +151,25 @@
   // ~/.ssh/config, así que un servidor añadido a mano se podía usar desde el
   // alta pero no aparecía en el rail: no había forma de volver a él, ni de ver
   // que era el activo, ni su contador de despliegues en curso.
-  const enElRail = $derived<AliasSsh[]>([
-    ...servidores,
-    ...propios.map((p) => ({
-      alias: p.alias, hostname: p.host, usuario: p.usuario, puerto: p.puerto,
-      salto: null, identidad: p.clave,
-    })),
-  ])
+  // Sin repetidos: un alias guardado a mano y luego añadido también al
+  // ~/.ssh/config salía dos veces, y la lista entera se caía por la clave
+  // repetida. Gana el guardado, que es el que usa el núcleo al conectar.
+  const enElRail = $derived.by<AliasSsh[]>(() => {
+    const vistos = new Set<string>()
+    const r: AliasSsh[] = []
+    for (const s of [
+      ...propios.map((p) => ({
+        alias: p.alias, hostname: p.host, usuario: p.usuario, puerto: p.puerto,
+        salto: null, identidad: p.clave,
+      })),
+      ...servidores,
+    ]) {
+      if (vistos.has(s.alias)) continue
+      vistos.add(s.alias)
+      r.push(s)
+    }
+    return r
+  })
 
   const aliasOcupados = $derived([
     ...servidores.map((s) => s.alias),
@@ -186,13 +220,40 @@
       propios = await olvidarServidor(a)
       delete saludos[a]
     } catch (e) {
-      error = e as ErrorDelPuente
+      errorFlujo = e as ErrorDelPuente
     }
   }
 
   /** Mira qué hay antes de instalar nada. */
+  /**
+   * Escucha el progreso de una clave (`servidor:app`).
+   *
+   * El núcleo manda las líneas **por tandas** —`[clave, líneas]`, cada 50 ms
+   * como mucho—: una por evento eran treinta mil despachos en un build largo.
+   * Se acepta también una línea suelta, la forma anterior.
+   *
+   * Si no se puede escuchar, la orden se lanza igual y sólo se pierde la
+   * salida en vivo. La primera versión hacía el `listen` antes del `try`, y
+   * sin el permiso de eventos en las capacidades de Tauri tiraba la pantalla
+   * entera: crear una web o instalar Orbit no llegaba a empezar.
+   */
+  async function escucharProgreso(clave: string, alLlegar: (lineas: string[]) => void): Promise<(() => void) | null> {
+    if (!hayPuente()) return null
+    try {
+      const { listen } = await import('@tauri-apps/api/event')
+      return await listen<[string, string[] | string]>('orbit://progreso', (e) => {
+        const [k, l] = e.payload
+        if (k === clave) alLlegar(Array.isArray(l) ? l : [l])
+      })
+    } catch (e) {
+      console.warn('sin salida en vivo para', clave, e)
+      return null
+    }
+  }
+
   async function abrirInstalacion(a: string) {
     instalandoEn = a
+    errorFlujo = null
     requisitos = null
     resultadoInstalacion = null
     salidaInstalacion = ''
@@ -200,7 +261,7 @@
     try {
       requisitos = await requisitosDeInstalacion(a)
     } catch (e) {
-      error = e as ErrorDelPuente
+      errorFlujo = e as ErrorDelPuente
       instalandoEn = null
     } finally {
       mirandoRequisitos = false
@@ -213,15 +274,9 @@
     instalando = true
     salidaInstalacion = ''
     resultadoInstalacion = null
-
-    if (hayPuente()) {
-      const { listen } = await import('@tauri-apps/api/event')
-      const clave = `${a}:!instalar`
-      paraDeEscucharInstalacion = await listen<[string, string]>('orbit://progreso', (e) => {
-        const [k, linea] = e.payload
-        if (k === clave) salidaInstalacion += linea + '\n'
-      })
-    }
+    paraDeEscucharInstalacion = await escucharProgreso(`${a}:!instalar`, (ls) => {
+      salidaInstalacion += ls.join('\n') + '\n'
+    })
 
     try {
       resultadoInstalacion = await instalarOrbit(a)
@@ -231,7 +286,7 @@
       delete versiones[a]
       if (resultadoInstalacion.version) void comprobar(a)
     } catch (e) {
-      error = e as ErrorDelPuente
+      errorFlujo = e as ErrorDelPuente
     } finally {
       paraDeEscucharInstalacion?.()
       paraDeEscucharInstalacion = null
@@ -240,6 +295,7 @@
   }
 
   function cerrarInstalacion() {
+    errorFlujo = null
     instalandoEn = null
     requisitos = null
     resultadoInstalacion = null
@@ -247,6 +303,9 @@
     instalando = false
     paraDeEscucharInstalacion?.()
     paraDeEscucharInstalacion = null
+
+    // Al cerrar una vista, el foco va a su título y no se queda en <body>.
+    devolverFoco(null)
   }
 
   // El asistente de web nueva. Vive aquí y no dentro de una pestaña de app
@@ -257,7 +316,9 @@
   // Las líneas tal como llegan. `orbit new` no tiene `--json`, así que esto es
   // prosa y se enseña como prosa: fingir una barra de progreso a partir de un
   // texto que no la lleva sería inventarse el avance.
-  let salidaNueva = $state<string[]>([])
+  // Fuera de `$state`: la consola se entera sola de lo que llega, y meter
+  // treinta mil líneas en un arreglo reactivo era copiarlo en cada una.
+  const salidaNueva = new Salida()
   let finalNueva = $state<Final | null>(null)
   let configNueva = $state<Record<string, string> | null>(null)
   let nombreNueva = $state('')
@@ -265,18 +326,25 @@
   let resolviendoDns = $state(false)
   let paraDeEscuchar: (() => void) | null = null
 
+  // Cada consulta lleva su turno: se lanza al salir del campo y al cambiar de
+  // paso, y la respuesta de un dominio anterior que llegara tarde decidía el
+  // veredicto del DNS del que se está creando.
+  let turnoDns = 0
   async function comprobarDns(dominio: string) {
+    const t = ++turnoDns
     resolviendoDns = true
     dns = null
+    let r: Resolucion
     try {
-      dns = await resolver(dominio, alias)
+      r = await resolver(dominio, alias)
     } catch {
       // Que no se pueda resolver no es un error de la pantalla: es una de las
       // respuestas posibles, y la pinta el propio asistente como «no lo sé».
-      dns = { del_dominio: [], del_servidor: [], coinciden: null }
-    } finally {
-      resolviendoDns = false
+      r = { del_dominio: [], del_servidor: [], coinciden: null }
     }
+    if (t !== turnoDns) return
+    dns = r
+    resolviendoDns = false
   }
 
   /**
@@ -288,32 +356,35 @@
    * contrato, y de ahí sale el final — que son siete, y cinco parciales.
    */
   async function crearWeb(b: Borrador) {
+    // El servidor se fija AQUÍ y se usa ése hasta el final. La primera versión
+    // leía `alias` después de cada `await`: si alguien cambiaba de servidor a
+    // mitad, la web se creaba en uno y luego se le preguntaba por ella al
+    // otro, que contestaba «no existe» —el final F6, «no se ha creado nada»—
+    // e invitaba a crearla otra vez.
+    const yo = alias
+    const nombre = b.nombre.trim()
     creando = true
-    salidaNueva = []
+    errorFlujo = null
+    salidaNueva.vaciar()
     finalNueva = null
     configNueva = null
-    nombreNueva = b.nombre.trim()
+    nombreNueva = nombre
 
     // La prosa llega por el mismo canal que el progreso de un despliegue, con
-    // la clave `alias:nombre`.
-    if (hayPuente()) {
-      const { listen } = await import('@tauri-apps/api/event')
-      const clave = `${alias}:${nombreNueva}`
-      paraDeEscuchar = await listen<[string, string]>('orbit://progreso', (e) => {
-        const [k, linea] = e.payload
-        if (k === clave) salidaNueva = [...salidaNueva, linea]
-      })
-    }
+    // la clave `alias:nombre`. Se añade sin copiar el arreglo entero: cada
+    // línea lo copiaba y lo volvía a unir, y 30.000 líneas eran 12 s.
+    paraDeEscuchar = await escucharProgreso(`${yo}:${nombre}`, (ls) => {
+      salidaNueva.anotarVarias(ls)
+    })
 
     try {
-      await crear(alias, b)
+      await crear(yo, b)
     } catch (e) {
       // Aquí sólo llegan los fallos de transporte: no haber llegado al
       // servidor, o que la clave de host haya cambiado. Un `new` que termina
       // regular NO pasa por aquí, porque su código de salida no es informativo.
-      error = e as ErrorDelPuente
+      errorFlujo = e as ErrorDelPuente
       creando = false
-      paraDeEscuchar?.()
       return
     } finally {
       paraDeEscuchar?.()
@@ -321,17 +392,18 @@
     }
 
     try {
-      const d = await pedirDetalle(alias, nombreNueva)
+      const d = await pedirDetalle(yo, nombre)
       configNueva = d.config
-      finalNueva = clasificar(nombreNueva, d, dns?.coinciden ?? null)
+      finalNueva = clasificar(nombre, d, dns?.coinciden ?? null)
     } catch {
       // Que `info` no encuentre la app es el final F6, y es un dato, no un
       // fallo de la pantalla: quiere decir que no ha llegado a crearse nada.
-      finalNueva = clasificar(nombreNueva, null)
+      finalNueva = clasificar(nombre, null)
     }
     creando = false
+    anunciar(`Nueva web ${nombre} en ${yo}: ${finalNueva.titulo}.`)
     // La portada ya no dice la verdad: hay una app más, o no la hay.
-    await cargar(alias)
+    if (sigue(yo)) await cargar(yo)
   }
 
   // La pasada por todas las apps. Vive aquí, al lado del asistente, porque las
@@ -340,7 +412,10 @@
   let enPasada = $state(false)
   let pasando = $state(false)
   let modoPasada = $state<'si-cambia' | 'todo' | null>(null)
-  let crudoPasada = $state('')
+  // Leída línea a línea y una sola vez: la primera versión acumulaba el texto
+  // y la pantalla lo volvía a leer entero con cada evento (18 s de CPU en una
+  // pasada de 40 apps).
+  const pasadaViva = new vivos.PasadaEnVivo()
   let lote = $state<Lote | null>(null)
   let paraDeEscucharPasada: (() => void) | null = null
 
@@ -352,40 +427,45 @@
    * desde la pantalla como una elección explícita entre dos botones y nunca con
    * un valor por defecto.
    */
+  // El servidor de la pasada en curso. Parar tiene que ir a ÉSE: la primera
+  // versión cancelaba `alias:*` del servidor que se estuviera mirando, y tras
+  // cambiar de servidor la pasada ya no se podía parar.
+  let pasadaEn = $state('')
+
   async function lanzarPasada(soloSiCambia: boolean) {
+    const yo = alias
+    pasadaEn = yo
     pasando = true
+    errorFlujo = null
     modoPasada = soloSiCambia ? 'si-cambia' : 'todo'
-    crudoPasada = ''
+    pasadaViva.vaciar()
     lote = null
 
     // Misma clave que usa el envoltorio: `alias:*`. El asterisco no puede ser
     // el nombre de ninguna app —la regla del servidor empieza por [a-z0-9]— así
     // que no puede chocar con la clave de un despliegue suelto.
-    if (hayPuente()) {
-      const { listen } = await import('@tauri-apps/api/event')
-      const clave = `${alias}:*`
-      paraDeEscucharPasada = await listen<[string, string]>('orbit://progreso', (e) => {
-        const [k, linea] = e.payload
-        if (k === clave) crudoPasada += linea + '\n'
-      })
-    }
+    paraDeEscucharPasada = await escucharProgreso(`${yo}:*`, (ls) => {
+      pasadaViva.anotar(ls)
+    })
 
     try {
-      lote = await desplegarTodo(alias, soloSiCambia)
+      lote = await desplegarTodo(yo, soloSiCambia)
+      anunciar(`Desplegar todo en ${yo}: terminado.`)
     } catch (e) {
-      error = e as ErrorDelPuente
+      errorFlujo = e as ErrorDelPuente
+      anunciar(`Desplegar todo en ${yo}: ha fallado.`)
     } finally {
       paraDeEscucharPasada?.()
       paraDeEscucharPasada = null
       pasando = false
     }
     // La portada ya no dice la verdad: hay releases nuevas y estados nuevos.
-    if (!error) await cargar(alias)
+    if (!errorFlujo && sigue(yo)) await refrescar()
   }
 
   function pararPasada() {
     // El asterisco otra vez: es la app con la que se registró en `Vivos`.
-    void cancelar(alias, '*')
+    if (pasadaEn) void cancelar(pasadaEn, '*')
   }
 
   // Comparar con otro servidor. Los dos lados se guardan por separado y con su
@@ -405,15 +485,20 @@
     appsOtro = null
     falloOtro = null
     comparando = true
+    // Sólo cuenta la respuesta del servidor que sigue elegido: uno lento al
+    // que se renunció contestaba después y pintaba sus apps bajo el nombre
+    // del que se eligió luego.
+    const vale = () => enComparar && otro === x
     try {
-      appsOtro = (await portada(x)).apps
+      const r = (await portada(x)).apps
+      if (vale()) appsOtro = r
     } catch (e) {
       // El fallo se guarda **aparte** del error general de la aplicación: que
       // el otro servidor no conteste no rompe la pantalla del que sí, y la
       // comparación tiene que poder decir exactamente eso.
-      falloOtro = e as ErrorDelPuente
+      if (vale()) falloOtro = e as ErrorDelPuente
     } finally {
-      comparando = false
+      if (vale()) comparando = false
     }
   }
 
@@ -423,27 +508,38 @@
     appsOtro = null
     falloOtro = null
     comparando = false
+
+    // Al cerrar una vista, el foco va a su título y no se queda en <body>.
+    devolverFoco(null)
   }
 
   function cerrarPasada() {
+    errorFlujo = null
     enPasada = false
     pasando = false
     modoPasada = null
-    crudoPasada = ''
+    pasadaViva.vaciar()
     lote = null
     paraDeEscucharPasada?.()
     paraDeEscucharPasada = null
+
+    // Al cerrar una vista, el foco va a su título y no se queda en <body>.
+    devolverFoco(null)
   }
 
   function cerrarNueva() {
+    errorFlujo = null
     enNueva = false
     creando = false
-    salidaNueva = []
+    salidaNueva.vaciar()
     finalNueva = null
     configNueva = null
     dns = null
     paraDeEscuchar?.()
     paraDeEscuchar = null
+
+    // Al cerrar una vista, el foco va a su título y no se queda en <body>.
+    devolverFoco(null)
   }
 
   async function comprobar(a: string) {
@@ -461,6 +557,10 @@
   // La hoja de comando de un despliegue. Se enseña la orden literal ANTES de
   // ejecutarla: es la prueba visible de que esto sólo invoca `orbit`.
   let hoja = $state<App | null>(null)
+  // El servidor de la hoja, fijado al abrirla. La hoja pintaba el `alias`
+  // vivo: si algo cambiaba de servidor con ella abierta, decía «en bravo» y
+  // la orden corría en alfa.
+  let hojaEn = $state('')
   let comprobacion = $state<ComprobacionDeEntorno | null>(null)
   let estadoComprobacion = $state<'no-sabe' | 'mirando' | 'hecho' | 'no-se-pudo'>('no-sabe')
   let faltanDeAntes = $state<string[]>([])
@@ -476,7 +576,15 @@
    * hoja ya abierta, así que no retrasa nada.
    */
   async function prepararDespliegue(a: App, faltan: string[] = []) {
+    // Uno a la vez por app. Dos sobre la misma app mezclaban su progreso en el
+    // mismo registro, y en el servidor el segundo sólo esperaba al cerrojo del
+    // primero: lo útil es volver al que ya corre.
+    if (vivos.corriendo(alias, a.name)) {
+      pestana = 'despliegue'
+      return
+    }
     hoja = a
+    hojaEn = alias
     faltanDeAntes = faltan
     comprobacion = null
     if (!sabe(versionActual, 'entornoDeclarado')) {
@@ -487,11 +595,11 @@
     const yo = alias
     try {
       const c = await comprobarEntorno(yo, a.name)
-      if (!sigue(yo) || hoja?.name !== a.name) return
+      if (hojaEn !== yo || hoja?.name !== a.name) return
       comprobacion = c
       estadoComprobacion = 'hecho'
     } catch {
-      if (sigue(yo)) estadoComprobacion = 'no-se-pudo'
+      if (hojaEn === yo && hoja?.name === a.name) estadoComprobacion = 'no-se-pudo'
     }
   }
 
@@ -501,14 +609,28 @@
     faltanDeAntes = []
   }
 
-  async function lanzar(a: App, entorno: VariableNueva[] = [], forzar = false) {
+  async function lanzar(a: App, entorno: VariableNueva[] = [], forzar = false, en = alias) {
     cerrarHoja()
-    pestana = 'despliegue'
-    const yo = alias
+    const yo = en
+    if (sigue(yo)) pestana = 'despliegue'
+    if (vivos.corriendo(yo, a.name)) return
     const k = vivos.clave(yo, a.name)
     vivos.empezar(yo, a.name)
+    // El foco, al despliegue que se acaba de lanzar. El botón que abrió la hoja
+    // se ha cambiado por «Desplegando…», y sin esto acababa en el título del
+    // servidor, a veinticinco tabuladores del progreso.
+    if (sigue(yo, a.name)) {
+      setTimeout(() => {
+        if (sigue(yo, a.name) && pestana === 'despliegue') {
+          document.querySelector<HTMLElement>('[data-foco-despliegue]')?.focus()
+        }
+      }, 10)
+    }
     try {
-      vivos.terminar(k, await desplegar(yo, a.name, { entorno, forzar }))
+      const r = await desplegar(yo, a.name, { entorno, forzar })
+      vivos.terminar(k, r)
+      // Si se está mirando su pestaña, ya lo anuncia ella con el detalle.
+      if (!mirandoDespliegue(yo, a.name)) anunciar(`Despliegue de ${a.name} en ${yo}: ${r.ok === true ? 'terminado' : 'ha fallado'}.`)
       // Un despliegue cambia el estado de la app: la portada deja de ser de
       // fiar y se vuelve a pedir, en vez de parchear la fila a mano. Sin
       // soltar la app elegida: la primera versión recargaba con `cargar`, que
@@ -520,10 +642,18 @@
       // NO se llama fallo. Si se perdió el contacto, el despliegue sigue en el
       // servidor y el cliente ya no sabe qué pasó.
       vivos.perder(k, err.mensaje)
+      if (!mirandoDespliegue(yo, a.name)) anunciar(`Despliegue de ${a.name} en ${yo}: estado desconocido.`)
     } finally {
       // Los valores no se quedan en ningún sitio: se olvidan aquí también.
       entorno.length = 0
     }
+  }
+
+  function mirandoDespliegue(servidor: string, app: string): boolean {
+    // Con una hoja o la paleta abiertas, la pestaña está detrás de `inert` y su
+    // región viva no la oye nadie: entonces avisa la de la aplicación.
+    if (hoja || pendiente || enPaleta) return false
+    return sigue(servidor, app) && vista === 'apps' && pestana === 'despliegue'
   }
 
   /** Vuelve a pedir la portada **sin soltar la app elegida**, y su detalle. */
@@ -534,17 +664,33 @@
       const r = await portada(yo)
       if (t !== turno || !sigue(yo)) return
       apps = r.apps
+      host = r.host ?? null
+      servicios = r.services ?? null
+      // Esta respuesta gana el turno, así que es la que manda: quita el fallo
+      // de antes —uno solo dejaba la pantalla de fallo puesta hasta cambiar
+      // de servidor— y el esqueleto de una carga a la que le ha quitado el
+      // turno, que si no se quedaba para siempre.
+      error = null
+      cargando = false
       if (elegida) {
         const misma = r.apps.find((x) => x.name === elegida!.name) ?? null
         elegida = misma
-        detalleApp = null
-        tareasApp = null
         // Sin cambiar de pestaña: si se está mirando el resultado de un
-        // despliegue, ahí se queda.
-        if (misma) void cargarDetalle(misma)
+        // despliegue, ahí se queda. Y el detalle viejo se queda hasta que llega
+        // el nuevo: ponerlo a `null` desmontaba «retirar» y «revertir», con la
+        // confirmación a medio escribir, cada vez que terminaba un despliegue
+        // de OTRA app.
+        if (misma) void cargarDetalle(misma, true)
+        else {
+          detalleApp = null
+          tareasApp = null
+        }
       }
     } catch (e) {
-      if (t === turno && sigue(yo)) error = e as ErrorDelPuente
+      if (t === turno && sigue(yo)) {
+        error = e as ErrorDelPuente
+        cargando = false
+      }
     }
   }
 
@@ -554,18 +700,19 @@
     await cargarDetalle(a)
   }
 
-  async function cargarDetalle(a: App) {
+  async function cargarDetalle(a: App, forzar = false) {
     const yo = alias
-    if (detalleApp?.name === a.name && (tareasApp?.app === a.name || !sabe(versionActual, 'tareas'))) return
+    if (!forzar && detalleApp?.name === a.name && (tareasApp?.app === a.name || !sabe(versionActual, 'tareas'))) return
     const [d, t] = await Promise.all([
       pedirDetalle(yo, a.name).catch(() => null),
       sabe(versionActual, 'tareas') ? pedirTareas(yo, a.name).catch(() => null) : Promise.resolve(null),
     ])
     if (!sigue(yo, a.name)) return
     // Que `info` falle no rompe el detalle: se sigue con lo que trajo la lista,
-    // que es lo que había antes de que esto existiera.
-    detalleApp = d
-    tareasApp = t
+    // que es lo que había antes de que esto existiera. Al refrescar, uno que
+    // falla no borra el que había.
+    if (d || !forzar) detalleApp = d
+    if (t || !forzar) tareasApp = t
   }
 
   // La hoja de una orden corta sobre la app —congelar, descongelar, la CI—,
@@ -575,6 +722,8 @@
     orden: string
     consecuencia: string
     verbo: string
+    /** El servidor en el que corre, fijado al pedirla, por lo mismo que `hojaEn`. */
+    servidor: string
     correr: () => Promise<{ salida: string }>
   } | null>(null)
 
@@ -582,7 +731,7 @@
     const p = pendiente
     pendiente = null
     if (!p) return
-    const yo = alias
+    const yo = p.servidor
     try {
       const r = await p.correr()
       if (!sigue(yo)) return
@@ -595,7 +744,18 @@
     if (sigue(yo)) await refrescar()
   }
 
+  /** Una app que se llama como una palabra de Orbit —`no`, `help`…— haría que
+   *  el servidor entendiera otra orden, o la aplicara a la primera app por
+   *  orden alfabético. No se abre la hoja: se dice por qué. */
+  function rehusa(a: App, orden: Parameters<typeof chocaConPalabraDeOrbit>[1]): boolean {
+    const motivo = chocaConPalabraDeOrbit(a.name, orden)
+    if (motivo === null) return false
+    avisoDetalle = { ok: false, texto: motivo }
+    return true
+  }
+
   function pedirCongelar(a: App, motivo: string | null) {
+    if (rehusa(a, 'congelar')) return
     const yo = alias
     pendiente = {
       titulo: `Congelar los despliegues de ${a.name}`,
@@ -603,11 +763,13 @@
       consecuencia:
         'El autodespliegue y «desplegar todo» la saltarán, y desplegarla a mano pedirá confirmarlo aparte. Lo que se sirve no cambia, y revertir sigue permitido.',
       verbo: 'Congelar',
+      servidor: yo,
       correr: () => congelar(yo, a.name, motivo),
     }
   }
 
   function pedirDescongelar(a: App) {
+    if (rehusa(a, 'descongelar')) return
     const yo = alias
     pendiente = {
       titulo: `Descongelar ${a.name}`,
@@ -616,11 +778,13 @@
         ? 'Vuelve a desplegarse con normalidad. Tiene el autodespliegue puesto: si su rama ha avanzado, se desplegará sola en la próxima pasada.'
         : 'Vuelve a desplegarse con normalidad.',
       verbo: 'Descongelar',
+      servidor: yo,
       correr: () => descongelar(yo, a.name),
     }
   }
 
   function pedirEsperarCi(a: App, esperar: boolean) {
+    if (rehusa(a, 'esperarCi')) return
     const yo = alias
     pendiente = {
       titulo: esperar ? `Esperar a la CI en ${a.name}` : `Dejar de esperar a la CI en ${a.name}`,
@@ -629,6 +793,7 @@
         ? 'El autodespliegue y «desplegar todo» sólo desplegarán un commit cuya CI de GitHub haya terminado bien; si no pueden preguntar, no despliegan. Si el servidor no tiene sesión de gh, avisará.'
         : 'El autodespliegue volverá a desplegar sin mirar la CI.',
       verbo: esperar ? 'Esperar a la CI' : 'Dejar de esperar',
+      servidor: yo,
       correr: () => esperarCi(yo, a.name, esperar),
     }
   }
@@ -641,6 +806,8 @@
     // accidente más caro de un cliente multiservidor.
     elegida = null
     apps = null
+    host = null
+    servicios = null
     error = null
     doctor = null
     log = null
@@ -651,7 +818,16 @@
     detalleApp = null
     tareasApp = null
     avisoDetalle = null
+    errorVista = null
+    errorPestana = null
     vista = 'apps'
+    // Lo que se iba a confirmar era de otro servidor.
+    cerrarHoja()
+    pendiente = null
+    // Y el ritmo del monitor es de otro servidor: un minuto de espera heredado
+    // de uno que no contestaba no es el ritmo de éste.
+    periodo = 3
+    fallosMonitor = 0
     cargando = true
     const t = ++turno
     // La versión, una vez por servidor y en paralelo: no retrasa la portada.
@@ -664,6 +840,8 @@
       const r = await portada(a)
       if (t !== turno) return
       apps = r.apps
+      host = r.host ?? null
+      servicios = r.services ?? null
     } catch (e) {
       if (t !== turno) return
       // Un fallo se pinta como un fallo. Lo que NO se hace es dejar los datos
@@ -675,20 +853,23 @@
     }
   }
 
-  async function verDiagnostico() {
+  async function verDiagnostico(forzar = false) {
     vista = 'diagnostico'
-    if (doctor) return
+    if (doctor && !forzar) return
     const yo = alias
-    cargando = true
+    errorVista = null
+    diagnosticando = true
     try {
       const d = await diagnostico(yo)
       if (sigue(yo)) doctor = d
     } catch (e) {
-      if (sigue(yo)) error = e as ErrorDelPuente
+      if (sigue(yo)) errorVista = e as ErrorDelPuente
     } finally {
-      if (sigue(yo)) cargando = false
+      diagnosticando = false
     }
   }
+
+  let diagnosticando = $state(false)
 
   async function aplicarArreglos() {
     arreglando = true
@@ -701,10 +882,12 @@
       if (!sigue(yo)) return
       doctor = d
       // Y las apps pueden haber cambiado —un vhost regenerado cambia
-      // `served`— así que la portada deja de ser de fiar.
-      apps = null
+      // `served`— así que la portada deja de ser de fiar. Se vuelve a pedir:
+      // la primera versión la ponía a `null` y no la pedía nunca, y al volver
+      // a «apps» la lista estaba en blanco.
+      void refrescar()
     } catch (e) {
-      error = e as ErrorDelPuente
+      if (sigue(yo)) errorVista = e as ErrorDelPuente
     } finally {
       arreglando = false
     }
@@ -714,14 +897,24 @@
   // `top` que tardara más que el periodo —2,1 s con 40 apps, más con la red
   // lenta— dejaba otro esperando detrás, y otro, y otro: una cola de sesiones
   // SSH que nadie iba a mirar.
-  let monitorEnVuelo = false
+  // Por servidor: con un booleano, un `top` lento de alfa hacía que entrar en
+  // el monitor de bravo no preguntara nada y enseñara la lista de apps.
+  let monitorEnVuelo: string | null = null
+
+  // El fallo de una vista es de esa vista: al cambiar de una a otra se olvida,
+  // o el del monitor acababa pintado encima del diagnóstico.
+  $effect(() => {
+    void vista
+    untrack(() => { errorVista = null })
+  })
+  let fallosMonitor = $state(0)
+  let monitorPausado = $state(false)
 
   async function verMonitor() {
     vista = 'monitor'
-    if (monitorEnVuelo) return
-    monitorEnVuelo = true
     const yo = alias
-    cargando = monitor === null
+    if (monitorEnVuelo === yo) return
+    monitorEnVuelo = yo
     try {
       // El periodo sale de lo que TARDÓ, no de un número elegido: `top --json`
       // cuesta ~2,1 s con 40 apps porque la CPU es la diferencia entre dos
@@ -731,12 +924,20 @@
       const m = await pedirMonitor(yo)
       if (!sigue(yo)) return
       monitor = m
+      errorVista = null
+      fallosMonitor = 0
       periodo = periodoDelMonitor(performance.now() - t0)
+      historial.anotar(yo, m)
     } catch (e) {
-      if (sigue(yo)) error = e as ErrorDelPuente
+      if (!sigue(yo)) return
+      errorVista = e as ErrorDelPuente
+      // Espera creciente: un servidor que no contesta no se arregla
+      // preguntándole más a menudo. Hasta un minuto, y vuelve al ritmo medido
+      // en cuanto conteste.
+      fallosMonitor += 1
+      periodo = Math.min(60, periodo * 2)
     } finally {
-      monitorEnVuelo = false
-      if (sigue(yo)) cargando = false
+      if (monitorEnVuelo === yo) monitorEnVuelo = null
     }
   }
 
@@ -746,27 +947,42 @@
   // Encadenado y no a intervalo fijo: la siguiente vuelta se programa cuando la
   // anterior TERMINA, con el periodo que ella misma midió. Así no puede haber
   // dos a la vez, y un servidor lento se pregunta menos, no más.
+  //
+  // Con la ventana oculta no se programa nada, y al volver se pregunta en el
+  // acto: la primera versión seguía despertándose y, al volver, hacía esperar
+  // un periodo entero con datos viejos en pantalla.
   $effect(() => {
-    if (vista !== 'monitor') return
+    if (vista !== 'monitor' || monitorPausado) return
     let vivo = true
-    let t: ReturnType<typeof setTimeout>
+    let t: ReturnType<typeof setTimeout> | undefined
     const vuelta = async () => {
-      if (!document.hidden) await verMonitor()
-      if (vivo) t = setTimeout(vuelta, periodo * 1000)
+      t = undefined
+      if (document.hidden) return
+      await verMonitor()
+      if (vivo && !document.hidden) t = setTimeout(vuelta, periodo * 1000)
     }
+    const alVolver = () => {
+      if (!document.hidden && vivo && t === undefined && monitorEnVuelo !== alias) void vuelta()
+    }
+    document.addEventListener('visibilitychange', alVolver)
     t = setTimeout(vuelta, untrack(() => periodo) * 1000)
-    return () => { vivo = false; clearTimeout(t) }
+    return () => {
+      vivo = false
+      clearTimeout(t)
+      document.removeEventListener('visibilitychange', alVolver)
+    }
   })
 
-  async function verEntorno(a: App) {
+  async function verEntorno(a: App, forzar = false) {
     pestana = 'entorno'
-    if (entorno && entorno.app === a.name) return
+    errorPestana = null
+    if (entorno && entorno.app === a.name && !forzar) return
     const yo = alias
     try {
       const e = await pedirEntorno(yo, a.name)
       if (sigue(yo, a.name)) entorno = e
     } catch (e) {
-      if (sigue(yo, a.name)) error = e as ErrorDelPuente
+      if (sigue(yo, a.name)) errorPestana = e as ErrorDelPuente
     }
   }
 
@@ -775,6 +991,7 @@
   // perder 3 releases cuando tiene 12 es peor que no decírselo.
   async function verAdmin(a: App, cual: 'retirar' | 'revertir') {
     pestana = cual
+    errorPestana = null
     const yo = alias
     try {
       const [d, e] = await Promise.all([
@@ -785,7 +1002,7 @@
       detalleApp = d
       if (e) entorno = e
     } catch (err) {
-      error = err as ErrorDelPuente
+      if (sigue(yo, a.name)) errorPestana = err as ErrorDelPuente
     }
   }
 
@@ -804,6 +1021,7 @@
    */
   async function verDescriptor(a: App) {
     pestana = 'descriptor'
+    errorPestana = null
     const yo = alias
     try {
       const [d, e] = await Promise.all([
@@ -814,40 +1032,257 @@
       detalleApp = d
       if (e) entorno = e
     } catch (err) {
-      error = err as ErrorDelPuente
+      if (sigue(yo, a.name)) errorPestana = err as ErrorDelPuente
     }
   }
 
-  async function verTrafico(a: App) {
+  async function verTrafico(a: App, forzar = false) {
     pestana = 'trafico'
-    if (trafico && trafico.app === a.name) return
+    errorPestana = null
+    if (trafico && trafico.app === a.name && !forzar) return
     const yo = alias
-    try {
-      // Las dos a la vez: se miran juntas y son dos comandos distintos, así que
-      // pedirlas en serie doblaría la espera de una pantalla sin ganar nada.
-      // Y ahora a la vez de verdad: el envoltorio las corre fuera del hilo de
-      // la ventana y cada una en el suyo.
-      const [t, m] = await Promise.all([
-        pedirTrafico(yo, a.name),
-        pedirMetricas(yo, a.name),
-      ])
-      if (!sigue(yo, a.name)) return
-      trafico = t
-      metricas = m
-    } catch (e) {
-      error = e as ErrorDelPuente
-    }
+    // Las dos a la vez: se miran juntas y son dos comandos distintos, así que
+    // pedirlas en serie doblaría la espera de una pantalla sin ganar nada.
+    // Y cada una por su lado: con `Promise.all`, una app sin despliegues
+    // medidos —que es un estado, no un error— se llevaba por delante el
+    // tráfico, que sí había llegado.
+    const [t, m] = await Promise.allSettled([
+      pedirTrafico(yo, a.name),
+      pedirMetricas(yo, a.name),
+    ])
+    if (!sigue(yo, a.name)) return
+    // Sin una sola visita en la ventana, el puente dice `sin-datos`. No se
+    // fabrica un objeto con ceros: se pinta como lo que es, un estado vacío.
+    if (t.status === 'fulfilled') trafico = t.value
+    else errorPestana = t.reason as ErrorDelPuente
+    metricas = m.status === 'fulfilled' ? m.value : null
   }
 
-  async function verLog(a: App) {
+  async function verLog(a: App, forzar = false) {
     pestana = 'log'
-    if (log) return
+    errorPestana = null
+    if (log && !forzar) return
+    // Un servidor anterior a la 1.3.7 no tiene `logs --json`: la pestaña lo
+    // dice ella, sin gastar una llamada que va a fallar.
+    if (seQuedaCorto(versionActual, 'contratoCompleto')) return
     const yo = alias
     try {
       const l = await pedirLog(yo, a.name)
       if (sigue(yo, a.name)) log = l
     } catch (e) {
-      if (sigue(yo, a.name)) error = e as ErrorDelPuente
+      if (sigue(yo, a.name)) errorPestana = e as ErrorDelPuente
+    }
+  }
+
+  /** Vuelve a pedir lo de la pestaña que se está mirando. Antes no había forma:
+   *  el log, el entorno y el tráfico se pedían una vez y se quedaban así. */
+  let recargando = $state(false)
+  async function recargarPestana() {
+    const a = elegida
+    if (!a || recargando) return
+    recargando = true
+    try {
+      if (pestana === 'log') await verLog(a, true)
+      else if (pestana === 'entorno') await verEntorno(a, true)
+      else if (pestana === 'trafico') await verTrafico(a, true)
+      else if (pestana === 'detalle') {
+        detalleApp = null
+        tareasApp = null
+        await refrescar()
+      }
+    } finally {
+      recargando = false
+    }
+  }
+
+  // Mantener pulsada j/k elegía una app por pulsación y pedía `info` + `cron`
+  // de cada una: con 200 apps, cientos de sesiones SSH a la vez. Un clic suelto
+  // pide en el acto; una ráfaga, sólo cuando se para.
+  let ultimaEleccion = 0
+  let detalleDiferido: ReturnType<typeof setTimeout> | undefined
+  function elegirApp(a: App) {
+    if (elegida?.name === a.name) return
+    elegida = a
+    // El log es de una app concreta: al cambiar de app, el que había deja de
+    // valer. Conservarlo enseñaría el log de una bajo el nombre de otra.
+    log = null
+    // El entorno es de una app concreta: al cambiar de app, el que había deja
+    // de valer, y con él cualquier valor revelado.
+    entorno = null
+    trafico = null
+    metricas = null
+    detalleApp = null
+    tareasApp = null
+    avisoDetalle = null
+    errorPestana = null
+    pestana = 'detalle'
+    // El detalle se pide al elegir: trae lo que la lista no calcula —los días
+    // del certificado, el motivo de una congelación, las tareas— y es una sola
+    // app.
+    const ahora = performance.now()
+    const enRafaga = ahora - ultimaEleccion < 300
+    ultimaEleccion = ahora
+    clearTimeout(detalleDiferido)
+    if (!enRafaga) {
+      void verDetalle(a)
+      return
+    }
+    const yo = alias
+    // `cargarDetalle` y no `verDetalle`: si mientras tanto se ha elegido otra
+    // pestaña, ahí se queda.
+    detalleDiferido = setTimeout(() => {
+      if (sigue(yo, a.name)) void cargarDetalle(a)
+    }, 250)
+  }
+
+  // ── la paleta, los atajos y el tema ─────────────────────────────────────
+  //
+  // Todo lo que la paleta hace ya existe en un botón: no hay ninguna acción que
+  // sólo se pueda hacer desde aquí, y las que cambian algo abren su hoja de
+  // confirmación igual que desde el botón. Es una forma de llegar, no un
+  // atajo para saltarse la orden literal.
+  let enPaleta = $state(false)
+
+  // Una región viva que existe SIEMPRE, para lo que termina mientras se mira
+  // otra cosa: un despliegue, una pasada, una web nueva. Una región que se
+  // monta con su texto dentro no la anuncian los lectores de pantalla.
+  let anuncio = $state('')
+  let porAnunciar: string[] = []
+  let tAnuncio: ReturnType<typeof setTimeout> | undefined
+  function anunciar(t: string) {
+    // Vaciar y volver a poner: dos anuncios iguales seguidos se leen dos veces.
+    // Y los que llegan juntos se dicen juntos: con un temporizador por anuncio,
+    // el segundo pisaba al primero antes de que nadie lo leyera.
+    porAnunciar.push(t)
+    anuncio = ''
+    clearTimeout(tAnuncio)
+    tAnuncio = setTimeout(() => {
+      anuncio = porAnunciar.join(' ')
+      porAnunciar = []
+    }, 50)
+  }
+
+  // Qué hay en el panel, para nombrarlo si falla al pintarse, y la clave que
+  // monta una frontera nueva al cambiar de pantalla: un fallo en el monitor no
+  // se queda puesto al volver a la lista.
+  const quePanel = $derived(
+    enComparar ? 'la comparación'
+      : enPasada ? '«desplegar todo»'
+        : enNueva ? 'el asistente de web nueva'
+          : enAlta ? 'la lista de servidores'
+            : vista === 'monitor' ? 'el monitor'
+              : vista === 'diagnostico' ? 'el diagnóstico'
+                : vista === 'servidor' ? 'la vista del servidor'
+                  : 'la lista de apps',
+  )
+  const clavePanel = $derived(`${alias}|${quePanel}`)
+  const QUE_PESTANA: Record<string, string> = {
+    detalle: 'el detalle', log: 'el log', entorno: 'el entorno', trafico: 'el tráfico',
+    exec: 'exec', retirar: 'retirar', revertir: 'revertir', despliegue: 'el despliegue',
+    descriptor: 'el orbit.json',
+  }
+
+  /** Hay algo en marcha que no se puede dejar a medias navegando. */
+  const ocupado = $derived(creando || pasando || instalando)
+
+  /** Salir de los modos que no son «mirar el servidor», si no hay nada en
+   *  marcha dentro: una web a medio crear o una pasada no se cierran por
+   *  navegar. */
+  function aLoNormal(): boolean {
+    if (creando || pasando || instalando) return false
+    if (enNueva) cerrarNueva()
+    if (enPasada) cerrarPasada()
+    if (enComparar) cerrarComparar()
+    if (instalandoEn) cerrarInstalacion()
+    enAlta = false
+    anadiendo = false
+    return true
+  }
+
+  function verVista(v: typeof vista) {
+    if (!aLoNormal()) return
+    if (v === 'diagnostico') void verDiagnostico()
+    else if (v === 'monitor') void verMonitor()
+    else vista = v
+  }
+
+  const acciones = $derived.by<Accion[]>(() => {
+    const r: Accion[] = []
+    for (const s of enElRail) {
+      r.push({
+        id: `servidor:${s.alias}`, grupo: 'servidor', texto: s.alias,
+        pista: s.hostname ?? undefined,
+        hacer: () => { if (aLoNormal()) void cargar(s.alias) },
+      })
+    }
+    if (alias) {
+      for (const [v, t] of [['apps', 'Apps'], ['diagnostico', 'Diagnóstico'], ['monitor', 'Monitor'], ['servidor', 'Servidor: host, copias, bases de datos…']] as const) {
+        r.push({ id: `ver:${v}`, grupo: 'ver', texto: t, pista: alias, hacer: () => verVista(v) })
+      }
+    }
+    if (elegida && vista === 'apps') {
+      const a = elegida
+      r.push({ id: 'accion:desplegar', grupo: 'hacer', texto: `Desplegar ${a.name}`, pista: alias, claves: 'deploy', hacer: () => prepararDespliegue(a) })
+      r.push({ id: 'accion:log', grupo: 'ver', texto: `Log de ${a.name}`, pista: alias, claves: 'logs', hacer: () => verLog(a) })
+      r.push({ id: 'accion:entorno', grupo: 'ver', texto: `Entorno de ${a.name}`, pista: alias, claves: 'env variables', hacer: () => verEntorno(a) })
+      r.push({ id: 'accion:trafico', grupo: 'ver', texto: `Tráfico de ${a.name}`, pista: alias, claves: 'traffic visitas', hacer: () => verTrafico(a) })
+      r.push({ id: 'accion:orbitjson', grupo: 'ver', texto: `orbit.json de ${a.name}`, pista: alias, claves: 'descriptor csp', hacer: () => verDescriptor(a) })
+      r.push({ id: 'accion:revertir', grupo: 'hacer', texto: `Revertir ${a.name}…`, pista: alias, claves: 'rollback', hacer: () => verAdmin(a, 'revertir') })
+    }
+    for (const a of apps ?? []) {
+      if (!nombreOperable(a.name)) continue
+      r.push({
+        id: `app:${a.name}`, grupo: 'app', texto: a.name, pista: a.domain, claves: a.type,
+        hacer: () => { if (aLoNormal()) { vista = 'apps'; elegirApp(a) } },
+      })
+    }
+    if (alias) {
+      r.push({ id: 'accion:nueva', grupo: 'hacer', texto: 'Nueva web', pista: alias, claves: 'new crear', hacer: () => { if (aLoNormal()) { enNueva = true; dns = null } } })
+      r.push({ id: 'accion:pasada', grupo: 'hacer', texto: 'Desplegar todo…', pista: alias, claves: 'deploy all pasada', hacer: () => { if (aLoNormal()) enPasada = true } })
+      if (enElRail.length > 1) r.push({ id: 'accion:comparar', grupo: 'hacer', texto: 'Comparar con otro servidor', pista: alias, hacer: () => { if (aLoNormal()) enComparar = true } })
+    }
+    r.push({ id: 'accion:alta', grupo: 'hacer', texto: 'Servidores: añadir o comprobar', claves: 'ssh alta', hacer: () => { if (instalando || aLoNormal()) enAlta = true } })
+    r.push({ id: 'accion:tema', grupo: 'hacer', texto: `Tema: ${TEMAS[(TEMAS.indexOf(tema) + 1) % TEMAS.length]}`, claves: 'oscuro claro theme', hacer: cambiarTema })
+    // Y sin repetidos, por si dos apps se llaman igual en la misma portada.
+    const vistos = new Set<string>()
+    return r.filter((x) => !vistos.has(x.id) && !!vistos.add(x.id))
+  })
+
+  // El tema. Por defecto, el del sistema; elegirlo dura la sesión y no se
+  // guarda en ningún sitio: esta interfaz no escribe nada en el navegador (T-12).
+  const TEMAS = ['sistema', 'claro', 'oscuro'] as const
+  let tema = $state<(typeof TEMAS)[number]>('sistema')
+  function cambiarTema() {
+    tema = TEMAS[(TEMAS.indexOf(tema) + 1) % TEMAS.length]!
+  }
+  $effect(() => {
+    const r = document.documentElement
+    if (tema === 'claro') r.dataset.theme = 'light'
+    else if (tema === 'oscuro') r.dataset.theme = 'dark'
+    else delete r.dataset.theme
+  })
+
+  function atajos(e: KeyboardEvent) {
+    const mod = e.ctrlKey || e.metaKey
+    // Con una hoja de confirmación abierta no se abre la paleta ni se recarga:
+    // la paleta podía cambiar de servidor por debajo de la hoja, que seguía
+    // diciendo un servidor mientras la orden corría en otro.
+    if (mod && (hoja || pendiente) && ['k', 'K', 'r', 'R'].includes(e.key)) {
+      e.preventDefault()
+      return
+    }
+    if (mod && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault()
+      enPaleta = !enPaleta
+      return
+    }
+    // Ctrl+R vuelve a pedir lo que se mira, en vez de recargar la ventana
+    // entera —que perdería los despliegues en curso de vista—.
+    if (mod && (e.key === 'r' || e.key === 'R') && !e.shiftKey) {
+      e.preventDefault()
+      if (elegida && vista === 'apps') void recargarPestana()
+      else if (vista === 'diagnostico') void verDiagnostico(true)
+      else if (alias && vista === 'apps') void refrescar()
     }
   }
 
@@ -856,7 +1291,11 @@
     // directamente la pantalla de servidores: una portada vacía sin explicación
     // es lo que hacía que esta aplicación pareciera rota al abrirla por primera
     // vez, y es literalmente lo que pasaba en un Windows recién instalado.
-    void Promise.all([servidoresDelConfig(), servidoresGuardados()]).then(([config, mios]) => {
+    // Cada fuente por su lado: si leer el ~/.ssh/config falla, la ventana se
+    // quedaba en blanco en vez de abrir el alta.
+    void Promise.allSettled([servidoresDelConfig(), servidoresGuardados()]).then(([c, m]) => {
+      const config = c.status === 'fulfilled' ? c.value : []
+      const mios = m.status === 'fulfilled' ? m.value : []
       servidores = config
       propios = mios
       const primero = mios[0]?.alias ?? config[0]?.alias
@@ -866,15 +1305,21 @@
   })
 </script>
 
+<svelte:window onkeydown={atajos} />
+
+{#if enPaleta}
+  <Paleta {acciones} alCerrar={() => (enPaleta = false)} />
+{/if}
+
 {#if hoja}
   <HojaDeDespliegue
     app={hoja}
-    servidor={alias}
+    servidor={hojaEn}
     {comprobacion}
     {estadoComprobacion}
     {faltanDeAntes}
     porEntrada={sabe(versionActual, 'entornoPorEntrada')}
-    alConfirmar={(entorno, forzar) => lanzar(hoja!, entorno, forzar)}
+    alConfirmar={(entorno, forzar) => lanzar(hoja!, entorno, forzar, hojaEn)}
     alCancelar={cerrarHoja}
   />
 {/if}
@@ -882,7 +1327,7 @@
 {#if pendiente}
   <HojaDeComando
     titulo={pendiente.titulo}
-    servidor={alias}
+    servidor={pendiente.servidor}
     orden={pendiente.orden}
     consecuencia={pendiente.consecuencia}
     verbo={pendiente.verbo}
@@ -891,7 +1336,12 @@
   />
 {/if}
 
-<div class="marco">
+<!-- Con una hoja o la paleta abiertas, lo de detrás no recibe ni foco ni
+     clics: `inert` es lo que hace que un diálogo sea modal de verdad, y no
+     sólo de aspecto. -->
+<p class="sr" role="status" aria-live="polite">{anuncio}</p>
+
+<div class="marco" inert={!!(hoja || pendiente || enPaleta)}>
   <!-- El servidor activo está SIEMPRE visible, no escondido en un desplegable
        que se lee al entrar. El accidente más caro de un cliente multiservidor
        no es un ataque: es ejecutar lo correcto contra el servidor equivocado.
@@ -908,8 +1358,11 @@
             class="servidor"
             class:servidor--activo={alias === s.alias}
             aria-current={alias === s.alias ? 'true' : undefined}
-            title={s.hostname ? `${s.usuario ?? ''}@${s.hostname}:${s.puerto ?? 22}` : undefined}
-            onclick={() => cargar(s.alias)}
+            aria-disabled={ocupado && alias !== s.alias ? 'true' : undefined}
+            title={ocupado && alias !== s.alias
+              ? 'Hay una operación en marcha: espera a que termine'
+              : s.hostname ? `${s.usuario ?? ''}@${s.hostname}:${s.puerto ?? 22}` : undefined}
+            onclick={() => { if (alias !== s.alias && aLoNormal()) void cargar(s.alias) }}
           >
             {s.alias}
             {#if enMarcha > 0}
@@ -918,20 +1371,41 @@
               <span
                 class="corriendo"
                 title={enMarcha === 1 ? 'un despliegue en curso' : `${enMarcha} despliegues en curso`}
-              >◐ {enMarcha}</span>
+              ><span aria-hidden="true">◐ {enMarcha}</span><span class="sr">, {enMarcha === 1 ? 'un despliegue en curso' : `${enMarcha} despliegues en curso`}</span></span>
             {/if}
             {#if s.salto}
               <!-- Un salto se anuncia porque cambia lo que se puede prometer
                    sobre la latencia: el saludo se paga dos veces. -->
-              <span class="salto" title="Por {s.salto}">↪</span>
+              <span class="salto" title="Por {s.salto}"><span aria-hidden="true">↪</span><span class="sr">, por {s.salto}</span></span>
             {/if}
           </button>
         </li>
       {/each}
     </ul>
-    <button type="button" class="alta" onclick={() => (enAlta = !enAlta)}>
+    <button
+      type="button"
+      class="alta"
+      aria-disabled={enAlta && instalando ? 'true' : undefined}
+      title={enAlta && instalando ? 'Se está instalando Orbit: espera a que termine' : undefined}
+      onclick={() => {
+        // Con una instalación en marcha no se sale de aquí: después no había
+        // forma de volver a su progreso ni a su botón de parar.
+        if (enAlta) { if (!instalando) enAlta = false }
+        else if (instalando) enAlta = true
+        else if (aLoNormal()) enAlta = true
+      }}
+    >
       {enAlta ? '← volver' : '+ servidores'}
     </button>
+
+    <div class="pie-rail">
+      <button type="button" class="atajo" onclick={() => (enPaleta = true)} title="Paleta de órdenes">
+        <span>buscar</span> <kbd>Ctrl K</kbd>
+      </button>
+      <button type="button" class="atajo" onclick={cambiarTema} aria-label="Tema: {tema}. Cambiar" title="Cambiar el tema">
+        <span>{tema === 'oscuro' ? '☾' : tema === 'claro' ? '☀' : '◐'} {tema}</span>
+      </button>
+    </div>
 
     {#if !hayPuente()}
       <p class="aviso">
@@ -944,7 +1418,7 @@
   <main>
     <AvisoDeCierre />
     <header class="cabecera">
-      <h1>
+      <h1 tabindex="-1">
         {enAlta
           ? 'Servidores'
           : enNueva
@@ -960,14 +1434,17 @@
       {/if}
       {#if !enAlta && !enNueva && !enPasada && !enComparar}
       <nav class="vistas" aria-label="Qué mirar de este servidor">
-        <button type="button" class:activo={vista === 'apps'} onclick={() => (vista = 'apps')}>
+        <button type="button" class:activo={vista === 'apps'} aria-current={vista === 'apps' ? 'true' : undefined} onclick={() => (vista = 'apps')}>
           apps
         </button>
-        <button type="button" class:activo={vista === 'diagnostico'} onclick={verDiagnostico}>
+        <button type="button" class:activo={vista === 'diagnostico'} aria-current={vista === 'diagnostico' ? 'true' : undefined} onclick={() => verDiagnostico()}>
           diagnóstico
         </button>
-        <button type="button" class:activo={vista === 'monitor'} onclick={verMonitor}>
+        <button type="button" class:activo={vista === 'monitor'} aria-current={vista === 'monitor' ? 'true' : undefined} onclick={verMonitor}>
           monitor
+        </button>
+        <button type="button" class:activo={vista === 'servidor'} aria-current={vista === 'servidor' ? 'true' : undefined} onclick={() => (vista = 'servidor')}>
+          servidor
         </button>
         {#if alias}
           <button type="button" class="nueva" onclick={() => { enNueva = true; dns = null }}>
@@ -983,11 +1460,18 @@
     </header>
 
     <section class="panel">
-      {#if enComparar}
+      {#key clavePanel}
+      <Frontera que={quePanel} alReintentar={() => { if (alias && quePanel === 'la lista de apps') void refrescar() }}>
+      {#if (enComparar || enPasada) && apps === null}
+        <!-- Sin la portada de este servidor no hay con qué comparar ni qué
+             pasar: con una lista vacía, cada app del otro salía como «sólo
+             en el otro» y la pasada decía que iba a tocar cero apps. -->
+        {#if error}<Fallo {error} {alias} />{:else}<Esqueleto />{/if}
+      {:else if enComparar}
         <Comparar
           a={alias}
           b={otro}
-          appsA={apps ?? []}
+          appsA={apps!}
           appsB={appsOtro}
           fallo={falloOtro}
           cargando={comparando}
@@ -996,10 +1480,11 @@
           alCerrar={cerrarComparar}
         />
       {:else if enPasada}
+        {#if errorFlujo}<Fallo error={errorFlujo} {alias} />{/if}
         <Pasada
           servidor={alias}
-          apps={apps ?? []}
-          crudo={crudoPasada}
+          apps={apps!}
+          pasada={pasadaViva}
           resultado={lote}
           corriendo={pasando}
           modo={modoPasada}
@@ -1008,6 +1493,7 @@
           alCerrar={cerrarPasada}
         />
       {:else if enNueva}
+        {#if errorFlujo}<Fallo error={errorFlujo} {alias} />{/if}
         {#if finalNueva}
           <!-- Terminado. El final sale de preguntarle al servidor, no de leer
                la prosa: son siete y cinco son parciales, y decir «ha fallado»
@@ -1018,10 +1504,10 @@
             {#if configNueva}
               <LoDetectado app={nombreNueva} config={configNueva} />
             {/if}
-            {#if salidaNueva.length > 0}
+            {#if salidaNueva.total > 0}
               <details>
                 <summary>Lo que dijo el servidor</summary>
-                <pre class="prosa">{salidaNueva.join('\n')}</pre>
+                <Consola salida={salidaNueva} vivo={false} />
               </details>
             {/if}
             <button type="button" class="cerrar-nueva" onclick={cerrarNueva}>Cerrar</button>
@@ -1035,7 +1521,7 @@
             <!-- Prosa, y enseñada como prosa. `orbit new` no tiene `--progress`
                  ni `--json`, así que aquí no hay pasos que contar y una barra
                  sería un número inventado. -->
-            <pre class="prosa">{salidaNueva.join('\n') || 'esperando al servidor…'}</pre>
+            <Consola salida={salidaNueva} vivo={true} />
           </div>
         {:else}
           <AsistenteNueva
@@ -1048,6 +1534,7 @@
           />
         {/if}
       {:else if enAlta}
+        {#if errorFlujo}<Fallo error={errorFlujo} alias={instalandoEn ?? alias} />{/if}
         {#if instalandoEn}
           <InstalarOrbit
             alias={instalandoEn}
@@ -1066,7 +1553,7 @@
             {guardando}
             fallo={falloAlGuardar}
             alGuardar={anadirServidor}
-            alCerrar={() => { anadiendo = false; falloAlGuardar = null }}
+            alCerrar={() => { anadiendo = false; falloAlGuardar = null; devolverFoco(null) }}
           />
         {:else}
           <AltaServidores
@@ -1081,85 +1568,116 @@
             alInstalar={abrirInstalacion}
           />
         {/if}
-      {:else if cargando}
-        <Esqueleto />
-      {:else if error}
-        <Fallo {error} {alias} />
+      {:else if vista === 'servidor' && !cargando && !error}
+        <ServidorVista servidor={alias} {host} {servicios} version={versionActual} />
       {:else if vista === 'monitor' && monitor}
-        <MonitorVista {monitor} servidor={alias} {periodo} />
+        <MonitorVista
+          {monitor}
+          portada={apps}
+          servidor={alias}
+          {periodo}
+          pausado={monitorPausado}
+          alPausar={hayPuente() ? (p) => (monitorPausado = p) : null}
+          falloUltimo={errorVista?.mensaje ?? null}
+        />
       {:else if vista === 'diagnostico' && doctor}
+        {#if errorVista}<Fallo error={errorVista} {alias} />{/if}
         <Diagnostico
           {doctor}
           servidor={alias}
           {arreglando}
-          alArreglar={hayPuente() ? aplicarArreglos : null}
+          alArreglar={hayPuente() && !seQuedaCorto(versionActual, 'contratoCompleto') ? aplicarArreglos : null}
         />
+        <button type="button" class="otra-vez" disabled={diagnosticando} onclick={() => verDiagnostico(true)}>
+          {diagnosticando ? 'diagnosticando…' : '↻ volver a diagnosticar'}
+        </button>
+      {:else if vista !== 'apps' && errorVista}
+        <Fallo error={errorVista} {alias} />
+      {:else if vista === 'monitor' || vista === 'diagnostico'}
+        <!-- Su propia espera. Compartían el `cargando` de la portada, y la
+             lista llegaba antes y se pintaba en la pestaña del monitor. -->
+        <Esqueleto />
+      {:else if cargando}
+        <Esqueleto />
+      {:else if error}
+        <Fallo {error} {alias} />
       {:else if apps}
         <ListaApps
           {apps}
           servidor={alias}
           seleccionada={elegida?.name ?? null}
-          alElegir={(a) => {
-            elegida = a
-            // El log es de una app concreta: al cambiar de app, el que había
-            // deja de valer. Conservarlo enseñaría el log de una bajo el nombre
-            // de otra.
-            log = null
-            // El entorno es de una app concreta: al cambiar de app, el que
-            // había deja de valer, y con él cualquier valor revelado.
-            entorno = null
-            trafico = null
-            metricas = null
-            detalleApp = null
-            tareasApp = null
-            avisoDetalle = null
-            pestana = 'detalle'
-            // El detalle se pide al elegir: trae lo que la lista no calcula
-            // —los días del certificado, el motivo de una congelación, las
-            // tareas— y es una sola app.
-            void verDetalle(a)
-          }}
+          alElegir={elegirApp}
         />
       {/if}
+      </Frontera>
+      {/key}
     </section>
 
     {#if elegida && vista === 'apps' && !enNueva && !enPasada && !enComparar}
       <section class="panel panel--detalle">
         <nav class="pestanas" aria-label="Qué mirar de esta app">
-          <button type="button" class:activo={pestana === 'detalle'} onclick={() => verDetalle(elegida!)}>
+          <button type="button" class:activo={pestana === 'detalle'} aria-current={pestana === 'detalle' ? 'true' : undefined} onclick={() => verDetalle(elegida!)}>
             detalle
           </button>
-          <button type="button" class:activo={pestana === 'log'} onclick={() => verLog(elegida!)}>
+          <button type="button" class:activo={pestana === 'log'} aria-current={pestana === 'log' ? 'true' : undefined} onclick={() => verLog(elegida!)}>
             log
           </button>
-          <button type="button" class:activo={pestana === 'entorno'} onclick={() => verEntorno(elegida!)}>
+          <button type="button" class:activo={pestana === 'entorno'} aria-current={pestana === 'entorno' ? 'true' : undefined} onclick={() => verEntorno(elegida!)}>
             entorno
           </button>
-          <button type="button" class:activo={pestana === 'trafico'} onclick={() => verTrafico(elegida!)}>
+          <button type="button" class:activo={pestana === 'trafico'} aria-current={pestana === 'trafico' ? 'true' : undefined} onclick={() => verTrafico(elegida!)}>
             tráfico
           </button>
-          <button type="button" class:activo={pestana === 'descriptor'} onclick={() => verDescriptor(elegida!)}>
+          <button type="button" class:activo={pestana === 'descriptor'} aria-current={pestana === 'descriptor' ? 'true' : undefined} onclick={() => verDescriptor(elegida!)}>
             orbit.json
           </button>
-          <button type="button" class:activo={pestana === 'exec'} onclick={() => (pestana = 'exec')}>
+          <button type="button" class:activo={pestana === 'exec'} aria-current={pestana === 'exec' ? 'true' : undefined} onclick={() => (pestana = 'exec')}>
             exec
           </button>
-          <button type="button" class:activo={pestana === 'revertir'} onclick={() => verAdmin(elegida!, 'revertir')}>
+          <button type="button" class:activo={pestana === 'revertir'} aria-current={pestana === 'revertir' ? 'true' : undefined} onclick={() => verAdmin(elegida!, 'revertir')}>
             revertir
           </button>
-          <button type="button" class:activo={pestana === 'retirar'} onclick={() => verAdmin(elegida!, 'retirar')}>
+          <button type="button" class:activo={pestana === 'retirar'} aria-current={pestana === 'retirar' ? 'true' : undefined} onclick={() => verAdmin(elegida!, 'retirar')}>
             retirar
           </button>
           {#if vivos.ver(alias, elegida.name)}
-            <button type="button" class:activo={pestana === 'despliegue'} onclick={() => (pestana = 'despliegue')}>
+            <button type="button" class:activo={pestana === 'despliegue'} aria-current={pestana === 'despliegue' ? 'true' : undefined} onclick={() => (pestana = 'despliegue')}>
               despliegue
             </button>
           {/if}
-          <button type="button" class="lanzar" onclick={() => prepararDespliegue(elegida!)}>
-            Desplegar
-          </button>
+          {#if pestana === 'log' || pestana === 'entorno' || pestana === 'trafico' || pestana === 'detalle'}
+            <button
+              type="button"
+              class="recargar"
+              disabled={recargando}
+              onclick={recargarPestana}
+              aria-label="Volver a pedir {pestana} de {elegida.name}"
+              title="Volver a pedir"
+            >↻</button>
+          {/if}
+          {#if vivos.corriendo(alias, elegida.name)}
+            <button type="button" class="lanzar lanzar--vivo" onclick={() => (pestana = 'despliegue')}>
+              <span class="pulso" aria-hidden="true"></span> Desplegando…
+            </button>
+          {:else}
+            <button type="button" class="lanzar" onclick={() => prepararDespliegue(elegida!)}>
+              Desplegar
+            </button>
+          {/if}
         </nav>
-        {#if pestana === 'detalle'}
+        {#key `${alias}|${elegida.name}|${pestana}`}
+        <Frontera que="{QUE_PESTANA[pestana] ?? pestana} de {elegida.name}">
+        {#if errorPestana && pestana !== 'despliegue'}
+          <div class="log-envoltorio">
+            {#if errorPestana.clase === 'sin-datos'}
+              <!-- Un estado, no un fallo: una app sin visitas en la ventana
+                   pedida no tiene tráfico que contar, y eso no es un cero. -->
+              <p class="vacio">{errorPestana.mensaje} en los últimos siete días.</p>
+            {:else}
+              <Fallo error={errorPestana} {alias} />
+            {/if}
+          </div>
+        {:else if pestana === 'detalle'}
           {#if avisoDetalle}
             <!-- Lo que dijo Orbit, tal cual. Si falló, es su frase y no un
                  código de salida. -->
@@ -1179,7 +1697,7 @@
             alEsperarCi={(e) => pedirEsperarCi(elegida!, e)}
           />
         {:else if pestana === 'descriptor'}
-          <OrbitJson app={elegida.name} info={detalleApp} {entorno} />
+          <OrbitJson app={elegida.name} info={detalleApp} {entorno} version={versionActual} />
         {:else if pestana === 'entorno'}
           {#if entorno}
             <div class="log-envoltorio">
@@ -1220,10 +1738,16 @@
               info={detalleApp}
               servidor={alias}
               alRevertir={async (r) => {
-                await revertir(alias, elegida!.name, r)
+                const yo = alias, app = elegida!.name
+                try {
+                  const res = await revertir(yo, app, r)
+                  if (sigue(yo, app)) avisoDetalle = { ok: true, texto: res.salida.trim() || `Revertida a ${r}.` }
+                } catch (e) {
+                  if (sigue(yo, app)) avisoDetalle = { ok: false, texto: (e as ErrorDelPuente).mensaje }
+                }
                 // Lo que cuenta es cómo queda el servidor, no lo que dijo el
                 // comando: se vuelve a preguntar en vez de parchear la fila.
-                await refrescar()
+                if (sigue(yo, app)) { pestana = 'detalle'; await refrescar() }
               }}
             />
           {:else}
@@ -1238,9 +1762,17 @@
               {entorno}
               alCerrar={() => (pestana = 'detalle')}
               alRetirar={async (borrarDatos) => {
-                if (borrarDatos) await retirarYBorrar(alias, elegida!.name)
-                else await retirar(alias, elegida!.name)
-                elegida = null; apps = null; cargar(alias)
+                const yo = alias, app = elegida!.name
+                try {
+                  if (borrarDatos) await retirarYBorrar(yo, app)
+                  else await retirar(yo, app)
+                } catch (e) {
+                  // Si falla, la app sigue ahí: se dice en su pestaña y no se
+                  // recarga como si se hubiera ido.
+                  if (sigue(yo, app)) errorPestana = e as ErrorDelPuente
+                  return
+                }
+                if (sigue(yo)) { elegida = null; apps = null; cargar(yo) }
               }}
             />
           {:else}
@@ -1271,23 +1803,45 @@
                 servidor={alias}
                 progreso={v.progreso}
                 resultado={v.resultado}
-                crudo={v.crudo}
+                salida={v.salida}
+                desde={v.desde}
                 alDarVariables={hayPuente() ? (f) => prepararDespliegue(elegida!, f) : null}
+                alVerLog={() => { log = null; verLog(elegida!) }}
+                alDiagnostico={() => { doctor = null; verDiagnostico() }}
+                alRevertir={() => verAdmin(elegida!, 'revertir')}
+                alCancelar={hayPuente() ? () => cancelar(alias, elegida!.name) : null}
               />
             {/if}
           {/if}
+        {:else if pestana === 'log' && seQuedaCorto(versionActual, 'contratoCompleto')}
+          <div class="log-envoltorio">
+            <p class="vacio">
+              Este servidor tiene Orbit {versionActual}, y el log con contrato
+              (<code>orbit logs --json</code>) llegó en la 1.3.7. Desde un terminal:
+              <code>ssh {alias} orbit logs {elegida.name}</code>.
+            </p>
+          </div>
         {:else if log}
           <div class="log-envoltorio"><VisorLog {log} app={elegida.name} /></div>
         {:else}
           <div class="log-envoltorio"><Esqueleto filas={5} /></div>
         {/if}
+        </Frontera>
+        {/key}
       </section>
     {/if}
   </main>
 </div>
 
 <style>
-  .marco { display: grid; grid-template-columns: 200px 1fr; min-height: 100vh; }
+  .marco { display: grid; grid-template-columns: 200px minmax(0, 1fr); min-height: 100vh; }
+  .sr {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  h1:focus { outline: none; }
+  h1:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .servidor[aria-disabled='true'] { opacity: .55; cursor: not-allowed; }
   .rail {
     background: var(--surface-sunken);
     border-right: 1px solid var(--border);
@@ -1318,8 +1872,20 @@
     cursor: pointer; text-align: left;
   }
   .alta:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .pie-rail { margin-top: auto; padding-top: var(--e-4); display: grid; gap: 2px; }
+  .atajo {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--e-2);
+    background: none; border: 0; border-radius: var(--r-2); padding: var(--e-1) var(--e-2);
+    font: inherit; font-size: 12px; color: var(--fg-faint); cursor: pointer; text-align: left;
+  }
+  .atajo:hover { color: var(--fg); background: var(--surface-2); }
+  .atajo:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .atajo kbd {
+    font-family: var(--mono); font-size: 10px; padding: 0 4px;
+    border: 1px solid var(--border-strong); border-radius: 3px;
+  }
   .aviso {
-    margin-top: auto; padding: var(--e-3) var(--e-2) 0;
+    padding: var(--e-3) var(--e-2) 0;
     font-size: 11px; line-height: 1.5; color: var(--fg-faint);
   }
   main { padding: var(--e-5) var(--e-6); background: var(--bg); }
@@ -1334,7 +1900,8 @@
     padding: var(--e-4);
   }
   .panel--detalle { margin-top: var(--e-5); padding: 0; }
-  .vistas, .pestanas { display: flex; gap: var(--e-1); margin-left: auto; }
+  .vistas, .pestanas { display: flex; flex-wrap: wrap; gap: var(--e-1); margin-left: auto; }
+  .cabecera { flex-wrap: wrap; }
   .pestanas { margin: 0; padding: var(--e-3) var(--e-5) 0; }
   .vistas button, .pestanas button {
     background: none; border: 1px solid transparent; border-radius: var(--r-1);
@@ -1346,6 +1913,23 @@
   .vistas button:focus-visible, .pestanas button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   .log-envoltorio { padding: var(--e-3) var(--e-5) var(--e-5); }
   .corriendo { font-family: var(--mono); font-size: 11px; color: var(--accent-text); }
+  .recargar { margin-left: auto; font-size: 13px !important; }
+  .recargar:disabled { opacity: .5; cursor: progress; }
+  .recargar + .lanzar { margin-left: var(--e-2); }
+  .lanzar--vivo { display: inline-flex; align-items: center; gap: var(--e-2); color: var(--accent-text) !important; }
+  .pulso {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--accent-fill);
+    animation: latido 1.6s ease-in-out infinite;
+  }
+  @keyframes latido { 0%, 100% { opacity: .35 } 50% { opacity: 1 } }
+  @media (prefers-reduced-motion: reduce) { .pulso { animation: none } }
+  .vacio { margin: 0; font-size: 13px; color: var(--fg-muted); }
+  .otra-vez {
+    margin-top: var(--e-4);
+    background: none; border: 1px solid var(--border-strong); border-radius: var(--r-1);
+    padding: var(--e-1) var(--e-3); font: inherit; font-size: 12px; color: var(--fg-muted); cursor: pointer;
+  }
+  .otra-vez:disabled { opacity: .6; cursor: progress; }
   .lanzar {
     margin-left: auto;
     border: 1px solid var(--border-strong) !important;
@@ -1359,12 +1943,6 @@
   .nueva { margin-left: var(--e-3); }
   .creando, .acabada { display: grid; gap: var(--e-4); }
   .creando .que { margin: 0; font-size: 13px; color: var(--fg-muted); max-width: 72ch; }
-  .prosa {
-    margin: 0; padding: var(--e-3);
-    background: var(--surface-sunken); border-radius: var(--r-2);
-    font-family: var(--mono); font-size: 12px; color: var(--fg);
-    white-space: pre-wrap; max-height: 24rem; overflow-y: auto;
-  }
   .acabada summary { font-size: 12px; color: var(--fg-muted); cursor: pointer; }
   .cerrar-nueva {
     justify-self: start;
@@ -1378,4 +1956,26 @@
     font-size: 12px; color: var(--fg-muted); white-space: pre-wrap;
   }
   .aviso-detalle--mal { color: var(--fg); border-color: var(--border-strong); }
+
+  /* Con la ventana estrecha o al 200 % (WCAG 1.4.10), el rail deja de ser una
+     columna de 200 px y pasa arriba, en una fila que se puede desplazar; y
+     nada empuja la página hacia un lado. */
+  @media (max-width: 900px) {
+    .marco { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
+    .rail {
+      flex-direction: row; flex-wrap: wrap; align-items: center; gap: var(--e-2);
+      border-right: 0; border-bottom: 1px solid var(--border);
+      padding: var(--e-2) var(--e-3);
+    }
+    .marca { margin: 0 var(--e-2) 0 0; }
+    .rail ul { display: flex; flex-wrap: wrap; gap: 2px; }
+    .servidor { width: auto; }
+    .alta { margin-top: 0; }
+    .pie-rail { margin-top: 0; padding-top: 0; margin-left: auto; display: flex; }
+    .aviso { flex-basis: 100%; padding: 0 var(--e-2); }
+    main { padding: var(--e-4) var(--e-3); }
+    .vistas { margin-left: 0; }
+    .pestanas { padding: var(--e-3) var(--e-3) 0; }
+    .log-envoltorio { padding: var(--e-3); }
+  }
 </style>

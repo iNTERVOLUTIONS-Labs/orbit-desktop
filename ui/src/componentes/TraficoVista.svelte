@@ -48,7 +48,7 @@
     <span class="et">IPs distintas</span>
   </div>
   <div class="cifra">
-    <span class="n">{trafico.status['5xx'] ?? 0}</span>
+    <span class="n">{num(trafico.status?.['5xx'])}</span>
     <span class="et">errores del servidor</span>
   </div>
 </div>
@@ -61,9 +61,9 @@
 <h3>Latencia</h3>
 {#if hayLatencia}
   <p class="latencia">
-    p50 <strong>{trafico.latency_ms.p50} ms</strong> ·
-    p95 <strong>{trafico.latency_ms.p95} ms</strong> ·
-    máx <strong>{trafico.latency_ms.max} ms</strong>
+    p50 <strong>{num(trafico.latency_ms.p50)} ms</strong> ·
+    p95 <strong>{num(trafico.latency_ms.p95)} ms</strong> ·
+    máx <strong>{num(trafico.latency_ms.max)} ms</strong>
     <span class="sobre">sobre {trafico.latency_ms.lines} peticiones</span>
   </p>
 {:else}
@@ -80,8 +80,10 @@
 
 <h3>Rutas más pedidas</h3>
 <ul class="rutas">
-  {#each trafico.paths.slice(0, 8) as p (p.path)}
-    <li><code>{p.path}</code><span class="n-ruta">{p.requests}</span></li>
+  <!-- Por posición: la ruta la escribe quien visita, y dos que se pintan igual
+       no pueden tumbar la lista. -->
+  {#each trafico.paths.slice(0, 8) as p, i (i)}
+    <li><code>{p.path}</code><span class="n-ruta">{num(p.requests)}</span></li>
   {/each}
 </ul>
 

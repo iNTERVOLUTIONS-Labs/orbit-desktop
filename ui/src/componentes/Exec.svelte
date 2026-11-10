@@ -19,6 +19,9 @@
   let shell = $state(false)
   let corriendo = $state(false)
   let salida = $state<SalidaDeExec | null>(null)
+  // Un fallo de transporte —no haber llegado, un sudo que pide clave— no es la
+  // salida del comando: el comando ni se ha ejecutado, y se dice así.
+  let fallo = $state<string | null>(null)
   let aviso = $state<string | null>(null)
   /** Se advierte del `.env` **una vez por sesión**. Un aviso que sale siempre se
    *  aprende a ignorar, y entonces se ignoran también los que importan. */
@@ -34,7 +37,17 @@
     shell ? [texto] : texto.split(/\s+/).filter((x) => x.length > 0),
   )
   const peligro = $derived(parecePeligroso(texto))
-  const listo = $derived(texto.trim().length > 0 && !corriendo)
+  // Orbit pasa por `bash -lc` un argumento suelto que lleve un metacarácter
+  // (`ls;id`), así que en este modo el núcleo lo manda como
+  // `/usr/bin/env -- ls;id` (con ruta: el PATH de la app pone delante
+  // `node_modules/.bin`):
+  // se ejecuta tal cual o falla, pero nunca lo interpreta un shell. Y si
+  // además lleva un `=`, `env` lo tomaría por una variable e imprimiría el
+  // entorno de la app, secretos incluidos: eso se rehúsa. La vista previa
+  // enseña lo que de verdad se manda.
+  const conEnv = $derived(!shell && argumentos.length === 1 && /[\s|&;<>()$`\p{Cc}]/u.test(argumentos[0]!))
+  const ambiguo = $derived(conEnv && argumentos[0]!.includes('='))
+  const listo = $derived(texto.trim().length > 0 && !corriendo && !ambiguo)
 
   async function lanzar() {
     if (!listo) return
@@ -47,9 +60,13 @@
     aviso = null
     corriendo = true
     visto = true
+    fallo = null
     try {
       salida = await correr(shell, argumentos)
       if (historico[0] !== texto) historico = [texto, ...historico].slice(0, 30)
+    } catch (e) {
+      salida = null
+      fallo = (e as { mensaje?: string })?.mensaje ?? String(e)
     } finally {
       corriendo = false
     }
@@ -85,11 +102,11 @@
     imposible predecir cuándo un `&&` se ejecuta y cuándo se pasa como texto, y
     una herramienta de depuración que no es predecible tampoco sirve.
   -->
-  <button type="button" class:activo={!shell} onclick={() => (shell = false)}>
+  <button type="button" class:activo={!shell} aria-pressed={!shell} onclick={() => (shell = false)}>
     comando
     <span class="que">argumentos separados, sin shell</span>
   </button>
-  <button type="button" class:activo={shell} onclick={() => (shell = true)}>
+  <button type="button" class:activo={shell} aria-pressed={shell} onclick={() => (shell = true)}>
     shell
     <span class="que">lo interpreta <code>bash -lc</code></span>
   </button>
@@ -109,7 +126,14 @@
 
 {#if texto.trim()}
   <!-- La orden exacta, ya escapada, ANTES de ejecutarla. -->
-  <pre class="previa">orbit exec {app} {shell ? JSON.stringify(texto) : argumentos.join(' ')}</pre>
+  <pre class="previa">orbit exec {app} {shell ? `/bin/bash -lc ${JSON.stringify(texto)}` : conEnv ? `/usr/bin/env -- ${argumentos[0]}` : argumentos.join(' ')}</pre>
+  {#if ambiguo}
+    <p class="peligro" role="alert">
+      Un solo argumento con «=» y un metacarácter no se puede mandar sin shell:
+      <code>env</code> lo tomaría por una variable y enseñaría el entorno de la
+      app. Sepáralo en argumentos o elige el modo «shell».
+    </p>
+  {/if}
 {/if}
 
 {#if aviso === texto && peligro}
@@ -138,6 +162,10 @@
     onclick={() => navigator.clipboard?.writeText(`ssh -t ${servidor} orbit exec ${app}`)}
   >Copiar la orden para una terminal de verdad</button>
 </div>
+
+{#if fallo}
+  <p class="fallo dicho--mal" role="alert">No se ha ejecutado: {fallo}</p>
+{/if}
 
 {#if salida}
   <div class="salida">
@@ -205,6 +233,7 @@
   .lanzar:disabled { opacity: .45; cursor: not-allowed; }
   .copiar { background: none; color: var(--fg); border: 1px solid var(--border-strong); }
   .salida { margin-top: var(--e-5); }
+  .fallo { margin: var(--e-4) 0 0; font-size: 13px; }
   .orden { margin: 0 0 var(--e-2); font-size: 12px; color: var(--fg-faint); }
   .chorro {
     margin: 0 0 var(--e-2); padding: var(--e-3);

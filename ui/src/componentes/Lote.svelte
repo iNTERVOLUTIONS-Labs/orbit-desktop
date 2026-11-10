@@ -1,6 +1,6 @@
 <script lang="ts">
   import { faltanVariables, finalDe, necesitanMirada, recuentos, retenidas, textoDeFinal } from '../lib/despliegue'
-  import type { Lote } from '../lib/contrato'
+  import { marcarInvisibles, type Lote } from '../lib/contrato'
 
   let { lote, servidor }: { lote: Lote; servidor: string } = $props()
 
@@ -72,9 +72,11 @@
       <tr><th scope="col">App</th><th scope="col">Final</th><th scope="col">Qué ha pasado</th></tr>
     </thead>
     <tbody>
-      {#each lote.apps as a (a.app)}
+      <!-- Por posición: dos entradas con el mismo nombre son posibles —el
+           servidor enumera ficheros— y una clave repetida se come una fila. -->
+      {#each lote.apps as a, i (i)}
         <tr>
-          <td class="nombre">{a.app}</td>
+          <td class="nombre">{marcarInvisibles(a.app)}</td>
           <td><span class="chip lote--{a.status}" title={a.status}>{textoDeFinal(a.status)}</span></td>
           <td class="que">
             {#if a.result}
@@ -84,14 +86,14 @@
                 Se paró antes del build: faltan
                 <code>{faltanVariables(a.result).join(', ')}</code>. Su web sigue como estaba.
               {:else if finalDe(a.result) === 'revertido'}
-                Falló en <code>{a.result.failed_step}</code> y volvió a
-                <code>{a.result.previous}</code>: su web sigue en pie.
+                Falló en <code>{a.result.failed_step ?? '·'}</code> y volvió a
+                <code>{a.result.previous ?? '·'}</code>: su web sigue en pie.
               {:else if finalDe(a.result) === 'recuperado'}
                 Salió bien al segundo intento; Orbit arregló el build y reintentó.
               {:else if a.result.ok}
-                Release <code>{a.result.release}</code>.
+                Release <code>{a.result.release ?? '·'}</code>.
               {:else}
-                Falló en <code>{a.result.failed_step}</code>. {a.result.error ?? ''}
+                Falló en <code>{a.result.failed_step ?? '·'}</code>. {a.result.error ?? ''}
               {/if}
             {:else if a.error}
               <!-- Sin objeto, el motivo va aquí: un null es una respuesta, un
@@ -121,7 +123,9 @@
     padding: var(--e-3); border-radius: var(--r-2);
     background: color-mix(in srgb, var(--chip) var(--chip-tinte), var(--surface));
   }
-  .cuenta--cero { opacity: .5; }
+  /* Atenuado con color y no con opacidad: con `.5` se quedaba en 2:1. Un cero
+     es una respuesta y tiene que leerse. */
+  .cuenta--cero { color: var(--fg-faint); }
   .n { display: block; font-size: 22px; font-weight: 700; color: var(--chip); line-height: 1.1; }
   .etiqueta { display: block; font-size: 11px; color: var(--fg-muted); margin-top: 2px; }
   .glifo { font-family: var(--mono); }

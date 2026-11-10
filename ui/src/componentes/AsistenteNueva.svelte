@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import {
     argvDeNew,
     avisoDelCertificado,
@@ -24,6 +25,7 @@
     correoEnElServidor = null,
     resolucion = null,
     resolviendo = false,
+    enfocarAlAbrir = true,
     alResolver,
     alCrear,
     alCerrar,
@@ -34,6 +36,9 @@
     correoEnElServidor?: boolean | null
     resolucion?: { del_dominio: string[]; del_servidor: string[]; coinciden: boolean | null } | null
     resolviendo?: boolean
+    /** La galería pinta varios asistentes a la vez y no puede dejar que cada
+     *  uno se lleve el foco. En la aplicación, siempre. */
+    enfocarAlAbrir?: boolean
     alResolver: (dominio: string) => void
     alCrear: (b: Borrador) => void
     alCerrar: () => void
@@ -54,6 +59,83 @@
   const indice = $derived(PASOS.indexOf(paso))
   const problemas = $derived(problemasDe(paso, b))
   const puedeSeguir = $derived(problemas.length === 0)
+
+  // ── De qué campo es cada problema ──────────────────────────────────────
+  //
+  // `problemasDe` devuelve frases, y una lista de frases al pie del paso no le
+  // dice a un lector de pantalla a qué campo se refiere ninguna: llegaba al
+  // campo, oía «Repositorio» y ni rastro del error. Aquí cada problema se
+  // engancha a su campo SIN leer la frase: se le da al campo un valor que
+  // vale y se mira qué problemas desaparecen. Así, si mañana cambia la
+  // redacción, el enganche sigue siendo verdad.
+  type Campo = 'repo' | 'rama' | 'nombre' | 'carpeta' | 'tipo' | 'dominio' | 'alias' | 'correo'
+  const CAMPOS: Record<Paso, Campo[]> = {
+    Origen: ['repo', 'rama', 'nombre'],
+    Detección: ['carpeta', 'tipo'],
+    Dominio: ['dominio', 'alias'],
+    Extras: ['correo'],
+    Repaso: [],
+  }
+  const BUENO: Record<Campo, (x: Borrador) => Borrador> = {
+    repo: (x) => ({ ...x, repo: 'usuario/web' }),
+    rama: (x) => ({ ...x, rama: 'main' }),
+    nombre: (x) => ({ ...x, nombre: 'web' }),
+    carpeta: (x) => ({ ...x, ajustes: { ...x.ajustes, carpeta: '' } }),
+    tipo: (x) => ({ ...x, ajustes: { ...x.ajustes, tipo: '' } }),
+    dominio: (x) => ({ ...x, dominio: 'web.ejemplo.com' }),
+    alias: (x) => ({ ...x, alias: '' }),
+    correo: (x) => ({ ...x, correo: '' }),
+  }
+  const porCampo = $derived.by(() => {
+    const m: Partial<Record<Campo, string[]>> = {}
+    for (const c of CAMPOS[paso]) {
+      const sinEl = problemasDe(paso, BUENO[c](b))
+      const suyos = problemas.filter((x) => !sinEl.includes(x))
+      if (suyos.length > 0) m[c] = suyos
+    }
+    return m
+  })
+  /** Lo que no es de ningún campo concreto. No debería haber nada, pero si un
+   *  día lo hay, se dice al pie en vez de perderse. */
+  const sueltos = $derived(problemas.filter((x) => !Object.values(porCampo).some((l) => l?.includes(x))))
+
+  // Un campo que nadie ha tocado no está mal: está vacío. Quejarse en rojo de
+  // «Falta el repositorio» antes de que hayan escrito nada se lee como «esto
+  // está roto» justo en la primera pantalla. Es la misma regla del formulario
+  // de añadir un servidor: se dice al salir del campo, o al pulsar «Siguiente».
+  let tocados = $state<Partial<Record<Campo, boolean>>>({})
+  let intentado = $state<Partial<Record<Paso, boolean>>>({})
+  const tocar = (c: Campo) => (tocados[c] = true)
+  const error = (c: Campo) => (tocados[c] || intentado[paso] ? porCampo[c]?.join(' ') : undefined)
+
+  const uid = $props.id()
+  const id = (c: string) => `${uid}-${c}`
+  /** Lo que describe a un campo: su error, si se enseña, y su ayuda. */
+  const describe = (c: Campo, ayuda = false) =>
+    [error(c) ? id(`${c}-mal`) : null, ayuda ? id(`${c}-ayuda`) : null].filter(Boolean).join(' ') || undefined
+
+  // Lo que se anuncia al pulsar «Siguiente» con algo mal. El foco va además al
+  // primer campo que falla, que dice su propio error.
+  let aviso = $state('')
+  let raiz = $state<HTMLElement | null>(null)
+  let titulo = $state<HTMLElement | null>(null)
+  let tituloPaso = $state<HTMLElement | null>(null)
+
+  // Al abrirse, el foco va al título: la vista la abre App, y el botón que la
+  // abrió deja de existir — el foco acababa en el <body>.
+  $effect(() => {
+    if (enfocarAlAbrir) titulo?.focus()
+  })
+
+  /** Cambiar de paso y llevar el foco al título del nuevo. Sin esto, al pasar
+   *  del 2 al 3 el foco caía al <body>: el campo que lo tenía ya no existe. */
+  async function irA(destino: Paso) {
+    paso = destino
+    aviso = ''
+    if (destino === 'Dominio' && b.dominio.trim() !== '') alResolver(b.dominio.trim())
+    await tick()
+    tituloPaso?.focus()
+  }
   const avisoCert = $derived(avisoDelCertificado(b, correoEnElServidor))
   const orden = $derived(ordenDeNew(b))
   const banderas = $derived(argvDeNew(b).filter((t) => t.startsWith('--')).length)
@@ -63,14 +145,27 @@
     if (!nombreTocado) b.nombre = nombreDesdeRepo(v)
   }
 
-  function ir(n: number) {
+  async function ir(n: number) {
     const destino = PASOS[Math.max(0, Math.min(PASOS.length - 1, indice + n))]!
     // Hacia atrás siempre se puede. Hacia delante, sólo si este paso está
     // resuelto: dejar avanzar y quejarse al final es la forma cara de decir lo
     // mismo tres pantallas más tarde.
-    if (n > 0 && !puedeSeguir) return
-    paso = destino
-    if (destino === 'Dominio' && b.dominio.trim() !== '') alResolver(b.dominio.trim())
+    //
+    // Pero el botón NO se deshabilita: uno deshabilitado no recibe el foco con
+    // el tabulador, así que con el teclado no se encontraba y no decía por qué.
+    // Se pulsa, se dice qué falta y el foco va a lo primero que arreglar.
+    if (n > 0 && !puedeSeguir) {
+      intentado[paso] = true
+      const cuantos = problemas.length
+      aviso = cuantos === 1 ? 'Hay una cosa por corregir en este paso.' : `Hay ${cuantos} cosas por corregir en este paso.`
+      // Los ajustes de la detección van plegados: un campo dentro de un
+      // <details> cerrado no puede recibir el foco.
+      if (paso === 'Detección' && (porCampo.carpeta || porCampo.tipo)) ajustesAbiertos = true
+      await tick()
+      raiz?.querySelector<HTMLElement>('.cuerpo [aria-invalid="true"]')?.focus()
+      return
+    }
+    await irA(destino)
   }
 
   /** Los tres estados de un campo que el servidor sabe detectar. */
@@ -87,9 +182,9 @@
   ]
 </script>
 
-<section class="asistente">
+<section class="asistente" bind:this={raiz} aria-labelledby={id('titulo')}>
   <header>
-    <h3>Nueva web en {servidor}</h3>
+    <h3 id={id('titulo')} tabindex="-1" bind:this={titulo}>Nueva web en {servidor}</h3>
     <button type="button" class="cerrar" onclick={alCerrar}>Cancelar</button>
   </header>
 
@@ -97,10 +192,15 @@
        distingue un formulario de un pozo. Los pasos ya pasados se pueden pulsar
        para volver; los de delante no, porque saltarse una validación no es
        navegar. -->
-  <ol class="rail">
+  <ol class="rail" aria-label="Pasos">
     {#each PASOS as p, i (p)}
       <li class="tramo" class:tramo--hecho={i < indice} class:tramo--aqui={i === indice}>
-        <button type="button" disabled={i > indice} onclick={() => (paso = p)}>
+        <button
+          type="button"
+          disabled={i > indice}
+          aria-current={i === indice ? 'step' : undefined}
+          onclick={() => irA(p)}
+        >
           <span class="num">{i + 1}</span>
           <span class="nom">{p}</span>
         </button>
@@ -109,47 +209,75 @@
   </ol>
 
   <div class="cuerpo">
+    <!-- El título del paso, al que va el foco al cambiar de paso. Visible: un
+         foco que cae en algo que no se ve es un foco perdido. -->
+    <h4 class="paso-titulo" tabindex="-1" bind:this={tituloPaso}>
+      Paso {indice + 1} de {PASOS.length} · {paso}
+    </h4>
+
+    <!-- La etiqueta es sólo el nombre del campo, y la ayuda va enlazada aparte:
+         dentro del <label> la ayuda entera pasaba a ser el NOMBRE del campo, y
+         el lector leía tres líneas antes de decir «editable». -->
     {#if paso === 'Origen'}
-      <label class="campo">
-        <span class="et">Repositorio</span>
+      <div class="campo">
+        <label class="et" for={id('repo')}>Repositorio</label>
         <input
+          id={id('repo')}
           value={b.repo}
           oninput={(e) => alEscribirRepo(e.currentTarget.value)}
+          onblur={() => tocar('repo')}
           placeholder="usuario/mi-web"
           spellcheck="false"
           autocapitalize="off"
+          aria-invalid={error('repo') ? 'true' : undefined}
+          aria-describedby={describe('repo', true)}
         />
-        <span class="ayuda">
+        {#if error('repo')}<p class="problema" id={id('repo-mal')}>{error('repo')}</p>{/if}
+        <span class="ayuda" id={id('repo-ayuda')}>
           «usuario/repo», o una URL <code>https</code>. Un <code>git@…</code> no,
           porque autentica con la clave del servidor y desde aquí no se puede
           comprobar que exista.
         </span>
-      </label>
+      </div>
 
-      <label class="campo campo--corto">
-        <span class="et">Rama</span>
-        <input bind:value={b.rama} spellcheck="false" autocapitalize="off" />
-      </label>
-
-      <label class="campo campo--corto">
-        <span class="et">Nombre</span>
+      <div class="campo campo--corto">
+        <label class="et" for={id('rama')}>Rama</label>
         <input
+          id={id('rama')}
+          bind:value={b.rama}
+          onblur={() => tocar('rama')}
+          spellcheck="false"
+          autocapitalize="off"
+          aria-invalid={error('rama') ? 'true' : undefined}
+          aria-describedby={describe('rama')}
+        />
+        {#if error('rama')}<p class="problema" id={id('rama-mal')}>{error('rama')}</p>{/if}
+      </div>
+
+      <div class="campo campo--corto">
+        <label class="et" for={id('nombre')}>Nombre</label>
+        <input
+          id={id('nombre')}
           value={b.nombre}
           oninput={(e) => {
             nombreTocado = true
             b.nombre = e.currentTarget.value
           }}
+          onblur={() => tocar('nombre')}
           spellcheck="false"
           autocapitalize="off"
+          aria-invalid={error('nombre') ? 'true' : undefined}
+          aria-describedby={describe('nombre', true)}
         />
-        <span class="ayuda">
+        {#if error('nombre')}<p class="problema" id={id('nombre-mal')}>{error('nombre')}</p>{/if}
+        <span class="ayuda" id={id('nombre-ayuda')}>
           {#if !nombreTocado && b.nombre !== ''}
-            Salido del repositorio. Cámbialo si quieres.
+            Propuesto a partir del repositorio. Cámbialo si quieres.
           {:else}
             Minúsculas, números, punto, guion y guion bajo. Como mucho 40.
           {/if}
         </span>
-      </label>
+      </div>
 
     {:else if paso === 'Detección'}
       <!--
@@ -177,24 +305,42 @@
       <details class="adelantar" bind:open={ajustesAbiertos}>
         <summary>Ya sé que se va a equivocar</summary>
 
-        <label class="campo">
-          <span class="et">Carpeta de la app</span>
-          <input bind:value={b.ajustes.carpeta} placeholder="apps/web" spellcheck="false" />
+        <div class="campo">
+          <label class="et" for={id('carpeta')}>Carpeta de la app</label>
+          <input
+            id={id('carpeta')}
+            bind:value={b.ajustes.carpeta}
+            onblur={() => tocar('carpeta')}
+            placeholder="apps/web"
+            spellcheck="false"
+            aria-invalid={error('carpeta') ? 'true' : undefined}
+            aria-describedby={describe('carpeta', true)}
+          />
+          {#if error('carpeta')}<p class="problema" id={id('carpeta-mal')}>{error('carpeta')}</p>{/if}
           <!-- No es un campo más y no se pinta como tal: cambiarla redirige la
                detección entera, así que los otros se leen contra otro
                directorio. Ponerla en la misma lista daría a entender que es un
                ajuste al lado de los demás, y es el que invalida a los demás. -->
-          <span class="ayuda">
+          <span class="ayuda" id={id('carpeta-ayuda')}>
             Relativa a la raíz del repositorio. <strong>Cambia dónde mira todo lo
             demás</strong>: con esto puesto, el tipo y el build se detectan
             dentro de esa carpeta.
           </span>
-        </label>
+        </div>
 
-        <label class="campo campo--corto">
-          <span class="et">Tipo</span>
-          <input bind:value={b.ajustes.tipo} placeholder="next, laravel, static…" spellcheck="false" />
-        </label>
+        <div class="campo campo--corto">
+          <label class="et" for={id('tipo')}>Tipo</label>
+          <input
+            id={id('tipo')}
+            bind:value={b.ajustes.tipo}
+            onblur={() => tocar('tipo')}
+            placeholder="next, laravel, static…"
+            spellcheck="false"
+            aria-invalid={error('tipo') ? 'true' : undefined}
+            aria-describedby={describe('tipo')}
+          />
+          {#if error('tipo')}<p class="problema" id={id('tipo-mal')}>{error('tipo')}</p>{/if}
+        </div>
 
         {#each AJUSTABLES as a (a.clave)}
           {@const v = b.ajustes[a.clave]}
@@ -213,7 +359,13 @@
                   {v.modo === 'vacia' ? a.vacio : 'lo detecta Orbit'}
                 </span>
               {/if}
-              <button type="button" onclick={() => (b.ajustes[a.clave] = ciclar(v))}>
+              <!-- Con nombre propio: tres botones «cambiar» seguidos son tres
+                   botones iguales para quien no ve a qué fila van. -->
+              <button
+                type="button"
+                aria-label="Cambiar {a.etiqueta.toLowerCase()}: ahora {v.modo === 'valor' ? 'un valor escrito' : v.modo === 'vacia' ? a.vacio : 'lo detecta Orbit'}"
+                onclick={() => (b.ajustes[a.clave] = ciclar(v))}
+              >
                 cambiar
               </button>
             </div>
@@ -238,28 +390,44 @@
       </p>
 
     {:else if paso === 'Dominio'}
-      <label class="campo">
-        <span class="et">Dominio</span>
+      <div class="campo">
+        <label class="et" for={id('dominio')}>Dominio</label>
         <input
+          id={id('dominio')}
           bind:value={b.dominio}
-          onblur={() => b.dominio.trim() !== '' && alResolver(b.dominio.trim())}
+          onblur={() => {
+            tocar('dominio')
+            if (b.dominio.trim() !== '') alResolver(b.dominio.trim())
+          }}
           placeholder="mi-web.ejemplo.com"
           spellcheck="false"
           autocapitalize="off"
+          aria-invalid={error('dominio') ? 'true' : undefined}
+          aria-describedby={describe('dominio')}
         />
-      </label>
+        {#if error('dominio')}<p class="problema" id={id('dominio-mal')}>{error('dominio')}</p>{/if}
+      </div>
 
-      <label class="campo">
-        <span class="et">Alias</span>
-        <input bind:value={b.alias} placeholder="www.mi-web.ejemplo.com" spellcheck="false" />
-        <span class="ayuda">
+      <div class="campo">
+        <label class="et" for={id('alias')}>Alias</label>
+        <input
+          id={id('alias')}
+          bind:value={b.alias}
+          onblur={() => tocar('alias')}
+          placeholder="www.mi-web.ejemplo.com"
+          spellcheck="false"
+          aria-invalid={error('alias') ? 'true' : undefined}
+          aria-describedby={describe('alias', true)}
+        />
+        {#if error('alias')}<p class="problema" id={id('alias-mal')}>{error('alias')}</p>{/if}
+        <span class="ayuda" id={id('alias-ayuda')}>
           Separados por comas. Si lo dejas vacío no se añade ninguno —tampoco un
           <code>www.</code>— porque «ninguno» es una respuesta y se manda como tal.
         </span>
-      </label>
+      </div>
 
       {#if resolviendo}
-        <p class="dns tenue">comprobando a dónde apunta…</p>
+        <p class="dns tenue">Comprobando a dónde apunta…</p>
       {:else if resolucion}
         <!-- Es el final F7 —publicada pero sin DNS— convertido en un aviso
              previo. Avisa y nunca impide seguir: un servidor detrás de un proxy
@@ -305,18 +473,28 @@
       </label>
 
       {#if b.https}
-        <label class="campo">
-          <span class="et">Correo para Let's Encrypt</span>
-          <input bind:value={b.correo} placeholder="avisos@ejemplo.com" spellcheck="false" />
+        <div class="campo">
+          <label class="et" for={id('correo')}>Correo para Let's Encrypt</label>
+          <input
+            id={id('correo')}
+            bind:value={b.correo}
+            onblur={() => tocar('correo')}
+            placeholder="avisos@ejemplo.com"
+            spellcheck="false"
+            autocomplete="email"
+            aria-invalid={error('correo') ? 'true' : undefined}
+            aria-describedby={describe('correo', true)}
+          />
+          {#if error('correo')}<p class="problema" id={id('correo-mal')}>{error('correo')}</p>{/if}
           <!-- Un efecto secundario que se enseña ANTES y no después: el correo
                se guarda en la configuración global del servidor, no en la de la
                app. Decirlo cuando ocurre evita el «¿por qué ya no me lo
                pregunta?» de dentro de tres meses. -->
-          <span class="ayuda">
+          <span class="ayuda" id={id('correo-ayuda')}>
             Se guarda en la configuración del servidor, no en la de esta web: la
             próxima que crees aquí ya no te lo preguntará.
           </span>
-        </label>
+        </div>
       {/if}
 
       {#if avisoCert}
@@ -394,20 +572,19 @@
     {/if}
   </div>
 
-  {#if problemas.length > 0}
-    <ul class="problema">
-      {#each problemas as p (p)}<li>{p}</li>{/each}
+  {#if sueltos.length > 0 && intentado[paso]}
+    <ul class="problema problema--lista">
+      {#each sueltos as p, i (i)}<li>{p}</li>{/each}
     </ul>
   {/if}
+  <p class="sr" role="status">{aviso}</p>
 
   <footer>
     <button type="button" onclick={() => ir(-1)} disabled={indice === 0}>Atrás</button>
     {#if paso === 'Repaso'}
       <button type="button" class="primaria" onclick={() => alCrear(b)}>Crear la web</button>
     {:else}
-      <button type="button" class="primaria" onclick={() => ir(1)} disabled={!puedeSeguir}>
-        Siguiente
-      </button>
+      <button type="button" class="primaria" onclick={() => ir(1)}>Siguiente</button>
     {/if}
   </footer>
 </section>
@@ -418,8 +595,16 @@
     gap: var(--e-4);
     max-width: 78ch;
   }
-  header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--e-3); }
+  /* Una columna que NO crece con su contenido: sin `minmax(0, 1fr)`, la pista
+     implícita de la rejilla se ensancha hasta lo que mida el texto más largo
+     que no se puede partir y el asistente se salía de su panel a 320 px. */
+  .asistente { container-type: inline-size; grid-template-columns: minmax(0, 1fr); }
+  .cuerpo, .campo { grid-template-columns: minmax(0, 1fr); }
+  dd { overflow-wrap: anywhere; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--e-3); }
   h3 { margin: 0; font-size: 15px; font-weight: 600; color: var(--fg); }
+  .paso-titulo { margin: 0; font-size: 13px; font-weight: 600; color: var(--fg-muted); }
+  h3:focus-visible, .paso-titulo:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-1); }
   .cerrar {
     background: none; border: 0; padding: 0; font: inherit; font-size: 12px;
     color: var(--fg-muted); cursor: pointer; text-decoration: underline;
@@ -454,6 +639,11 @@
     align-items: center;
     column-gap: var(--e-3);
   }
+  /* En estrecho, etiqueta encima y valor debajo: 140 px de etiqueta en un
+     ancho de 320 dejan el campo sin sitio. */
+  @container (max-width: 28rem) {
+    .campo--tri, .repaso > div { grid-template-columns: 1fr; row-gap: 2px; }
+  }
   .et { font-size: 12px; color: var(--fg-muted); }
   .ayuda { font-size: 12px; color: var(--fg-faint); max-width: 68ch; }
   .ayuda--suelta { margin: 0; }
@@ -464,8 +654,8 @@
   }
   input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
-  .tri { display: flex; align-items: center; gap: var(--e-2); }
-  .tri input { flex: 1; max-width: 44ch; }
+  .tri { display: flex; flex-wrap: wrap; align-items: center; gap: var(--e-2); }
+  .tri input { flex: 1; min-width: 0; max-width: 44ch; }
   .estado-tri {
     flex: 1; font-size: 13px; font-style: italic;
     color: var(--anulacion, var(--fg-faint));
@@ -516,11 +706,13 @@
   }
 
   .problema {
-    margin: 0; padding-left: var(--e-4);
+    margin: 0;
     font-size: 12px; color: var(--asistente, var(--fg-muted)); max-width: 72ch;
   }
+  .problema--lista { padding-left: var(--e-4); }
+  input[aria-invalid='true'] { border-color: var(--aviso-campo, var(--border-strong)); }
 
-  footer { display: flex; gap: var(--e-2); justify-content: flex-end; }
+  footer { display: flex; flex-wrap: wrap; gap: var(--e-2); justify-content: flex-end; }
   .primaria {
     background: var(--accent-fill); color: var(--on-accent); border: 0;
     border-radius: var(--r-2); padding: var(--e-2) var(--e-3);
@@ -530,4 +722,5 @@
      uno activo es peor que no tenerlo, porque invita a pulsarlo y no contesta. */
   .primaria:disabled, footer button:disabled { opacity: .45; cursor: default; }
   code { font-family: var(--mono); font-size: 12px; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 </style>

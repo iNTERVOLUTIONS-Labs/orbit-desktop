@@ -1,6 +1,6 @@
 <script lang="ts">
   import { comparar, sha } from '../lib/comparar'
-  import type { App } from '../lib/contrato'
+  import { marcarInvisibles as vis, type App } from '../lib/contrato'
   import type { ErrorDelPuente } from '../lib/puente'
 
   let {
@@ -31,6 +31,12 @@
 
   // Sólo cuando hay las dos listas. Media comparación no es una comparación.
   const c = $derived(appsB === null ? null : comparar(appsA, appsB))
+
+  /** Lo que identifica —el nombre, el tipo, un dominio— con lo invisible a la
+   *  vista. «sí», «no» y «—» son nuestros y no se tocan. */
+  function valor(campo: string, t: string): string {
+    return campo === 'type' || campo === 'domain' || (campo === 'aliases' && t !== '—') ? vis(t) : t
+  }
 </script>
 
 <section class="comparar">
@@ -51,7 +57,7 @@
       </p>
     {:else}
       <ul class="elegir">
-        {#each candidatos as x (x)}
+        {#each candidatos as x, i (i)}
           <li><button type="button" onclick={() => alElegir(x)}>{x}</button></li>
         {/each}
       </ul>
@@ -88,6 +94,14 @@
         {c.conDiferencias === 1 ? 'tiene diferencias' : 'tienen diferencias'}{/if}.
       {c.soloA.length} sólo en {a}, {c.soloB.length} sólo en {b}.
     </p>
+    {#each [{ quien: a, rep: c.repetidasA }, { quien: b, rep: c.repetidasB }] as x, i (i)}
+      {#if x.rep.length > 0}
+        <p class="tenue" role="status">
+          En <strong>{x.quien}</strong> hay más de una app con el mismo nombre
+          ({x.rep.map(vis).join(', ')}): se compara la última que da el servidor.
+        </p>
+      {/if}
+    {/each}
 
     {#if c.conDiferencias > 0}
       <h4>Están en los dos, y no están igual</h4>
@@ -109,20 +123,20 @@
           </tr>
         </thead>
         <tbody>
-          {#each c.enLosDos.filter((f) => f.diferencias.length > 0) as f (f.app)}
-            {#each f.diferencias as d, i (d.campo)}
+          {#each c.enLosDos.filter((f) => f.diferencias.length > 0) as f, j (j)}
+            {#each f.diferencias as d, i (i)}
               <tr class:primera={i === 0}>
-                <td class="nombre">{i === 0 ? f.app : ''}</td>
+                <td class="nombre">{i === 0 ? vis(f.app) : ''}</td>
                 <td class="campo" title={d.porque}>{d.etiqueta}</td>
                 <td class="valor lado--a">
                   {d.campo === 'last_deploy_sha'
                     ? sha(f.a?.state.last_deploy_sha ?? null)
-                    : d.a}
+                    : valor(d.campo, d.a)}
                 </td>
                 <td class="valor lado--b">
                   {d.campo === 'last_deploy_sha'
                     ? sha(f.b?.state.last_deploy_sha ?? null)
-                    : d.b}
+                    : valor(d.campo, d.b)}
                 </td>
               </tr>
             {/each}
@@ -154,8 +168,8 @@
           <p class="tenue">ninguna</p>
         {:else}
           <ul class="solo">
-            {#each c.soloA as f (f.app)}
-              <li><span class="nombre">{f.app}</span><span class="dom">{f.a?.domain}</span></li>
+            {#each c.soloA as f, i (i)}
+              <li><span class="nombre">{vis(f.app)}</span><span class="dom">{vis(f.a?.domain ?? '')}</span></li>
             {/each}
           </ul>
         {/if}
@@ -166,8 +180,8 @@
           <p class="tenue">ninguna</p>
         {:else}
           <ul class="solo">
-            {#each c.soloB as f (f.app)}
-              <li><span class="nombre">{f.app}</span><span class="dom">{f.b?.domain}</span></li>
+            {#each c.soloB as f, i (i)}
+              <li><span class="nombre">{vis(f.app)}</span><span class="dom">{vis(f.b?.domain ?? '')}</span></li>
             {/each}
           </ul>
         {/if}

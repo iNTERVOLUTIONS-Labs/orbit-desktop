@@ -1,7 +1,8 @@
 # El contrato `--json`, tal y como ES
 
 > Auditoría de la superficie que Orbit Desktop consume: `orbit … --json` sobre
-> Orbit v1.3.6, **puesta al día con la v1.4.8 en [§1.16](#116-de-136-a-148-lo-que-cambió-y-cómo-lo-lee-el-cliente)**.
+> Orbit v1.3.6, **puesta al día con la v1.4.8 en [§1.16](#116-de-136-a-148-lo-que-cambió-y-cómo-lo-lee-el-cliente)
+> y con la v1.5.1 en [§1.17](#117-de-149-a-151-y-tres-cosas-que-ya-estaban-mal)**.
 > **Está ejecutada, no leída.** Cuando el comportamiento no se
 > deduce de la lectura, se montó un banco y se llamó a `main()` — que es justo
 > la parte que las pruebas del repositorio de Orbit no ejercitan, porque
@@ -930,6 +931,13 @@ verificado en §1.10.
 - Decide la forma del comando (9004-9013): sin argumentos, `bash` interactivo; **un** argumento con
   metacaracteres (`[[:space:]|&;<>()$\`]`), `bash -lc "$1"`; en cualquier otro caso, los argumentos
   tal cual.
+- **Por eso el cliente nunca manda un argumento suelto** (0.1.2-rc.1). El modo *shell* va como
+  `exec <app> /bin/bash -lc <texto>`: tres argumentos, que el servidor ejecuta tal cual, así que
+  también se interpreta un texto de una palabra (`~/bin/copia.sh` no expandía la `~`). Y el modo
+  *comando* con un solo argumento que lleve un metacarácter va como `exec <app> /usr/bin/env --
+  <arg>`, que lo ejecuta literal o falla, pero nunca lo pasa por un shell; con un `=` dentro se
+  rehúsa, porque `env` lo leería como una variable y enseñaría el entorno de la app. `env` con
+  ruta: el `PATH` de la app pone delante `node_modules/.bin` y `.venv/bin`.
 - Avisa por **stderr** si el comando contiene `install` y el tipo no es php/python (9018-9022).
 - Ejecuta vía `_run_in_dir` (8977) → `sudo -u <usuario de la app> -H bash -lc "$_exec_script"`,
   que reproduce el entorno de la unidad systemd: `.env` primero, luego `NODE_ENV=production`,
@@ -1158,6 +1166,7 @@ lectura. Están en `tests/fakeserver/fixtures/*-1.4*.json`, `env-check.json`, `c
 |---|---|---|---|
 | 0.1.0 | 1.3.6 | 2026-08 | Contra 1.4.3+ no podía leer una pasada con una app congelada |
 | 0.1.1 | 1.3.6 – 1.4.9 | 2026-11-05 | Lo que no existe en el servidor no se ofrece, y su silencio no se lee como un «no». Con 1.4.9, las variables van por la entrada estándar |
+| 0.1.2-rc.1 | 1.3.6 – 1.5.1 | 2026-11-10 | Ver §1.17. Las apps en marcha ya no salen «no se sabe» contra un servidor real |
 
 #### Los campos nuevos de `state` (`list`, `status` e `info`)
 
@@ -1292,9 +1301,72 @@ mira que el objeto traiga los once recuentos y que reconstruyan el total.
 
 #### Lo que no se usa todavía, a propósito
 
-- **`orbit github status|repos|branches --json`** está en `main` sin publicar (el `[No publicado]`
-  del CHANGELOG de Orbit, camino de la 1.4.9). Es lo que el asistente de web nueva necesita para
-  ofrecer los repositorios **de la cuenta del servidor**; se usará cuando salga en una versión.
+- **`orbit github status|repos|branches --json`** está en el script desde la 1.3.7, pero **no se
+  puede invocar en ninguna versión publicada**: ver §1.17. Es lo que el asistente de web nueva
+  necesita para ofrecer los repositorios **de la cuenta del servidor**.
 - **`orbit ssl <app> --dry-run`** (1.4.7) y **`--origin`** hablan en prosa y tardan entre segundos y
   minutos. No tienen pantalla todavía.
 - **`orbit metrics prom …`** (1.4.6) es configuración del servidor, no algo que mirar.
+
+### 1.17 De 1.4.9 a 1.5.1, y tres cosas que ya estaban mal
+
+Comprobado con un `diff` del script entre la 1.4.9 y la 1.5.1 y ejecutando una copia en el banco.
+**Ningún emisor del contrato cambia**: ni `_app_state_json`, ni `ORBIT_APP_FIELDS`, ni
+`_json_capable`, ni los glifos, ni los códigos de salida. El contrato sigue en el 1.
+
+#### Lo nuevo: `csp` en el `orbit.json` (1.5.1)
+
+`"csp": "default-src 'self'; …"` añade `Content-Security-Policy` al vhost de la app, y
+`"csp_report_only": true` la manda como `…-Report-Only`. Vale para todo tipo de app **salvo
+`redirect`**. Se valida antes de tocar producción (`_csp_check`) y se **rechaza**, no se arregla:
+
+- más de 4096 caracteres (el cliente cuenta bytes, que es lo más estricto que puede contar bash);
+- cualquier carácter de control, también los C1 de UTF-8;
+- `"`, `\`, `$`, `{`, `}`, o un `;` al final (los blancos de los extremos no cuentan).
+
+Una política rechazada **aborta el despliegue** con `ok:false`, `failed_step:"release"` y la release
+anterior sirviendo, con el motivo en `error` en el idioma del servidor. Y cualquier orden que
+regenere el vhost —rollback, `nginx-rebuild`, `ssl`, `domain`— muere igual si la release servida
+trae una mala.
+
+`info --json` **no devuelve la CSP**: vive en el `orbit.json` de la release, no en el descriptor.
+Por eso el generador del `orbit.json` del cliente la pide escrita a mano, la valida con las mismas
+reglas y en el mismo orden (`problemaDeLaCsp`), y no la emite si Orbit la rechazaría. Con un
+servidor anterior a la 1.5.1 avisa de que la clave se ignoraría sin decir nada (`Capacidad::Csp`).
+
+#### 1.5.0: `orbit admin` y la elevación
+
+Sólo prosa, y el cliente no llama a `admin`. Quien tiene `orbit-admin` como grupo **principal**
+ahora cuenta como miembro (el `admin` de `doctor` pasa de `ok` a `info`), y la limpieza del entorno
+al elevarse salta siempre que exista `SUDO_UID`. Nada que cambiar.
+
+#### Lo que estaba mal desde antes, y no se veía porque las muestras decían otra cosa
+
+- **`state.service` es `"running"` o `"stopped"`** (`svc_state`), no `"active"`. Las muestras de
+  las pruebas decían `active` —la palabra de systemd— y el cliente sólo reconocía ésa: contra un
+  servidor real, **toda app con proceso salía «no se sabe»**, en la lista y en el monitor. Ahora
+  `running` es activa; `active` se sigue aceptando porque es inequívoca.
+- **`logs --json`, `backup list|verify --json` y `doctor --fix --yes` son de la 1.3.7**, no de la
+  línea base. El `[No publicado]` del CHANGELOG de Orbit los cuenta como si fueran de siempre, pero
+  no están en la etiqueta 1.3.6. Capacidad nueva `contratoCompleto` (1.3.7); con un servidor que se
+  sabe anterior, el log y «arreglar» lo dicen en vez de fallar. Con una versión desconocida no se
+  esconden: quitarle a alguien el log porque falló un saludo sería peor.
+- **`orbit github status|repos|branches --json` no se puede invocar en ninguna versión
+  publicada.** `main` despacha `github|gh) cmd_github ;;` **sin `"$@"`**, así que todo cae en
+  «conectar»: con `--json` sale con 1 y `x --json está en 'orbit github status'…`, y sin él abre el
+  flujo del navegador. Las pruebas de Orbit no lo ven porque llaman a las funciones directamente.
+  El arreglo es de una línea y es de Orbit; hasta entonces el asistente no ofrece la lista. Cuando
+  se use, la URL pasa por `repo_valido` antes: `_remote_branches` la mete entre comillas simples en
+  un `bash -lc`.
+
+#### Lo que el cliente empieza a leer
+
+| Orden | Desde | Forma | Notas |
+|---|---|---|---|
+| `status --json`: `host`, `services` | 1.3.6 | `host:{hostname, ip, uptime_seconds, load:[n×3] o [], memory_kb, disk_kb}`, `services:[{name, active}]` | Llega en la misma llamada que la portada y se tiraba. `load` vacía no es carga cero |
+| `backup list --json` | 1.3.7 | `{dir, backups:[{file, app, kind, created, size_bytes, verified:null}], total, bytes, keep_days}` | `app:null` y `kind:"config"` en la copia de la configuración global |
+| `backup verify --json` | 1.3.7 | `{backups:[{file, kind, app, ok, message}], total, good, bad, ok}` | **Sale con 1 si alguna es mala**, con el objeto: no es un fallo de transporte |
+| `db list --json` | 1.3.6 | `{databases:[{name, owner, size_bytes}]}` | Con PostgreSQL caído sale con error y sin objeto, no con una lista vacía |
+| `redirect list --json` | 1.3.6 | `{redirects:[{app, kind, from, to, code, query}]}` | Con `kind:"domain"`, `from` es **el nombre de la app** |
+| `watch status --json` | 1.3.6 | `{timer_active, subjects:[{subject, state, since, tries, last_try}], summary}` | `since` y `last_try` usan **0 para «no se sabe»**, no `null` |
+| `queue status --json` | 1.3.6 | `{timer_active, every_minutes, max_seconds, apps:[{app, type, connection}]}` | |

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Lo único que la ventana puede pedirle a Tauri además de los comandos de lib.rs: escuchar y dejar de escuchar el progreso (orbit://progreso). Sin shell, sin fs, sin opener: la superficie es la lista de comandos de lib.rs, y esto no la agranda.",
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

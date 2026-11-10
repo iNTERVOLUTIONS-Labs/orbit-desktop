@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import { aliasValido, hostValido, usuarioValido, type Borrador } from '../lib/servidores'
   import type { ErrorDelPuente } from '../lib/puente'
 
@@ -6,6 +7,7 @@
     yaUsados,
     guardando = false,
     fallo = null,
+    enfocarAlAbrir = true,
     alGuardar,
     alCerrar,
   }: {
@@ -16,6 +18,9 @@
     yaUsados: string[]
     guardando?: boolean
     fallo?: ErrorDelPuente | null
+    /** La galería pinta varias pantallas a la vez y no puede dejar que cada
+     *  una se lleve el foco. En la aplicación, siempre. */
+    enfocarAlAbrir?: boolean
     alGuardar: (b: Borrador) => void
     alCerrar: () => void
   } = $props()
@@ -75,6 +80,47 @@
     tocados[campo] ? problemas.find((p) => p.campo === campo)?.que : undefined
   const listo = $derived(problemas.length === 0)
 
+  /** Los ids de lo que describe a un campo: su error si lo hay y su pista. Un
+   *  error que no está enlazado al campo no se oye al llegar a él: el lector
+   *  dice «no válido» y no dice por qué. */
+  const describe = (...ids: (string | false | undefined | null)[]) =>
+    ids.filter(Boolean).join(' ') || undefined
+
+  // Lo que se anuncia al intentar enviar con algo mal. El foco ya va al primer
+  // campo que falla —y ese campo dice su error—, pero sin esto quien no ve la
+  // pantalla no sabe que hay MÁS de uno.
+  let aviso = $state('')
+  let formulario = $state<HTMLFormElement | null>(null)
+
+  async function enviar(e: SubmitEvent) {
+    e.preventDefault()
+    if (guardando) return
+    for (const c of ['alias', 'host', 'usuario', 'puerto']) tocar(c)
+    if (listo) {
+      aviso = ''
+      alGuardar(b)
+      return
+    }
+    // El botón está SIEMPRE habilitado: uno deshabilitado no recibe el foco con
+    // el tabulador, así que con el teclado no se encontraba, e Intro en un
+    // campo no hacía nada sin decir por qué. Se valida al pulsar y se lleva el
+    // foco a lo primero que hay que arreglar.
+    const n = problemas.length
+    aviso = n === 1 ? 'Hay un campo por corregir.' : `Hay ${n} campos por corregir.`
+    await tick()
+    formulario?.querySelector<HTMLInputElement>('[aria-invalid="true"]')?.focus()
+  }
+
+  // Al abrirse, el foco va al primer campo. La vista la abre App y el foco se
+  // quedaba en el botón que la abrió, que ya no existe: acababa en el <body> y
+  // había que volver a recorrer la página entera con el tabulador.
+  let primero = $state<HTMLInputElement | null>(null)
+  $effect(() => {
+    if (enfocarAlAbrir) primero?.focus()
+  })
+
+  const ID_TITULO = 'ns-titulo'
+
   /** El choque con otro alias se dice **mientras se escribe**, sin esperar a
    *  salir del campo: no es «te falta algo», es «esto no puede ser», y callarlo
    *  hasta el final deja teclear un nombre entero para tirarlo después. */
@@ -87,16 +133,18 @@
 
 <form
   class="alta"
-  onsubmit={(e) => {
-    e.preventDefault()
-    for (const c of ['alias', 'host', 'usuario', 'puerto']) tocar(c)
-    if (listo && !guardando) alGuardar(b)
-  }}
+  aria-labelledby={ID_TITULO}
+  novalidate
+  bind:this={formulario}
+  onsubmit={enviar}
 >
+  <h3 id={ID_TITULO}>Añadir un servidor</h3>
+
   <div class="campo campo--ancho">
     <label for="ns-host">Dirección del servidor</label>
     <input
       id="ns-host"
+      bind:this={primero}
       value={b.host}
       oninput={(e) => alEscribirHost(e.currentTarget.value)}
       onblur={() => tocar('host')}
@@ -105,8 +153,9 @@
       autocapitalize="off"
       autocomplete="off"
       aria-invalid={de('host') ? 'true' : undefined}
+      aria-describedby={describe(de('host') && 'ns-host-mal')}
     />
-    {#if de('host')}<p class="mal">{de('host')}</p>{/if}
+    {#if de('host')}<p class="mal" id="ns-host-mal">{de('host')}</p>{/if}
   </div>
 
   <div class="fila">
@@ -120,8 +169,9 @@
         autocapitalize="off"
         autocomplete="off"
         aria-invalid={de('usuario') ? 'true' : undefined}
+        aria-describedby={describe(de('usuario') && 'ns-usuario-mal')}
       />
-      {#if de('usuario')}<p class="mal">{de('usuario')}</p>{/if}
+      {#if de('usuario')}<p class="mal" id="ns-usuario-mal">{de('usuario')}</p>{/if}
     </div>
     <div class="campo campo--corto">
       <label for="ns-puerto">Puerto</label>
@@ -133,7 +183,10 @@
         bind:value={b.puerto}
         onblur={() => tocar('puerto')}
         aria-invalid={de('puerto') ? 'true' : undefined}
+        aria-describedby={describe(de('puerto') && 'ns-puerto-mal')}
       />
+      <!-- Faltaba: el campo se marcaba en rojo y nadie decía por qué. -->
+      {#if de('puerto')}<p class="mal" id="ns-puerto-mal">{de('puerto')}</p>{/if}
     </div>
   </div>
 
@@ -151,13 +204,17 @@
       autocapitalize="off"
       autocomplete="off"
       aria-invalid={de('alias') || choca ? 'true' : undefined}
+      aria-describedby={describe(
+        (choca || de('alias')) && 'ns-alias-mal',
+        !choca && !de('alias') && !aliasTocado && b.alias !== '' && 'ns-alias-pista',
+      )}
     />
     {#if choca}
-      <p class="mal">{choca}</p>
+      <p class="mal" id="ns-alias-mal">{choca}</p>
     {:else if de('alias')}
-      <p class="mal">{de('alias')}</p>
+      <p class="mal" id="ns-alias-mal">{de('alias')}</p>
     {:else if !aliasTocado && b.alias !== ''}
-      <p class="pista">Salido de la dirección. Cámbialo si quieres.</p>
+      <p class="pista" id="ns-alias-pista">Propuesto a partir de la dirección. Cámbialo si quieres.</p>
     {/if}
   </div>
 
@@ -171,6 +228,7 @@
       <label for="ns-clave">Ruta del fichero de la clave</label>
       <input
         id="ns-clave"
+        aria-describedby="ns-clave-pista"
         bind:value={b.clave}
         placeholder="~/.ssh/id_ed25519"
         spellcheck="false"
@@ -181,7 +239,7 @@
         Dicho donde alguien podría temer lo contrario: está a punto de escribir
         algo sobre una clave privada en un formulario.
       -->
-      <p class="pista">
+      <p class="pista" id="ns-clave-pista">
         Se guarda <strong>la ruta</strong>, nunca la clave ni su frase de paso.
         Lo que hay dentro se lo pide <code>ssh</code> a tu agente, igual que en
         un terminal.
@@ -190,12 +248,22 @@
   </details>
 
   {#if fallo}
-    <p class="fallo" role="alert">{fallo.mensaje}</p>
+    <!-- Nuestra frase arriba y la del núcleo debajo, como detalle: la del
+         núcleo empieza en minúscula y no dice qué hacer. -->
+    <div class="fallo" role="alert">
+      <p>No he podido guardarlo. Revisa los datos y vuelve a intentarlo.</p>
+      {#if fallo.mensaje.trim() !== ''}<p class="cita">{fallo.mensaje}</p>{/if}
+    </div>
   {/if}
+
+  <p class="sr" role="status">{aviso}</p>
 
   <footer>
     <button type="button" class="secundario" onclick={alCerrar}>Cancelar</button>
-    <button type="submit" class="primario" disabled={!listo || guardando}>
+    <!-- Habilitado siempre, también mientras guarda: un botón que se
+         deshabilita con el foco encima tira el foco al <body>. Mientras guarda
+         lo dice y no hace nada. -->
+    <button type="submit" class="primario" aria-disabled={guardando ? 'true' : undefined}>
       {#if guardando}
         <span class="giro" aria-hidden="true"></span> Guardando…
       {:else}
@@ -211,11 +279,16 @@
 </form>
 
 <style>
-  .alta { display: grid; gap: var(--e-4); max-width: 56ch; }
+  .alta { display: grid; gap: var(--e-4); max-width: 56ch; container-type: inline-size; }
+  h3 { margin: 0; font-size: 15px; font-weight: 600; color: var(--fg); }
 
   .campo { display: grid; gap: var(--e-1); min-width: 0; }
   .campo--ancho { grid-column: 1 / -1; }
   .fila { display: grid; grid-template-columns: 1fr 8rem; gap: var(--e-3); }
+  /* En estrecho, una columna: usuario y puerto uno debajo del otro. */
+  @container (max-width: 22rem) {
+    .fila { grid-template-columns: 1fr; }
+  }
   .campo--corto input { width: 100%; }
 
   label { font-size: 12px; color: var(--fg-muted); }
@@ -250,6 +323,8 @@
   }
   summary:hover { color: var(--fg); }
 
+  .fallo p { margin: 0; }
+  .fallo .cita { margin-top: var(--e-1); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
   .fallo {
     margin: 0; font-size: 13px; padding: var(--e-3);
     border-radius: var(--r-2);
@@ -258,7 +333,7 @@
     animation: entra var(--t-normal) var(--e-entrada);
   }
 
-  footer { display: flex; gap: var(--e-2); justify-content: flex-end; align-items: center; }
+  footer { display: flex; flex-wrap: wrap; gap: var(--e-2); justify-content: flex-end; align-items: center; }
   button {
     border-radius: var(--r-2); padding: var(--e-2) var(--e-4);
     font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
@@ -274,7 +349,7 @@
      de nada: informa de que se ha pulsado, que en un botón que tarda es justo
      lo que hace falta. */
   button:active:not(:disabled) { transform: translateY(1px); }
-  button:disabled { opacity: .45; cursor: default; }
+  button:disabled, button[aria-disabled='true'] { opacity: .45; cursor: default; }
   button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
   .giro {
@@ -290,4 +365,6 @@
 
   .nota { margin: 0; font-size: 12px; color: var(--fg-faint); max-width: 52ch; }
   code { font-family: var(--mono); font-size: 12px; }
+  input { min-width: 0; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 </style>

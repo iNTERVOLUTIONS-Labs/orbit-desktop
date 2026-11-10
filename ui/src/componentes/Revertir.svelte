@@ -47,7 +47,8 @@
         <span class="cuando">{activa ? legible(activa) : ''}</span>
         <span class="marca">sirviendo ahora</span>
       </li>
-      {#each elegibles as r (r)}
+      <!-- Por posición: los nombres de release los da el servidor. -->
+      {#each elegibles as r, i (i)}
         <li class="release">
           <span class="cual">{r}</span>
           <span class="cuando">{legible(r)}</span>
@@ -126,4 +127,10 @@
   }
   .release button:hover { color: var(--fg); }
   .release button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  /* A 320 px (o al 200 % en una ventana estrecha) las columnas fijas
+     empujaban la página hacia un lado: una sola columna. */
+  @media (max-width: 480px) {
+    .release { grid-template-columns: minmax(0, 1fr); }
+  }
 </style>

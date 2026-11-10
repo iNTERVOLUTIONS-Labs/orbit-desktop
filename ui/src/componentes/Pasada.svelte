@@ -1,11 +1,15 @@
 <script lang="ts">
   import LoteVista from './Lote.svelte'
+  import Consola from './Consola.svelte'
   import { finalesPosibles, leerPasada, textoDeFinal, FINALES_DEL_LOTE } from '../lib/despliegue'
+  import { salidaDeTexto } from '../lib/consola'
+  import type { PasadaEnVivo } from '../lib/vivos.svelte'
   import type { App, Lote } from '../lib/contrato'
 
   let {
     servidor,
     apps,
+    pasada = null,
     crudo = '',
     resultado = null,
     corriendo = false,
@@ -17,7 +21,11 @@
     servidor: string
     /** La portada, para poder decir a cuántas va a tocar **antes** de tocarlas. */
     apps: App[]
-    /** Las líneas de progreso tal como llegaron. */
+    /** La pasada en vivo: su salida y lo que se lee de ella, al día línea a
+     *  línea (`new PasadaEnVivo()`, con `anotar` desde el oyente). */
+    pasada?: PasadaEnVivo | null
+    /** La salida ya entera, como texto: para la galería y las pruebas. Sólo se
+     *  mira si no hay `pasada`. */
     crudo?: string
     resultado?: Lote | null
     corriendo?: boolean
@@ -34,7 +42,19 @@
   const redirecciones = $derived(apps.filter((a) => a.type === 'redirect').length)
   const candidatas = $derived(apps.length - redirecciones)
 
-  const pasada = $derived(leerPasada(crudo))
+  // En vivo, el estado ya viene leído, una vez por tanda. Volver a leer toda
+  // la salida en cada línea costaba 18 s de hilo principal en una pasada de
+  // treinta mil líneas.
+  const leida = $derived(pasada ? pasada.estado : leerPasada(crudo))
+  const salida = $derived(pasada ? pasada.salida : salidaDeTexto(crudo))
+  const pasoEnCurso = $derived(
+    leida.enCurso === null ? null : (leida.apps.find((a) => a.app === leida.enCurso)?.paso ?? null),
+  )
+  /** La clase del chip sólo para un final que conocemos: el texto del servidor
+   *  no elige clases de la hoja de estilos. */
+  function claseDeFinal(f: string): string {
+    return FINALES_DEL_LOTE.some((x) => x.id === f) ? `lote--${f}` : 'lote--desconocido'
+  }
   // Si el servidor tiene las puertas de la 1.4.3 se sabe por la respuesta, no
   // por una tabla de versiones: el lote trae `locked`, o la lista
   // `state.locked`. Cambia qué finales pueden salir sin `--if-changed`.
@@ -118,28 +138,28 @@
     {/if}
   {:else if corriendo}
     <p class="marcador" role="status">
-      {pasada.terminadas}
-      {pasada.terminadas === 1 ? 'app hecha' : 'apps hechas'}
-      {#if pasada.enCurso}
-        · desplegando <strong>{pasada.enCurso}</strong>
-        {#if pasada.apps.find((a) => a.app === pasada.enCurso)?.paso}
-          <span class="paso">{pasada.apps.find((a) => a.app === pasada.enCurso)?.paso}</span>
+      {leida.terminadas}
+      {leida.terminadas === 1 ? 'app hecha' : 'apps hechas'}
+      {#if leida.enCurso}
+        · desplegando <strong>{leida.enCurso}</strong>
+        {#if pasoEnCurso}
+          <span class="paso">{pasoEnCurso}</span>
         {/if}
       {/if}
-      {#if pasada.transcurrido > 0}<span class="reloj">{dur(pasada.transcurrido)}</span>{/if}
+      {#if leida.transcurrido > 0}<span class="reloj">{dur(leida.transcurrido)}</span>{/if}
     </p>
 
     <!-- La lista ES el progreso, y por eso no hay barra: una pasada no tiene un
          total fiable —el servidor salta las apps sin repositorio, y eso no sale
          en `list`— así que una fracción sería un denominador inventado. Lo que
          de verdad se quiere mirar es cuál va y cuál ha fallado. -->
-    {#if pasada.apps.length > 0}
+    {#if leida.apps.length > 0}
       <ul class="curso">
-        {#each pasada.apps as a (a.app)}
+        {#each leida.apps as a (a.app)}
           <li>
             <span class="nombre">{a.app}</span>
             {#if a.final}
-              <span class="chip lote--{a.final}" title={a.final}>{textoDeFinal(a.final)}</span>
+              <span class="chip {claseDeFinal(a.final)}" title={a.final}>{textoDeFinal(a.final)}</span>
             {:else}
               <span class="haciendo">{a.paso ?? 'empezando'}</span>
             {/if}
@@ -241,6 +261,16 @@
       </div>
     </details>
   {/if}
+
+  {#if corriendo || resultado}
+    <!-- Lo que dijo el servidor, tal cual: cuarenta builds no caben en la lista
+         de arriba, y el error de la que falló está aquí. Plegado, porque lo
+         que se mira primero es cuál va y cuál ha fallado. -->
+    <details class="salida">
+      <summary>La salida del servidor</summary>
+      <Consola {salida} vivo={corriendo} etiqueta="Salida de desplegar todo en {servidor}" />
+    </details>
+  {/if}
 </section>
 
 <style>
@@ -296,4 +326,5 @@
   .parar button:hover { color: var(--fg); }
   .parar button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
   code { font-family: var(--mono); font-size: 12px; }
+  .salida summary { font-size: 12px; }
 </style>

@@ -31,7 +31,10 @@
   --o-slate-500: #4a5878;
   --o-slate-450: #55679a;
   --o-slate-400: #5a6b92;
-  --o-slate-350: #64729a;
+  --o-slate-350: #64729a;  /* ya NO es texto sobre claro: 4,20:1 sobre la
+                              superficie hundida y 4,10:1 en un chip neutro */
+  --o-slate-375: #58678e;  /* derivada: el tenue legible sobre claro. 4,95:1
+                              sobre hundida, 5,27:1 sobre fondo, 4,78:1 en chip */
   --o-slate-300: #7c8bb0;
   --o-slate-250: #7e8aa8;
   --o-slate-200: #8a9ac0;
@@ -66,7 +69,11 @@
   --border-strong: var(--o-slate-250);
   --fg: var(--o-ink-850);
   --fg-muted: #4a5878;
-  --fg-faint: var(--o-slate-350);
+  /* El tenue se lee sobre las CUATRO superficies, no sólo sobre la blanca: el
+     raíl y la caja de búsqueda son la hundida, y ahí #64729A daba 4,20:1. Un
+     tenue que cumple sobre una superficie y no sobre otra no cumple: depende de
+     dónde lo ponga el siguiente que lo use. */
+  --fg-faint: var(--o-slate-375);
   --accent: var(--o-cyan-700);
   --accent-text: var(--o-cyan-800);
   --accent-fill: var(--o-cyan-700);
@@ -76,8 +83,11 @@
   --st-ok: var(--o-green-700);
   --st-warn: var(--o-amber-700);
   --st-error: var(--o-red-700);
-  --st-unknown: var(--o-slate-350);
-  --st-na: var(--o-slate-350);
+  /* Los neutros se miden sobre SU tinte, que es más oscuro que la superficie:
+     el chip se pinta mezclando el propio color con ella, así que un gris que
+     roza el 4,5:1 sobre blanco se queda en 4,1:1 dentro del chip. */
+  --st-unknown: var(--o-slate-375);
+  --st-na: var(--o-slate-375);
   --on-solid: var(--o-white);
 
   /* El velo de un modal. Es un color, así que vive aquí: la primera versión lo
@@ -126,8 +136,10 @@
     --st-ok: var(--o-green-400);
     --st-warn: var(--o-amber-400);
     --st-error: var(--o-red-400);
-    --st-unknown: var(--o-slate-300);
-    --st-na: var(--o-slate-300);
+    /* Más claro que el tenue: con el 18 % de tinte, #7C8BB0 daba 4,03:1 dentro
+       del chip. #8A9AC0 da 4,69:1. */
+    --st-unknown: var(--o-slate-200);
+    --st-na: var(--o-slate-200);
     --on-solid: var(--o-ink-850);
     /* En oscuro la sombra casi no se ve: la elevación la hace la superficie. */
     --velo: rgb(0 0 0 / 62%);
@@ -156,8 +168,8 @@
   --st-ok: var(--o-green-400);
   --st-warn: var(--o-amber-400);
   --st-error: var(--o-red-400);
-  --st-unknown: var(--o-slate-300);
-  --st-na: var(--o-slate-300);
+  --st-unknown: var(--o-slate-200);
+  --st-na: var(--o-slate-200);
   --on-solid: var(--o-ink-850);
   --velo: rgb(0 0 0 / 62%);
   --shadow-1: none;

@@ -7,7 +7,7 @@
  * producción, y ninguna lanza una excepción.
  */
 import { describe, expect, it } from 'vitest'
-import { render } from '@testing-library/svelte'
+import { fireEvent, render } from '@testing-library/svelte'
 
 import Despliegue from '../src/componentes/Despliegue.svelte'
 import LoteVista from '../src/componentes/Lote.svelte'
@@ -151,10 +151,61 @@ describe('los cuatro finales', () => {
     const { container } = render(Despliegue, {
       app: 'web', servidor: 'vps', progreso: leerProgreso(''),
       resultado: fallido as Obj,
+      alRevertir: () => {},
     })
     const volver = [...container.querySelectorAll('button')]
       .find((b) => b.textContent?.includes('Volver a'))!
     expect(volver.className).toContain('secundaria')
+  })
+
+  it('los botones del resultado hacen algo, o no se pintan', async () => {
+    // La primera versión pintaba «Ver el log» y «Volver a…» sin `onclick`:
+    // con un build roto, el botón que decía qué hacer no hacía nada.
+    const sin = render(Despliegue, {
+      app: 'web', servidor: 'vps', progreso: leerProgreso(''),
+      resultado: fallido as Obj,
+    })
+    const botones = [...sin.container.querySelectorAll('button')].map((b) => b.textContent ?? '')
+    expect(botones.some((t) => t.includes('Volver a'))).toBe(false)
+    expect(botones.some((t) => t.includes('Ver el log'))).toBe(false)
+    sin.unmount()
+
+    let log = 0
+    let revertir: string | null = null
+    const con = render(Despliegue, {
+      app: 'web', servidor: 'vps', progreso: leerProgreso(''),
+      resultado: fallido as Obj,
+      alVerLog: () => { log += 1 },
+      alRevertir: (r: string) => { revertir = r },
+    })
+    const b = (t: string) => [...con.container.querySelectorAll('button')].find((x) => x.textContent?.includes(t))!
+    await fireEvent.click(b('Ver el log'))
+    expect(log).toBe(1)
+    await fireEvent.click(b('Volver a'))
+    expect(revertir).toBe((fallido as Obj).previous)
+  })
+
+  it('mientras corre se ve la salida y se puede cancelar', async () => {
+    let cancelado = 0
+    const { container } = render(Despliegue, {
+      app: 'web', servidor: 'vps', progreso: leerProgreso(''),
+      resultado: null, crudo: '  → compilando\n', desde: Date.now() - 5000,
+      alCancelar: () => { cancelado += 1 },
+    })
+    expect(container.querySelector('pre.crudo')?.textContent).toContain('compilando')
+    const cancelar = [...container.querySelectorAll('button')].find((x) => x.textContent?.includes('Cancelar'))!
+    await fireEvent.click(cancelar)
+    expect(cancelado).toBe(1)
+    // Y no se puede pulsar dos veces.
+    expect((cancelar as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('el reloj cuenta desde que se lanzó aunque el servidor no diga nada', () => {
+    const { container } = render(Despliegue, {
+      app: 'web', servidor: 'vps', progreso: leerProgreso(''),
+      resultado: null, desde: Date.now() - 75_000,
+    })
+    expect(container.querySelector('.reloj')?.textContent).toMatch(/1 min 1[45] s/)
   })
 
   it('un fallo dice dónde mirar según el paso que se rompió', () => {

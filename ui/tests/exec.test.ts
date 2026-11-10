@@ -6,7 +6,7 @@
  * producción.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { render } from '@testing-library/svelte'
+import { fireEvent, render } from '@testing-library/svelte'
 import { tick } from 'svelte'
 
 import Exec from '../src/componentes/Exec.svelte'
@@ -184,5 +184,21 @@ describe('la shell interactiva', () => {
     // puede con eso. Fingir medio terminal es la peor solución de todas.
     const { container } = montar()
     expect(container.querySelector('.copiar')?.textContent).toContain('terminal de verdad')
+  })
+})
+
+describe('un argumento suelto con metacaracteres, sin shell', () => {
+  it('se manda como `/usr/bin/env -- …` y la vista previa lo enseña', async () => {
+    const { container } = montar()
+    const caja = container.querySelector('input')!
+    await fireEvent.input(caja, { target: { value: 'ls;id' } })
+    expect(container.querySelector('.previa')!.textContent).toBe('orbit exec web /usr/bin/env -- ls;id')
+  })
+
+  it('con un «=» se rehúsa: `env` enseñaría el entorno de la app', async () => {
+    const { container } = montar()
+    const caja = container.querySelector('input')!
+    await fireEvent.input(caja, { target: { value: 'A=1;id' } })
+    expect(container.textContent).toContain('enseñaría el entorno')
   })
 })
