@@ -61,15 +61,53 @@ impl Saludo {
 /// precaución teórica: un Orbit copiado pero sin instalar escribe prosa por
 /// stdout ignorando `--json`, así que parsear primero da un error de sintaxis
 /// donde la respuesta correcta es «este servidor tiene Orbit a medias».
+///
+/// Con una excepción: **rc 0 con un `version` válido por stdout manda** sobre lo
+/// que diga stderr. stderr es también del `.bashrc` del usuario SSH, y un
+/// `bash: rbenv: command not found` ahí convertía un Orbit sano en «no hay
+/// orbit». Con rc 0 y el objeto, quien ha hablado es `orbit`.
+///
+/// Supone el binario de siempre; con otra ruta, [`clasificar_para`].
 pub fn clasificar(r: &Respuesta) -> Saludo {
+    clasificar_para(r, "/usr/local/bin/orbit")
+}
+
+/// [`clasificar`], sabiendo en qué ruta se ha llamado a `orbit`: un «command
+/// not found» sólo es «no hay orbit» si **nombra a ese binario**.
+pub fn clasificar_para(r: &Respuesta, binario: &str) -> Saludo {
     let e = r.stderr.to_lowercase();
     let o = r.stdout.to_lowercase();
 
-    if r.codigo == 127 || e.contains("command not found") {
-        return Saludo::NoInstalado {
-            motivo: "no hay ningún «orbit» en esa ruta",
-        };
+    if r.codigo == 0 {
+        if let Ok(texto) = r.objeto() {
+            if let Ok(v) = serde_json::from_str::<Version>(texto) {
+                return por_contrato(v);
+            }
+        }
     }
+
+    // Antes que «command not found»: un `sudo` que pide contraseña con un aviso
+    // del `.bashrc` delante es un problema de privilegios, no de instalación.
+    //
+    // Y por los dos canales: sin `sudo` en el servidor, Orbit lo dice con un
+    // `echo` por **stdout** (orbit:341), no por stderr.
+    if e.contains("a terminal is required to read the password")
+        || e.contains("askpass")
+        || e.contains("sudo: a password is required")
+        || e.contains("necesita privilegios de root")
+        || e.contains("needs root privileges")
+        || o.contains("necesita privilegios de root")
+        || o.contains("needs root privileges")
+    {
+        return Saludo::SinPrivilegios;
+    }
+
+    // Lo que dice el propio Orbit va antes que «command not found»: ese aviso
+    // puede ser del `.bashrc` (`rbenv: command not found`), y antes ganaba con
+    // cualquier rc distinto de 0. Un Orbit anterior a la 1.1 detrás de un
+    // `.bashrc` ruidoso salía como «no hay orbit», y uno sin orbit.conf con el
+    // motivo equivocado.
+    //
     // Las dos líneas que imprime un Orbit copiado y sin instalar. Van por
     // **stdout**, que es lo que hace que un cliente descuidado explote aquí.
     if o.contains("no está instalado") || o.contains("is not installed") {
@@ -78,28 +116,28 @@ pub fn clasificar(r: &Respuesta) -> Saludo {
                 "el binario está, pero falta /etc/orbit/orbit.conf: no se ha ejecutado install.sh",
         };
     }
-    if e.contains("a terminal is required to read the password")
-        || e.contains("askpass")
-        || e.contains("necesita privilegios de root")
-        || e.contains("needs root privileges")
-    {
-        return Saludo::SinPrivilegios;
-    }
     // Un Orbit anterior a la v1.1: `version` todavía no hablaba JSON, así que
     // rechaza la bandera. Es un servidor perfectamente sano y viejo, no un
     // fallo, y merece un mensaje que lo diga.
     if e.contains("no tiene salida json") || e.contains("has no json output") {
         return Saludo::SinContrato { version: None };
     }
+    // Y el «no está» del shell, sólo si habla **de este binario**: la misma
+    // regla que el transporte (`nombra_al_binario`). El 127 a secas se queda:
+    // es lo que sale de `orbit --json version` cuando no hay orbit, sea cual
+    // sea el idioma del shell.
+    if r.codigo == 127
+        || ((e.contains("command not found") || e.contains("no such file"))
+            && crate::transporte::nombra_al_binario(&e, binario))
+    {
+        return Saludo::NoInstalado {
+            motivo: "no hay ningún «orbit» en esa ruta",
+        };
+    }
 
     match r.objeto() {
         Ok(texto) => match serde_json::from_str::<Version>(texto) {
-            Ok(v) if v.contract == CONTRATO_CONOCIDO => Saludo::Ok(v),
-            Ok(v) if v.contract > CONTRATO_CONOCIDO => Saludo::MasNuevo(v),
-            // Contrato 0 o ausente: mismo tratamiento que un Orbit pre-1.1.
-            Ok(v) => Saludo::SinContrato {
-                version: Some(v.version),
-            },
+            Ok(v) => por_contrato(v),
             Err(_) => Saludo::SinContrato { version: None },
         },
         Err(_) => Saludo::NoSeLlega {
@@ -109,6 +147,19 @@ pub fn clasificar(r: &Respuesta) -> Saludo {
                 r.stderr.clone()
             },
         },
+    }
+}
+
+fn por_contrato(v: Version) -> Saludo {
+    if v.contract == CONTRATO_CONOCIDO {
+        Saludo::Ok(v)
+    } else if v.contract > CONTRATO_CONOCIDO {
+        Saludo::MasNuevo(v)
+    } else {
+        // Contrato 0 o ausente: mismo tratamiento que un Orbit pre-1.1.
+        Saludo::SinContrato {
+            version: Some(v.version),
+        }
     }
 }
 
@@ -128,15 +179,6 @@ pub fn de_error(e: &ErrorTransporte) -> Saludo {
     }
 }
 
-/// La orden de instalación, tal cual la da el propio Orbit.
-///
-/// Se ofrece para **copiar**, nunca un botón de «instalar». Instalar Orbit desde
-/// el cliente sería la primera vez que esto escribe en el servidor algo que no
-/// es una invocación de `orbit`, y la regla nº 1 no admite un «pero es el
-/// instalador». Se copia el comando; lo ejecuta la persona.
-pub const ORDEN_DE_INSTALACION: &str =
-    "curl -fsSL https://raw.githubusercontent.com/iNTERVOLUTIONS-Labs/orbit/main/install.sh | sudo bash";
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +188,7 @@ mod tests {
             stdout: stdout.into(),
             stderr: stderr.into(),
             codigo,
+            cancelado: false,
         }
     }
 
@@ -227,12 +270,58 @@ mod tests {
     }
 
     #[test]
-    fn la_orden_de_instalacion_es_para_copiar_no_para_ejecutar() {
-        // Instalar Orbit desde el cliente sería la primera vez que esto escribe
-        // en el servidor algo que no es una invocación de `orbit`, y la regla
-        // nº 1 no admite un «pero es el instalador».
-        assert!(ORDEN_DE_INSTALACION.contains("install.sh"));
-        assert!(ORDEN_DE_INSTALACION.starts_with("curl"));
+    fn rc_un_aviso_del_bashrc_no_esconde_un_orbit_sano() {
+        let s = clasificar(&r(
+            0,
+            r#"{"schema":1,"version":"1.5.1","contract":1}"#,
+            "bash: rbenv: command not found\n",
+        ));
+        assert!(matches!(s, Saludo::Ok(_)), "{s:?}");
+        // Pero sin el objeto, el aviso sigue sin ser un Orbit.
+        let s = clasificar(&r(127, "", "bash: orbit: command not found"));
+        assert!(matches!(s, Saludo::NoInstalado { .. }));
+    }
+
+    #[test]
+    fn rc_sin_sudo_el_aviso_llega_por_stdout() {
+        for o in [
+            "Orbit necesita privilegios de root.\n",
+            "Orbit needs root privileges.\n",
+        ] {
+            assert_eq!(clasificar(&r(1, o, "")), Saludo::SinPrivilegios, "{o}");
+        }
+        // Y un `sudo` que pide contraseña no se esconde detrás del `.bashrc`.
+        let s = clasificar(&r(
+            1,
+            "",
+            "bash: rbenv: command not found\nsudo: a terminal is required to read the password",
+        ));
+        assert_eq!(s, Saludo::SinPrivilegios);
+    }
+
+    #[test]
+    fn rc2_el_ruido_del_bashrc_no_tapa_lo_que_dice_orbit() {
+        let ruido = "bash: rbenv: command not found\n";
+        let viejo = format!("{ruido}  ✗ 'orbit version' no tiene salida JSON");
+        assert!(matches!(
+            clasificar(&r(1, "", &viejo)),
+            Saludo::SinContrato { .. }
+        ));
+        match clasificar(&r(1, "Orbit no está instalado todavía\n", ruido)) {
+            Saludo::NoInstalado { motivo } => assert!(motivo.contains("orbit.conf"), "{motivo}"),
+            otro => panic!("{otro:?}"),
+        }
+        // Un «command not found» que no nombra a orbit no es «no hay orbit».
+        assert!(!matches!(
+            clasificar(&r(1, "", ruido)),
+            Saludo::NoInstalado { .. }
+        ));
+        // Y el que sí lo nombra, por la ruta que se ha usado.
+        let e = "bash: /opt/o/bin/orbit: No such file or directory";
+        assert!(matches!(
+            clasificar_para(&r(1, "", e), "/opt/o/bin/orbit"),
+            Saludo::NoInstalado { .. }
+        ));
     }
 
     #[test]

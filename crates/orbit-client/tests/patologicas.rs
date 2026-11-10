@@ -664,6 +664,7 @@ fn un_orbit_a_medias_no_acaba_en_el_parser() {
             stdout,
             stderr,
             codigo,
+            cancelado: false,
         },
         Err(otro) => panic!("esperaba una respuesta, no {otro:?}"),
     };
@@ -686,6 +687,7 @@ fn un_orbit_anterior_al_contrato_se_reconoce_como_viejo_no_como_roto() {
             stdout,
             stderr,
             codigo,
+            cancelado: false,
         },
         Err(otro) => panic!("esperaba una respuesta, no {otro:?}"),
     };

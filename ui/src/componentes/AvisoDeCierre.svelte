@@ -8,12 +8,17 @@
   const cuantos = $derived(enCurso().length)
 </script>
 
-{#if cuantos > 0}
-  <p class="aviso" role="status">
-    {cuantos === 1 ? 'Hay un despliegue en curso' : `Hay ${cuantos} despliegues en curso`}.
-    Cerrar esta ventana <strong>no los cancela</strong>: siguen en el servidor.
-  </p>
-{/if}
+<!-- La región existe siempre y lo que aparece es su contenido: un nodo que
+     nace ya con el texto dentro no se anuncia, y el aviso salía en silencio. -->
+<div role="status">
+  {#if cuantos > 0}
+    <p class="aviso">
+      {cuantos === 1 ? 'Hay un despliegue en curso' : `Hay ${cuantos} despliegues en curso`}.
+      Cerrar esta ventana <strong>no {cuantos === 1 ? 'lo cancela' : 'los cancela'}</strong>:
+      {cuantos === 1 ? 'sigue' : 'siguen'} en el servidor.
+    </p>
+  {/if}
+</div>
 
 <style>
   .aviso {

@@ -160,6 +160,9 @@ fn se_puede_cancelar_un_despliegue_en_curso() {
     // afirmar algo que no se sabe — el mismo error que el contrato de seis
     // finales existe para que un cliente no cometa.
     assert!(mando.cancelado());
+    // Y la respuesta lo dice por su nombre, no con un código: en Windows un
+    // proceso matado sale con 1, no con el -1 de Unix.
+    assert!(r.cancelado);
     assert!(
         r.stdout.trim().is_empty(),
         "un despliegue cancelado no trae objeto final, y eso NO se lee como un fallo"

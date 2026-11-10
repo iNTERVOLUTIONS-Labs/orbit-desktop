@@ -148,6 +148,44 @@ const BOOLEANAS: [string, string][] = [
   ['php', 'php'],
 ]
 
+/**
+ * La regla de `_csp_check` de Orbit 1.5.1, copiada regla por regla y en el
+ * mismo orden, para que el motivo que se enseña sea el mismo que daría el
+ * despliegue.
+ *
+ * El valor acaba entre comillas dobles dentro de un vhost que se enlaza antes
+ * del `nginx -t`, así que Orbit **rechaza** en vez de arreglar: un despliegue
+ * con una política mala se aborta con la versión anterior intacta. Decirlo
+ * aquí, antes de que el fichero llegue al repositorio, ahorra ese despliegue.
+ *
+ * Devuelve `null` si vale, o el motivo. Los blancos de los extremos no cuentan,
+ * como en `_csp_load`: «  » es no haber puesto nada, y eso vale (no se emite).
+ */
+export function problemaDeLaCsp(valor: string): string | null {
+  // `_csp_load` recorta los blancos de los extremos antes de comprobar nada.
+  const v = valor.replace(/^\s+/, '').replace(/\s+$/, '')
+  if (v === '') return null
+  // Bash cuenta caracteres con UTF-8 y bytes con `LANG=C`, y no se sabe con
+  // cuál corre el servidor: se aplica la cuenta más estricta, la de bytes.
+  if (new TextEncoder().encode(v).length > 4096) return 'pasa de 4096 caracteres'
+  // `[[:cntrl:]]` con UTF-8 incluye también los de control C1 (U+0080–U+009F).
+  if (/[\x00-\x1f\x7f-\x9f]/.test(v)) return 'lleva saltos de línea o caracteres de control'
+  if (/["\\${}]/.test(v)) return 'no puede llevar comillas dobles, barras invertidas, «$», «{» ni «}»'
+  if (v.endsWith(';')) return 'no puede acabar en «;»'
+  return null
+}
+
+/** Lo que no sale del descriptor del servidor y lo pone quien genera el
+ *  fichero. Hoy, la CSP de Orbit 1.5.1, que vive en el `orbit.json` de la
+ *  release y que `info --json` no devuelve: no hay de dónde copiarla. */
+export interface Anadidos {
+  /** `"csp"`. Vacío o sólo blancos es «no pongas ninguna». */
+  csp?: string
+  /** `"csp_report_only": true`: la manda como `…-Report-Only`, para probarla
+   *  sin bloquear nada. Sólo se emite con una `csp` que se emita. */
+  cspSoloInforme?: boolean
+}
+
 export interface Generado {
   /** El fichero, listo para copiar. */
   texto: string
@@ -166,12 +204,18 @@ export interface Generado {
  * `env` no se escribe: escribirlo vacío diría que esta app no necesita
  * variables, que es una afirmación y no un silencio.
  */
-export function generar(info: AppInfo, nombresDeEntorno: string[] | null): Generado {
+export function generar(
+  info: AppInfo,
+  nombresDeEntorno: string[] | null,
+  anadidos: Anadidos = {},
+): Generado {
   const c = info.config
   const obj: Record<string, unknown> = {}
   const huecos: string[] = []
 
-  const val = (k: string): string => (c[k] ?? '').trim()
+  // `hasOwn`: las claves del descriptor las pone el servidor, y una que no
+  // viene no puede salir del prototipo de Object.
+  const val = (k: string): string => (Object.hasOwn(c, k) ? (c[k] ?? '') : '').trim()
 
   for (const [clave, campo] of CADENAS) {
     const v = val(campo)
@@ -201,7 +245,7 @@ export function generar(info: AppInfo, nombresDeEntorno: string[] | null): Gener
   if (shared !== '') obj.shared = shared.split(/\s+/).filter((x) => x !== '')
 
   // El bloque `env`: nombres y cómo obtenerlos, nunca valores.
-  const previas = leerEspecificacion(c.env_spec ?? '')
+  const previas = leerEspecificacion(Object.hasOwn(c, 'env_spec') ? (c.env_spec ?? '') : '')
   if (previas.length > 0 || (nombresDeEntorno !== null && nombresDeEntorno.length > 0)) {
     const porClave = new Map(previas.map((v) => [v.clave, v]))
     // Las que ya tenían especificación mandan, y detrás las que existen en el
@@ -211,7 +255,11 @@ export function generar(info: AppInfo, nombresDeEntorno: string[] | null): Gener
       ...(nombresDeEntorno ?? []).filter((n) => !porClave.has(n)),
     ]
 
-    const vars: Record<string, unknown> = {}
+    // Sin prototipo: los nombres son los del `.env` del servidor, y en un `{}`
+    // normal `vars['__proto__'] = …` no crea la clave, cambia el prototipo.
+    // `__proto__` es un nombre de variable válido para Orbit, y desaparecía del
+    // fichero sin decir nada.
+    const vars = Object.create(null) as Record<string, unknown>
     for (const k of claves) {
       const v = porClave.get(k)
       const entrada: Record<string, unknown> = {}
@@ -249,6 +297,24 @@ export function generar(info: AppInfo, nombresDeEntorno: string[] | null): Gener
     huecos.push(
       'Falta el bloque «env», que dice qué variables necesita la app para arrancar. No he pedido su lista de nombres.',
     )
+  }
+
+  // La CSP (1.5.1). Va en el vhost de cualquier app que tenga uno —no en una
+  // redirección, que no sirve nada—, y una mala aborta el despliegue entero,
+  // así que una que Orbit rechazaría no se emite: se dice por qué.
+  const csp = (anadidos.csp ?? '').replace(/^\s+/, '').replace(/\s+$/, '')
+  if (csp !== '') {
+    const motivo = problemaDeLaCsp(csp)
+    if (val('type') === 'redirect') {
+      huecos.push('Una redirección no sirve páginas: Orbit no le pone «csp» a su vhost, así que no la escribo.')
+    } else if (motivo !== null) {
+      huecos.push(
+        `Falta «csp»: ${motivo}. Orbit la rechazaría y abortaría el despliegue con la versión anterior en producción.`,
+      )
+    } else {
+      obj.csp = csp
+      if (anadidos.cspSoloInforme) obj.csp_report_only = true
+    }
   }
 
   // Lo que no se puede saber desde aquí, dicho una vez y con nombre.

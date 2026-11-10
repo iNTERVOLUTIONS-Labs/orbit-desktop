@@ -53,8 +53,12 @@ describe('el visor de log', () => {
     const botones = [...container.querySelectorAll('.filtros button')].map((b) =>
       b.textContent?.trim().split(/\s+/)[0],
     )
-    expect(botones).toContain('access')
-    expect(botones).toContain('error')
+    // Con su nombre en castellano; el id de Orbit sigue en el `title`.
+    expect(botones).toContain('accesos')
+    expect(botones).toContain('errores')
+    const titulos = [...container.querySelectorAll('.filtros button')].map((b) => b.getAttribute('title'))
+    expect(titulos).toContain('access')
+    expect(titulos).toContain('error')
   })
 
   it('una línea sin marca de tiempo se pinta como desconocida, no en blanco', () => {

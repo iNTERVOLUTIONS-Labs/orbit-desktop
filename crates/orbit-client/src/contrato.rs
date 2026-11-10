@@ -107,8 +107,14 @@ impl Version {
     /// La versión de Orbit, por componentes. `None` si no es semver — que es una
     /// respuesta, no un fallo: un servidor puede llevar una versión de
     /// desarrollo y eso no impide hablar con él.
+    ///
+    /// Una `v` delante se acepta (`v1.5.1`): es como se etiqueta en git, y
+    /// sin ella todo lo que depende de la versión se apagaba en ese servidor.
+    /// Una pre-versión cuenta como la final, y se sabe: no se ordena.
     pub fn semver(&self) -> Option<(u32, u32, u32)> {
-        let base = self.version.split(['-', '+']).next()?;
+        let v = self.version.trim();
+        let v = v.strip_prefix(['v', 'V']).unwrap_or(v);
+        let base = v.split(['-', '+']).next()?;
         let mut it = base.split('.');
         let a = it.next()?.parse().ok()?;
         let b = it.next()?.parse().ok()?;
@@ -156,6 +162,9 @@ pub enum Capacidad {
     /// `deploy --env-stdin`: las variables por la entrada estándar, sin tocar
     /// el `argv`. 1.4.9. Es lo que cierra THREAT-MODEL T-13.
     EntornoPorEntrada,
+    /// `"csp"` y `"csp_report_only"` en el `orbit.json`. 1.5.1. Un servidor
+    /// anterior ignora las dos claves sin decir nada.
+    Csp,
 }
 
 impl Capacidad {
@@ -166,6 +175,7 @@ impl Capacidad {
             Self::Congelar | Self::EsperarCi => (1, 4, 3),
             Self::TipoDeCertificado => (1, 4, 7),
             Self::EntornoPorEntrada => (1, 4, 9),
+            Self::Csp => (1, 5, 1),
         }
     }
 }
@@ -377,7 +387,11 @@ impl Estado {
         }
         match self.service.as_deref() {
             None => Salud::SinProceso,
-            Some("active") => Salud::Activa,
+            // `svc_state` emite `running` o `stopped` (y así lo dice el
+            // contrato). Las muestras decían `active`, la palabra de systemd, y
+            // sólo se reconocía ésa: contra un servidor real toda app con
+            // proceso salía «no se sabe». `active` se sigue aceptando.
+            Some("running") | Some("active") => Salud::Activa,
             Some("inactive") | Some("failed") | Some("stopped") => Salud::Parada,
             Some(_) => Salud::Desconocida("estado de servicio no reconocido"),
         }
@@ -750,6 +764,21 @@ mod tests {
     }
 
     #[test]
+    fn rc_una_v_delante_no_apaga_la_version() {
+        let v = |s: &str| Version {
+            schema: 1,
+            version: s.into(),
+            contract: 1,
+        };
+        assert_eq!(v("v1.5.1").semver(), Some((1, 5, 1)));
+        assert_eq!(v("V1.4.9").semver(), Some((1, 4, 9)));
+        assert!(v("v1.4.9").sabe(Capacidad::EntornoPorEntrada));
+        // Sólo una, y sólo delante.
+        assert_eq!(v("vv1.5.1").semver(), None);
+        assert_eq!(v("1.5.1v").semver(), None);
+    }
+
+    #[test]
     fn version_y_contrato_son_ejes_distintos() {
         // Orbit puede subir de versión sin que el contrato cambie, y es lo
         // normal. Confundirlos haría que rechazáramos un servidor compatible.
@@ -840,6 +869,22 @@ mod tests {
         assert_eq!(e.salud(), Salud::SinProceso);
     }
 
+    /// `svc_state` de Orbit escribe `running`, no `active`. Con sólo `active`,
+    /// contra un servidor de verdad toda app con proceso salía «no se sabe».
+    #[test]
+    fn running_es_lo_que_dice_orbit_de_una_app_en_marcha() {
+        let e: Estado = serde_json::from_str(
+            r#"{"service":"running","port":3001,"ssl":true,"cert_days":null,"maintenance":false,"served":true,"autodeploy":false,"queue":false,"releases":1,"last_deploy":null,"last_deploy_sha":null}"#,
+        )
+        .unwrap();
+        assert_eq!(e.salud(), Salud::Activa);
+        let parada = Estado {
+            service: Some("stopped".into()),
+            ..e.clone()
+        };
+        assert_eq!(parada.salud(), Salud::Parada);
+    }
+
     #[test]
     fn la_capacidad_sale_de_la_version_de_orbit_y_no_del_contrato() {
         let v = |s: &str| Version {
@@ -855,6 +900,8 @@ mod tests {
         assert!(!v("1.4.8").sabe(Capacidad::EntornoPorEntrada));
         assert!(v("1.4.9").sabe(Capacidad::EntornoPorEntrada));
         assert!(v("1.5.0").sabe(Capacidad::EntornoPorEntrada));
+        assert!(!v("1.5.0").sabe(Capacidad::Csp));
+        assert!(v("1.5.1").sabe(Capacidad::Csp));
         assert!(!v("1.3.7").sabe(Capacidad::EntornoDeclarado));
         assert!(
             v("1.10.0").sabe(Capacidad::Tareas),

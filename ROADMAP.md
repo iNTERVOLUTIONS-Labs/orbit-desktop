@@ -457,6 +457,36 @@ entrada estándar (`--env-stdin`) y no tocan el `argv`; con uno 1.4.3–1.4.8, p
 Lo que queda para cuando Orbit lo publique: la lista de repositorios de la
 cuenta del servidor (`orbit github repos --json`, en `main` sin versión).
 
+## Fase 6e · Orbit 1.5.1, y una auditoría del cliente entero ✅
+
+Orbit no cambió ni un emisor del contrato entre la 1.4.9 y la 1.5.1; lo que
+trae para este cliente es la **CSP en el `orbit.json`**, y el generador la pide
+y la valida con las reglas de `_csp_check`. Lo grande salió de auditar el
+cliente contra el Orbit de verdad en vez de contra sus muestras:
+
+- **Toda app con proceso salía «no se sabe» contra un servidor real**: Orbit
+  dice `running` y el cliente sólo conocía `active`, que es lo que decían las
+  muestras.
+- **Lo que llegó en la 1.3.7** —el log con contrato, las copias, `doctor --fix
+  --yes`— se daba por sentado.
+- **La vista del servidor**: el host y sus servicios llegaban con la portada y
+  se tiraban; y la vigilancia, las copias (con su verificación), las bases de
+  datos, las redirecciones y las colas, que el núcleo sabía pedir y la ventana
+  no enseñaba.
+- **La paleta de órdenes**, el filtro y el teclado en la lista, la tendencia en
+  el monitor, la búsqueda en el log y el tema.
+- **La pantalla del despliegue**: botones que no hacían nada, la salida que no
+  se veía mientras corría, el reloj parado, el segundo despliegue encima del
+  primero y un analizador cuadrático.
+- **El núcleo**: el alias de un servidor llegaba a `ssh` sin `--` delante, en
+  Windows cada orden abría una consola, y un byte que no era UTF-8 dejaba el
+  progreso congelado.
+
+Lo que queda, y no es de aquí: **`orbit github repos --json` no se puede
+invocar** en ninguna versión publicada (`main` llama a `cmd_github` sin sus
+argumentos). Es una línea en Orbit, y hasta entonces el asistente no ofrece la
+lista de repositorios.
+
 ## Fase 7 y más allá 💭
 
 - 💭 **Gráficas históricas**, que exigirían que el cliente guarde algo. Es una

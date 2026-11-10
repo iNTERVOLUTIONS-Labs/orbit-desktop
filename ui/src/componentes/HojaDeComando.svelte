@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { devolverFoco } from '../lib/foco'
   // La pieza más característica del producto, y existe por tres motivos que no
   // son estéticos:
   //
@@ -45,9 +46,14 @@
     // destructivo cuyo primer anuncio es «Botón: Eliminar» es una trampa.
     dialogo?.focus()
   })
+  // Y al cerrarse vuelve a donde estaba: sin esto, quien navega con teclado
+  // acababa al principio de la página después de cada confirmación.
+  const previo = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null
+  $effect(() => () => devolverFoco(previo))
 
   function teclado(e: KeyboardEvent) {
-    if (e.key === 'Escape') alCancelar()
+    // Un Escape que ya ha atendido otra capa —la paleta— no cierra también ésta.
+    if (e.key === 'Escape' && !e.defaultPrevented) alCancelar()
   }
 </script>
 

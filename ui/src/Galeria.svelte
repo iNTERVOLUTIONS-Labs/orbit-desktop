@@ -20,6 +20,10 @@
   import LoDetectado from './componentes/LoDetectado.svelte'
   import DetalleApp from './componentes/DetalleApp.svelte'
   import HojaDeDespliegue from './componentes/HojaDeDespliegue.svelte'
+  import ServidorVista from './componentes/ServidorVista.svelte'
+  import MonitorVista from './componentes/MonitorVista.svelte'
+  import estadoMuestra from './lib/muestras/status.json'
+  import type { Monitor, Portada } from './lib/contrato'
   import lista14 from './lib/muestras/list-1.4.json'
   import puertasMuestra from './lib/muestras/deploy-all-puertas.json'
   import congeladaMuestra from './lib/muestras/deploy-congelada.json'
@@ -50,10 +54,10 @@
   const e = (p: Partial<Estado>): Estado => ({ ...BASE, ...p })
 
   const ESTADOS: Array<[string, Estado]> = [
-    ['activo', e({ service: 'active' })],
+    ['activo', e({ service: 'running' })],
     ['parado', e({ service: 'stopped' })],
     ['no aplica (estática)', e({ service: null })],
-    ['mantenimiento', e({ service: 'active', maintenance: true })],
+    ['mantenimiento', e({ service: 'running', maintenance: true })],
     ['sin vhost', e({ served: false })],
     ['desconocido', e({ service: 'activating' })],
   ]
@@ -98,7 +102,7 @@
   const infoBase = (p: Partial<Estado>, rel = ['20260830-120000']): AppInfo => ({
     name: 'tienda', path: '/srv/apps/tienda', config: {},
     state: {
-      service: 'active', port: 3001, ssl: true, cert_days: 80,
+      service: 'running', port: 3001, ssl: true, cert_days: 80,
       maintenance: false, served: true, autodeploy: false, queue: false,
       releases: 1, last_deploy: '20260830-120000', last_deploy_sha: 'abc',
       ...p,
@@ -171,10 +175,10 @@
     git: true, root: true, sudo_sin_contrasena: false, ya_instalado: false,
     sistema: 'ubuntu-24.04', puede: true, impedimentos: [], avisos: [],
     pasos: [
-      'rm -rf /tmp/orbit-instalacion',
-      'git clone --depth 1 https://github.com/iNTERVOLUTIONS-Labs/orbit.git /tmp/orbit-instalacion',
-      'cd /tmp/orbit-instalacion && sudo bash install.sh',
-      'rm -rf /tmp/orbit-instalacion',
+      'd="$(mktemp -d)"',
+      'git clone --depth 1 https://github.com/iNTERVOLUTIONS-Labs/orbit.git "$d/orbit"',
+      'cd "$d/orbit" && sudo bash install.sh',
+      'cd / ; rm -rf "$d"',
     ],
   }
   const REQUISITOS_NO = {
@@ -253,6 +257,20 @@
       },
     },
   ]
+
+  const MONITOR: Monitor = {
+    schema: 1,
+    apps: [
+      { name: 'tienda', type: 'next', domain: 'tienda.es', port: 3002, service: 'running', cpu_percent: 12.4, memory_bytes: 183_000_000, requests_last_minute: 48, requests_capped: false },
+      { name: 'api', type: 'node', domain: 'api.es', port: 3004, service: 'running', cpu_percent: null, memory_bytes: 96_000_000, requests_last_minute: 2000, requests_capped: true },
+      { name: 'worker', type: 'node', domain: 'w.es', port: 3005, service: 'stopped', cpu_percent: null, memory_bytes: null, requests_last_minute: null, requests_capped: false },
+    ],
+  }
+  // El vhost y el mantenimiento salen de la portada: `top` no los dice. La
+  // última se queda fuera a propósito, para ver cómo se pinta lo que no se sabe.
+  const PORTADA_MONITOR: App[] = MONITOR.apps.slice(0, 2).map((a) => ({
+    name: a.name, type: a.type, domain: a.domain, aliases: [], state: e({ service: a.service, port: a.port }),
+  }))
 </script>
 
 <main>
@@ -331,7 +349,35 @@
     es el 70-85&nbsp;% del tiempo. Y es monótona creciente — una barra que
     retrocede destruye más confianza que cualquier error.
   </p>
-  <div class="panel"><Despliegue app="tienda" servidor="vps-ovh" progreso={PROG} /></div>
+  <div class="panel">
+    <Despliegue
+      app="tienda"
+      servidor="vps-ovh"
+      progreso={PROG}
+      crudo={['  → actualizando el clon', '  → pnpm install --frozen-lockfile', '  → pnpm build'].join('\n')}
+      desde={Date.now() - 83_000}
+      alCancelar={() => {}}
+    />
+  </div>
+
+  <h2>El servidor</h2>
+  <p class="nota">
+    El host y sus servicios llegan con la portada, en la misma llamada. Lo de
+    debajo se pide al abrir cada sección. Un servicio apagado no es un error.
+  </p>
+  <div class="panel">
+    <ServidorVista
+      servidor="vps-ovh"
+      host={(estadoMuestra as unknown as Portada).host}
+      servicios={(estadoMuestra as unknown as Portada).services}
+      version="1.5.1"
+    />
+  </div>
+
+  <h2>El monitor, con la tendencia de la sesión</h2>
+  <div class="panel">
+    <MonitorVista monitor={MONITOR} portada={PORTADA_MONITOR} servidor="vps-ovh" periodo={3} alPausar={() => {}} falloUltimo="no he llegado al servidor" />
+  </div>
 
   <h2>Los cuatro finales</h2>
   <p class="nota">
@@ -565,7 +611,7 @@
 
   <h3>Añadir uno a mano</h3>
   <div class="panel">
-    <AnadirServidor yaUsados={['vps-ovh']} alGuardar={() => {}} alCerrar={() => {}} />
+    <AnadirServidor enfocarAlAbrir={false} yaUsados={['vps-ovh']} alGuardar={() => {}} alCerrar={() => {}} />
   </div>
 
   <h3>Instalar Orbit: lo que se va a ejecutar</h3>
@@ -623,6 +669,7 @@
     <h3>{PASOS.indexOf(p) + 1} · {p}</h3>
     <div class="panel">
       <AsistenteNueva
+        enfocarAlAbrir={false}
         servidor="vps-ovh"
         pasoInicial={p}
         inicial={BORRADOR}
@@ -645,6 +692,7 @@
   {#each Object.entries(DNS) as [cual, r] (cual)}
     <div class="panel">
       <AsistenteNueva
+        enfocarAlAbrir={false}
         servidor="vps-ovh"
         pasoInicial="Dominio"
         inicial={BORRADOR}

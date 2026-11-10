@@ -86,6 +86,18 @@ export interface Comparacion {
   soloB: Fila[]
   /** Cuántas de las que están en los dos tienen alguna diferencia. */
   conDiferencias: number
+  /** Los nombres que salen más de una vez en un mismo servidor. Con dos
+   *  «tienda» en uno no se sabe cuál comparar con la del otro, y se compara
+   *  la última: se dice, en vez de que una de las dos desaparezca sin más. */
+  repetidasA: string[]
+  repetidasB: string[]
+}
+
+function repetidas(l: App[]): string[] {
+  const vistas = new Set<string>()
+  const dos = new Set<string>()
+  for (const x of l) (vistas.has(x.name) ? dos : vistas).add(x.name)
+  return [...dos].sort()
 }
 
 function texto(app: App, campo: string): string {
@@ -155,6 +167,8 @@ export function comparar(a: App[], b: App[]): Comparacion {
     soloA,
     soloB,
     conDiferencias: enLosDos.filter((f) => f.diferencias.length > 0).length,
+    repetidasA: repetidas(a),
+    repetidasB: repetidas(b),
   }
 }
 

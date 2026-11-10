@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { PESO_NIVEL, type Comprobacion, type Doctor } from '../lib/contrato'
+  import { PESO_NIVEL, marcarInvisibles, type Comprobacion, type Doctor } from '../lib/contrato'
 
   let {
     doctor,
@@ -15,7 +15,9 @@
   } = $props()
 
   const ordenadas = $derived(
-    [...doctor.checks].sort((a, b) => PESO_NIVEL[a.level] - PESO_NIVEL[b.level]),
+    // `?? 4`: un nivel que no se conoce va al final en vez de dejar el orden en
+    // manos de un NaN. Lo que llega del puente ya trae uno de los cuatro.
+    [...doctor.checks].sort((a, b) => (PESO_NIVEL[a.level] ?? 4) - (PESO_NIVEL[b.level] ?? 4)),
   )
   // Cuántas arreglaría el servidor por su cuenta. Es lo que decide si tiene
   // sentido ofrecer nada, y se cuenta de `fixable` y no del nivel: hay avisos
@@ -55,7 +57,9 @@
 </div>
 
 <ul class="lista">
-  {#each ordenadas as c (c.id)}
+  <!-- Por posición: los `id` son únicos hoy, pero los pone el servidor, y una
+       clave repetida revienta en desarrollo y se come filas en producción. -->
+  {#each ordenadas as c, i (i)}
     <li class="fila diag--{c.level}">
       <span class="glifo" aria-hidden="true">{GLIFO[c.level]}</span>
       <div class="cuerpo">
@@ -75,7 +79,7 @@
           </p>
         {/if}
       </div>
-      <span class="id">{c.id}</span>
+      <span class="id">{marcarInvisibles(c.id)}</span>
     </li>
   {/each}
 </ul>

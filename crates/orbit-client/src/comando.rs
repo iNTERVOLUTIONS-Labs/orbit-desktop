@@ -65,6 +65,29 @@ pub enum ErrorForma {
     ClaveRepetida(String),
     /// El motivo de una congelación que no cabe en una línea del testigo.
     Motivo(&'static str),
+    /// El nombre de la app es también una palabra de Orbit **en esa orden**, y
+    /// el servidor la leería como palabra y no como nombre: `checks on no`
+    /// cambia la primera app de la lista, `lock help` contesta la ayuda con 0.
+    /// `orden` es el subcomando tal cual, para el mensaje.
+    NombreEsPalabraDeOrbit {
+        app: String,
+        orden: &'static str,
+    },
+    /// Un ajuste de detección (`--build`, `--start`…) con un salto de línea o un
+    /// carácter de control. Lleva la bandera, no el valor.
+    Ajuste(&'static str),
+    /// Un único argumento con caracteres de shell **y** un `=`: suelto, Orbit
+    /// lo pasaría a `bash -lc`; protegido con `env`, `env` lo leería como una
+    /// variable y volcaría el entorno de la app. No hay forma literal de
+    /// mandarlo, así que se dice.
+    ExecAmbiguo(String),
+    /// Un valor que el servidor leería como **su** bandera de idioma:
+    /// `--lang`, `--idioma`, `--lang=xx` o `--idioma=xx`. `main()` de Orbit se
+    /// los quita a todas las órdenes salvo `exec`, estén donde estén (orbit
+    /// ~19410, `_lang_strip`), así que como motivo de `lock` o valor de
+    /// `--since` o `--build` desaparecen —y se llevan el siguiente argumento, o
+    /// cambian el idioma de la respuesta—. Lleva el valor: no es secreto.
+    ValorEsIdioma(String),
     Escapado(shquote::ErrorEscapado),
 }
 
@@ -90,12 +113,54 @@ impl std::fmt::Display for ErrorForma {
             }
             Self::ClaveRepetida(c) => write!(f, "{c} va dos veces en el mismo despliegue"),
             Self::Motivo(m) => write!(f, "el motivo {m}"),
+            Self::NombreEsPalabraDeOrbit { app, orden } => {
+                let efecto = match *orden {
+                    "autodeploy checks" => {
+                        "la leería como el on/off de la orden y no como el nombre, y el cambio \
+                         iría a parar a la primera app de la lista"
+                    }
+                    "metrics" => {
+                        "contestaría con las métricas de Prometheus y no con las de la app"
+                    }
+                    _ => "contestaría con su ayuda y no haría nada, aunque parecería que sí",
+                };
+                let como = if *orden == "metrics" {
+                    "«orbit metrics» sin nombre, que la incluye junto a las demás".to_string()
+                } else {
+                    format!("«orbit {orden}» sin nombre, en un terminal, y elígela de la lista")
+                };
+                write!(
+                    f,
+                    "«{app}» es también una palabra de «orbit {orden}»: el servidor {efecto}. \
+                     Hazlo en el servidor con {como}"
+                )
+            }
+            Self::Ajuste(b) => write!(
+                f,
+                "el valor de {b} tiene que caber en una línea: lleva un salto de línea o un \
+                 carácter de control, y el servidor lo guarda en ficheros que se leen por líneas"
+            ),
+            Self::ExecAmbiguo(t) => write!(
+                f,
+                "«{t}» lleva caracteres de shell y un «=»: suelto, Orbit lo pasaría a un shell, \
+                 y con «env» delante se leería como una variable. Si es una orden de shell, usa \
+                 el modo shell; si no, sepárala en argumentos"
+            ),
+            Self::ValorEsIdioma(v) => write!(
+                f,
+                "«{v}» no puede ir como valor: el servidor lo leería como su opción de idioma y                  se lo quitaría a la orden. Escríbelo de otra forma (sin los dos guiones, por                  ejemplo)"
+            ),
             Self::Escapado(e) => write!(f, "{e}"),
         }
     }
 }
 
 impl std::error::Error for ErrorForma {}
+
+/// Lo que `_lang_strip` del servidor se lleva de cualquier posición.
+fn lo_leeria_como_idioma(a: &str) -> bool {
+    a == "--lang" || a == "--idioma" || a.starts_with("--lang=") || a.starts_with("--idioma=")
+}
 
 /// Copiada de `_app_name_ok` del Orbit real: `^[a-z0-9][a-z0-9._-]{0,39}$`, sin
 /// `..`. Se copia en vez de inventarse porque el servidor es quien manda sobre
@@ -189,8 +254,11 @@ pub fn rama_valida(s: &str) -> bool {
     if s.contains("..") || s.ends_with(".lock") || s.ends_with('.') {
         return false;
     }
+    // `is_control` y no `is_ascii_control`: un C1 (U+0080–U+009F) o un U+2028
+    // también parten una línea para alguien, y la rama acaba en el `.conf` de
+    // la app y en la prosa de cada despliegue.
     !s.chars().any(|c| {
-        c.is_ascii_control() || matches!(c, ' ' | '~' | '^' | ':' | '?' | '*' | '[' | '\\')
+        c.is_control() || c.is_whitespace() || matches!(c, '~' | '^' | ':' | '?' | '*' | '[' | '\\')
     })
 }
 
@@ -205,7 +273,9 @@ pub fn repo_valido(s: &str) -> bool {
     if s.is_empty() || s.len() > 512 || s.starts_with('-') {
         return false;
     }
-    if s.chars().any(|c| c.is_ascii_control() || c == ' ') {
+    // Ni controles de fuera de ASCII (C1) ni espacios Unicode: una URL de
+    // verdad no los lleva, y el repo acaba en el `.conf` de la app.
+    if s.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return false;
     }
     if let Some(resto) = s
@@ -229,10 +299,20 @@ pub fn repo_valido(s: &str) -> bool {
     }
 }
 
-/// El correo del certificado. Deliberadamente laxo: quien valida de verdad es
-/// Let's Encrypt, y una expresión regular estricta aquí sólo consigue rechazar
-/// direcciones que existen.
+/// El correo del certificado. Deliberadamente laxo con la forma: quien valida
+/// de verdad es Let's Encrypt, y una expresión regular estricta aquí sólo
+/// consigue rechazar direcciones que existen.
+///
+/// **Laxo no es «cualquier cosa»**: ni espacios ni caracteres de control (C0,
+/// DEL, C1). `orbit new --email` lo guarda con `_conf_set` en
+/// `/etc/orbit/orbit.conf`, que reescribe el fichero **línea a línea** y que
+/// root carga con `source`: con un salto de línea dentro, el siguiente cambio
+/// de esa clave dejaba suelta la línea de después, y un `$(…)` en ella se
+/// ejecutaba como root.
 pub fn correo_valido(s: &str) -> bool {
+    if s.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
     match s.split_once('@') {
         Some((u, d)) => !u.is_empty() && !s.starts_with('-') && dominio_valido(d),
         None => false,
@@ -304,10 +384,86 @@ pub fn motivo_valido(m: &str) -> Result<(), ErrorForma> {
     if m.chars().count() > 200 {
         return Err(ErrorForma::Motivo("pasa de 200 caracteres"));
     }
-    if m.chars().any(|c| c.is_control()) {
+    // `is_control` ya cubre C0, DEL y C1; U+2028 y U+2029 no son control pero
+    // sí parten la línea en un visor, y el motivo se enseña en una.
+    if m.chars()
+        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+    {
         return Err(ErrorForma::Motivo("tiene que caber en una línea"));
     }
     Ok(())
+}
+
+/// Las palabras que `orbit autodeploy checks` lee como el interruptor **en
+/// cualquier posición** (`orbit` ~14727): con una app que se llame así no queda
+/// nombre, y sin terminal `pick_app` elige la primera por orden alfabético.
+pub const PALABRAS_DE_CHECKS: &[&str] =
+    &["on", "yes", "si", "sí", "enable", "off", "no", "disable"];
+
+/// Lo que `lock`, `unlock` y `remove` leen como petición de ayuda en el sitio
+/// del nombre: contestan el uso y salen con 0, y la interfaz lo daría por hecho.
+pub const PALABRAS_DE_AYUDA: &[&str] = &["help", "ayuda"];
+
+/// `metrics prom` es un subcomando y gana a la app (`orbit` ~8794).
+pub const PALABRAS_DE_METRICS: &[&str] = &["prom"];
+
+/// Las palabras de Orbit que **esa orden** leería en el sitio del nombre de la
+/// app. Vacío para las órdenes que no tienen ninguna. Es lo que replica la
+/// interfaz (`PALABRAS_DE_ORBIT` en `ui/src/lib/despliegue.ts`).
+///
+/// Se descartó prohibir esos nombres en general: `no` o `prom` son apps
+/// válidas para el servidor, y en el resto del catálogo funcionan bien.
+pub fn palabras_de_orbit(c: &Comando) -> &'static [&'static str] {
+    match c {
+        Comando::EsperarCi { .. } => PALABRAS_DE_CHECKS,
+        Comando::Congelar { .. }
+        | Comando::Descongelar { .. }
+        | Comando::Retirar { .. }
+        | Comando::RetirarYBorrar { .. } => PALABRAS_DE_AYUDA,
+        Comando::Metricas { app: Some(_) } => PALABRAS_DE_METRICS,
+        _ => &[],
+    }
+}
+
+/// Si el nombre de la app de `c` choca con una palabra de Orbit en esa orden.
+pub fn choca_con_palabra_de_orbit(c: &Comando) -> bool {
+    choque(c).is_some()
+}
+
+/// El nombre que choca y el subcomando con el que choca, para el mensaje.
+fn choque(c: &Comando) -> Option<(&str, &'static str)> {
+    let (app, orden) = match c {
+        Comando::EsperarCi { app, .. } => (app, "autodeploy checks"),
+        Comando::Congelar { app, .. } => (app, "lock"),
+        Comando::Descongelar { app } => (app, "unlock"),
+        Comando::Retirar { app } | Comando::RetirarYBorrar { app } => (app, "remove"),
+        Comando::Metricas { app: Some(app) } => (app, "metrics"),
+        _ => return None,
+    };
+    palabras_de_orbit(c)
+        .contains(&app.as_str())
+        .then_some((app.as_str(), orden))
+}
+
+/// Un ajuste de detección que el servidor pueda guardar: una línea, sin
+/// controles. `--start` acaba en la unidad de systemd y `--build` en el `.conf`
+/// de la app; un salto de línea ahí es una directiva o una variable de más.
+fn ajuste_valido(v: &str, bandera: &'static str) -> Result<(), ErrorForma> {
+    if v.chars()
+        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+    {
+        return Err(ErrorForma::Ajuste(bandera));
+    }
+    Ok(())
+}
+
+/// Los caracteres por los que `cmd_exec` (`orbit` ~13355) manda un argumento
+/// único a `bash -lc`: `[[:space:]|&;<>()$\`]`. Aquí con `is_whitespace`, que
+/// es un superconjunto de `[[:space:]]` en cualquier locale: pasarse sólo
+/// cuesta un `env` de más.
+fn lo_pasaria_a_un_shell(s: &str) -> bool {
+    s.chars()
+        .any(|c| c.is_whitespace() || c.is_control() || "|&;<>()$`".contains(c))
 }
 
 /// Qué hacer con un campo que Orbit sabe detectar solo.
@@ -374,10 +530,13 @@ pub enum ModoDeExec {
     /// Argumentos separados. **No pasa por ningún shell**: el servidor ejecuta
     /// el `argv` tal cual, así que un `&&` es un argumento literal y no un
     /// operador. Es el modo por defecto porque es el que no sorprende.
+    ///
+    /// Con **un solo** argumento que lleve metacaracteres, el `argv` sale con
+    /// `/usr/bin/env --` delante: si no, la regla del argumento único del
+    /// servidor lo mandaría a `bash -lc` (ver [`Comando::Ejecutar`]).
     Argumentos(Vec<String>),
-    /// Un solo argumento con el texto entero. El servidor lo reconoce por su
-    /// regla y lo pasa a `bash -lc`, así que aquí `&&`, `|` y `$(…)` **sí**
-    /// hacen lo que parece.
+    /// El texto entero, para un shell: sale como `/bin/bash -lc <texto>`, así
+    /// que `&&`, `|`, `$(…)`, `~` y los comodines **sí** hacen lo que parece.
     Shell(String),
 }
 
@@ -537,9 +696,9 @@ pub enum Comando {
     /// tampoco sirve**. Así que se elige, y se ve.
     ///
     /// Nótese lo que esto **no** es: aunque uno de los modos acabe en un shell
-    /// remoto, el cliente **nunca construye una cadena de shell**. Pasa N
-    /// argumentos o pasa uno, y los dos caminos van por el mismo escapador. La
-    /// decisión de meter eso en un shell la toma Orbit, no nosotros.
+    /// remoto, el cliente **nunca construye una cadena de shell**. El texto del
+    /// modo shell viaja como un argumento más detrás de `/bin/bash -lc`, y los
+    /// dos caminos van por el mismo escapador.
     Ejecutar {
         app: String,
         modo: ModoDeExec,
@@ -644,6 +803,15 @@ impl Comando {
                 Err(ErrorForma::NombreDeApp(a.clone()))
             }
         };
+
+        // Antes de construir nada: un nombre que el servidor leería como una
+        // palabra suya retarga la orden o la convierte en «ayuda, rc 0».
+        if let Some((app, orden)) = choque(self) {
+            return Err(ErrorForma::NombreEsPalabraDeOrbit {
+                app: app.to_string(),
+                orden,
+            });
+        }
 
         let mut v: Vec<String> = vec![binario.to_string()];
         // '--json' delante del subcomando, siempre. Es la única posición con un
@@ -878,13 +1046,46 @@ impl Comando {
                             // solución de todas.
                             return Err(ErrorForma::ExecSinComando);
                         }
+                        // La regla del argumento único del servidor: uno solo
+                        // con metacaracteres va a `bash -lc`, y entonces este
+                        // modo dejaría de ser «sin shell». Con `env --` delante
+                        // llegan dos o más y se ejecuta tal cual: `env -- 'ls;id'`
+                        // es «no existe», nunca un shell. El `--` es por un
+                        // primer argumento con guion, que `env` leería como
+                        // opción. Lo que `env` no deja pasar es un `=`: lo toma
+                        // por una variable y, sin orden detrás, vuelca el
+                        // entorno —con los secretos de la app—, así que eso se
+                        // rechaza en vez de mandarse.
+                        //
+                        // Por su ruta, `/usr/bin/env`: el servidor lo ejecuta con
+                        // el PATH de la app, que pone delante `node_modules/.bin`
+                        // y `.venv/bin`, y un `env` de una dependencia sería el
+                        // que recibiera la orden.
+                        if let [unico] = args.as_slice() {
+                            if lo_pasaria_a_un_shell(unico) {
+                                if unico.contains('=') {
+                                    return Err(ErrorForma::ExecAmbiguo(unico.clone()));
+                                }
+                                v.push("/usr/bin/env".into());
+                                v.push("--".into());
+                            }
+                        }
                         v.extend(args.iter().cloned());
                     }
                     ModoDeExec::Shell(texto) => {
                         if texto.trim().is_empty() {
                             return Err(ErrorForma::ExecSinComando);
                         }
-                        v.push(texto.clone());
+                        // El shell lo ponemos nosotros, y no la regla del
+                        // argumento único del servidor: ésa sólo va a `bash -lc`
+                        // si el texto lleva espacio o un metacarácter, y
+                        // `~/bin/backup.sh` o `*.sh` se ejecutaban tal cual, sin
+                        // expandir nada. Con tres argumentos el servidor ejecuta
+                        // el `argv` tal cual, y es exactamente lo que habría
+                        // hecho él (`argv=(bash -lc "$1")`, mismo usuario y
+                        // mismo entorno de `_run_in_dir`), con `bash` por su ruta
+                        // por lo mismo que `env` arriba.
+                        v.extend(["/bin/bash".into(), "-lc".into(), texto.clone()]);
                     }
                 }
             }
@@ -942,6 +1143,23 @@ impl Comando {
                         return Err(ErrorForma::Correo(c.clone()));
                     }
                 }
+                for (valor, bandera) in [
+                    (ajustes.carpeta.as_deref(), "--appdir"),
+                    (ajustes.tipo.as_deref(), "--type"),
+                ] {
+                    if let Some(x) = valor {
+                        ajuste_valido(x, bandera)?;
+                    }
+                }
+                for (anulacion, bandera) in [
+                    (&ajustes.build, "--build"),
+                    (&ajustes.arranque, "--start"),
+                    (&ajustes.outdir, "--outdir"),
+                ] {
+                    if let Some(Anulacion::Valor(x)) = anulacion {
+                        ajuste_valido(x, bandera)?;
+                    }
+                }
                 v.push("new".into());
                 v.push("--yes".into());
                 v.push("--repo".into());
@@ -989,6 +1207,16 @@ impl Comando {
                 if let Some(o) = &ajustes.outdir {
                     o.empujar(&mut v, "--outdir");
                 }
+            }
+        }
+        // Al final y para todas, en vez de en cada campo: el día que se añada
+        // uno nuevo con texto libre ya está cubierto. `exec` no, porque ahí el
+        // servidor no los quita: son la orden de otro. Y ninguna orden de aquí
+        // lleva un `--`, que es lo único tras lo cual el servidor deja de
+        // buscarlos.
+        if !matches!(self, Self::Ejecutar { .. }) {
+            if let Some(a) = v[1..].iter().find(|a| lo_leeria_como_idioma(a)) {
+                return Err(ErrorForma::ValorEsIdioma(a.clone()));
             }
         }
         Ok(v)
@@ -1259,7 +1487,7 @@ mod tests {
         }
         .argv(B)
         .unwrap();
-        assert_eq!(uno, [B, "exec", "web", "ls -la"]);
+        assert_eq!(uno, [B, "exec", "web", "/bin/bash", "-lc", "ls -la"]);
         assert_eq!(otro, [B, "exec", "web", "ls", "-la"]);
         assert_ne!(uno, otro);
     }
@@ -1308,8 +1536,8 @@ mod tests {
         }
         .argv(B)
         .unwrap();
-        assert_eq!(v.len(), 4);
-        assert_eq!(v[3], sucio);
+        assert_eq!(v.len(), 6);
+        assert_eq!(v[5], sucio);
     }
 
     #[test]
@@ -1858,5 +2086,261 @@ mod tests {
         ] {
             assert!(c.argv(B).is_err());
         }
+    }
+
+    // ── Ronda adversaria: nombres que son palabras de Orbit ─────────────────
+
+    #[test]
+    fn una_app_que_se_llama_como_el_interruptor_de_checks_no_retarga_la_orden() {
+        // `checks on no` deja al servidor sin nombre y, sin terminal, cambia la
+        // primera app por orden alfabético.
+        for kw in PALABRAS_DE_CHECKS {
+            for esperar in [true, false] {
+                let c = Comando::EsperarCi {
+                    app: (*kw).into(),
+                    esperar,
+                };
+                assert!(choca_con_palabra_de_orbit(&c), "{kw}");
+                let e = c.argv(B).unwrap_err();
+                assert!(
+                    matches!(
+                        &e,
+                        ErrorForma::NombreEsPalabraDeOrbit {
+                            orden: "autodeploy checks",
+                            ..
+                        }
+                    ),
+                    "{kw}: {e:?}"
+                );
+                let m = e.to_string();
+                assert!(
+                    m.contains(&format!("«{kw}»")) && m.contains("primera app"),
+                    "{m}"
+                );
+            }
+        }
+        // Una app normal sigue funcionando, y `no` sigue siendo válida en otra
+        // orden donde no choca.
+        assert!(Comando::EsperarCi {
+            app: "nota".into(),
+            esperar: true
+        }
+        .argv(B)
+        .is_ok());
+        assert!(Comando::Info { app: "no".into() }.argv(B).is_ok());
+        assert!(Comando::Congelar {
+            app: "no".into(),
+            motivo: None
+        }
+        .argv(B)
+        .is_ok());
+    }
+
+    #[test]
+    fn help_y_ayuda_no_se_mandan_a_lock_unlock_ni_remove() {
+        for kw in PALABRAS_DE_AYUDA {
+            let app = || (*kw).to_string();
+            for c in [
+                Comando::Congelar {
+                    app: app(),
+                    motivo: Some("x".into()),
+                },
+                Comando::Descongelar { app: app() },
+                Comando::Retirar { app: app() },
+                Comando::RetirarYBorrar { app: app() },
+            ] {
+                let e = c.argv(B).unwrap_err();
+                assert!(
+                    matches!(e, ErrorForma::NombreEsPalabraDeOrbit { .. }),
+                    "{c:?}"
+                );
+                assert!(e.to_string().contains("sin nombre"), "{e}");
+            }
+            // En info o deploy, `help` es una app como otra cualquiera.
+            assert!(Comando::Info { app: app() }.argv(B).is_ok());
+        }
+    }
+
+    #[test]
+    fn metrics_prom_es_prometheus_y_no_la_app() {
+        let c = Comando::Metricas {
+            app: Some("prom".into()),
+        };
+        assert_eq!(palabras_de_orbit(&c), PALABRAS_DE_METRICS);
+        let e = c.argv(B).unwrap_err();
+        assert!(e.to_string().contains("Prometheus"), "{e}");
+        // Sin nombre no hay choque: es la forma de verla en el servidor.
+        assert!(Comando::Metricas { app: None }.argv(B).is_ok());
+        assert!(palabras_de_orbit(&Comando::Lista).is_empty());
+    }
+
+    // ── Ronda adversaria: controles y saltos de línea ───────────────────────
+
+    #[test]
+    fn un_correo_con_salto_de_linea_no_llega_al_orbit_conf_de_root() {
+        for malo in [
+            "a\n$(id>/tmp/p)\n#@example.com",
+            "a\r@example.com",
+            "a b@example.com",
+            "a\t@example.com",
+            "a\u{7f}@example.com",
+            "a\u{85}@example.com", // NEL, C1
+            "a\u{2028}@example.com",
+            "a@example.com\n",
+        ] {
+            assert!(!correo_valido(malo), "{malo:?}");
+            let mut c = nueva();
+            tocar(&mut c, |n| n.correo = Some(malo.into()));
+            assert!(matches!(c.argv(B), Err(ErrorForma::Correo(_))), "{malo:?}");
+        }
+        assert!(correo_valido("dave+certs@ejemplo.com"));
+        assert!(correo_valido("ñandú@ejemplo.com"));
+    }
+
+    #[test]
+    fn repo_y_rama_rechazan_controles_de_fuera_de_ascii() {
+        for malo in [
+            "https://github.com/a/b\u{85}x",
+            "https://github.com/a/b\u{2028}",
+            "a/b\u{9b}",
+        ] {
+            assert!(!repo_valido(malo), "{malo:?}");
+        }
+        for malo in ["main\u{85}", "ma\u{2028}in", "ma\u{a0}in", "ma\nin"] {
+            assert!(!rama_valida(malo), "{malo:?}");
+        }
+        assert!(rama_valida("feature/ñandú"));
+    }
+
+    #[test]
+    fn los_ajustes_de_deteccion_tienen_que_caber_en_una_linea() {
+        // `--start` acaba en la unidad de systemd: un salto de línea ahí es una
+        // directiva de más.
+        type Caso = (&'static str, fn(&mut WebNueva));
+        let casos: [Caso; 5] = [
+            ("--start", |n| {
+                n.ajustes.arranque = Some(Anulacion::Valor("node a\nExecStartPre=/bin/id".into()))
+            }),
+            ("--build", |n| {
+                n.ajustes.build = Some(Anulacion::Valor("pnpm build\r".into()))
+            }),
+            ("--outdir", |n| {
+                n.ajustes.outdir = Some(Anulacion::Valor("dist\u{85}".into()))
+            }),
+            ("--appdir", |n| n.ajustes.carpeta = Some("web\n".into())),
+            ("--type", |n| n.ajustes.tipo = Some("node\u{1b}[2J".into())),
+        ];
+        for (bandera, f) in casos {
+            let mut c = nueva();
+            tocar(&mut c, f);
+            assert_eq!(c.argv(B), Err(ErrorForma::Ajuste(bandera)));
+        }
+        let mut bien = nueva();
+        tocar(&mut bien, |n| {
+            n.ajustes.build = Some(Anulacion::Valor("pnpm build && pnpm test".into()))
+        });
+        assert!(bien.argv(B).is_ok());
+    }
+
+    #[test]
+    fn un_motivo_con_separador_de_linea_unicode_tampoco_cabe() {
+        assert!(motivo_valido("a\u{2028}b").is_err());
+        assert!(motivo_valido("a\u{85}b").is_err());
+    }
+
+    // ── Ronda adversaria: el argumento único de exec ────────────────────────
+
+    #[test]
+    fn un_argumento_suelto_con_metacaracteres_no_llega_a_bash_lc() {
+        for unico in [
+            "id;whoami",
+            "$(id)",
+            "a|b",
+            "x&&y",
+            "`id`",
+            "cat<x",
+            "-x;y",
+            "a\tb",
+        ] {
+            let v = Comando::Ejecutar {
+                app: "web".into(),
+                modo: ModoDeExec::Argumentos(vec![unico.into()]),
+            }
+            .argv(B)
+            .unwrap();
+            assert_eq!(
+                v,
+                [B, "exec", "web", "/usr/bin/env", "--", unico],
+                "{unico:?}"
+            );
+            // Y es distinto del modo shell, que sí va a bash -lc.
+            let s = Comando::Ejecutar {
+                app: "web".into(),
+                modo: ModoDeExec::Shell(unico.into()),
+            }
+            .argv(B)
+            .unwrap();
+            assert_eq!(s, [B, "exec", "web", "/bin/bash", "-lc", unico]);
+        }
+    }
+
+    #[test]
+    fn exec_sin_metacaracteres_o_con_varios_argumentos_no_cambia() {
+        let uno = |a: Vec<&str>| {
+            Comando::Ejecutar {
+                app: "web".into(),
+                modo: ModoDeExec::Argumentos(a.into_iter().map(String::from).collect()),
+            }
+            .argv(B)
+            .unwrap()
+        };
+        assert_eq!(uno(vec!["ls"]), [B, "exec", "web", "ls"]);
+        assert_eq!(uno(vec!["a=b"]), [B, "exec", "web", "a=b"]);
+        // Con dos o más el servidor ya ejecuta tal cual.
+        assert_eq!(uno(vec!["ls", "a;b"]), [B, "exec", "web", "ls", "a;b"]);
+    }
+
+    #[test]
+    fn rc2_un_valor_que_el_servidor_leeria_como_idioma_no_se_manda() {
+        for m in ["--lang", "--idioma", "--lang=en", "--idioma=fr"] {
+            let lock = Comando::Congelar {
+                app: "web".into(),
+                motivo: Some(m.into()),
+            };
+            assert_eq!(lock.argv(B), Err(ErrorForma::ValorEsIdioma(m.into())));
+            let logs = Comando::Logs {
+                app: "web".into(),
+                desde: Some(m.into()),
+                lineas: None,
+                seguir: false,
+                solo_nginx: false,
+            };
+            assert!(logs.argv(B).is_err(), "{m}");
+            // En `exec` sí: ahí el servidor no los toca.
+            let exec = Comando::Ejecutar {
+                app: "web".into(),
+                modo: ModoDeExec::Argumentos(vec!["node".into(), m.into()]),
+            };
+            assert!(exec.argv(B).is_ok(), "{m}");
+        }
+        // Lo que se le parece y no es, pasa.
+        for m in ["--language", "lang", "-- lang", "--lang-x", " --lang"] {
+            let lock = Comando::Congelar {
+                app: "web".into(),
+                motivo: Some(m.into()),
+            };
+            assert!(lock.argv(B).is_ok(), "{m:?}");
+        }
+    }
+
+    #[test]
+    fn un_argumento_suelto_con_igual_y_metacaracteres_se_rechaza() {
+        // `env 'x=1;id'` no ejecuta nada: vuelca el entorno de la app.
+        let r = Comando::Ejecutar {
+            app: "web".into(),
+            modo: ModoDeExec::Argumentos(vec!["x=1;id".into()]),
+        }
+        .argv(B);
+        assert_eq!(r, Err(ErrorForma::ExecAmbiguo("x=1;id".into())));
     }
 }

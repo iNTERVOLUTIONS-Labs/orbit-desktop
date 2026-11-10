@@ -163,13 +163,15 @@ fn impresor() -> String {
             "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\0' \"$a\"; done\n",
         )
         .unwrap();
-        let mut p = std::fs::metadata(&d).unwrap().permissions();
+        // Sólo en Unix hay bit de ejecución que dar; en el resto, volver a
+        // escribir los mismos permisos no hacía nada.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            let mut p = std::fs::metadata(&d).unwrap().permissions();
             p.set_mode(0o755);
+            std::fs::set_permissions(&d, p).unwrap();
         }
-        std::fs::set_permissions(&d, p).unwrap();
     }
     d.to_string_lossy().into_owned()
 }
@@ -179,9 +181,14 @@ fn ida_y_vuelta(shell: &[&str], argv: &[String]) -> Result<Vec<String>, String> 
     completo.extend_from_slice(argv);
     let linea = build(&completo).map_err(|e| e.to_string())?;
 
+    // En una carpeta temporal y no en la del crate: en Windows, el `bash` de
+    // MSYS vuelve a partir la línea de `-c` y se come barras invertidas, y si
+    // eso rompe el escapado, los `>` de los casos crean ficheros donde se esté.
+    // Llegaron a llenar el árbol del repositorio de nombres raros.
     let salida = Command::new(shell[0])
         .args(&shell[1..])
         .arg(&linea)
+        .current_dir(std::env::temp_dir())
         .output()
         .map_err(|e| e.to_string())?;
     if !salida.status.success() {

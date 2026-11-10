@@ -85,6 +85,28 @@ export function leerProgreso(
   texto: string,
   opciones: { app?: string; pesos?: number[]; anterior?: number } = {},
 ): Progreso {
+  const l = lectorDeProgreso(opciones)
+  for (const cruda of texto.split('\n')) l.linea(cruda)
+  return l.foto(opciones.anterior)
+}
+
+/** El mismo análisis que [`leerProgreso`], **línea a línea**.
+ *
+ *  La primera versión volvía a leer la salida entera con cada línea que
+ *  llegaba, así que un build que escupe miles de líneas iba cada vez más lento
+ *  justo cuando alguien lo está mirando: coste cuadrático en la pantalla
+ *  estrella. Esto guarda el estado y sólo mira la línea nueva. */
+export interface LectorDeProgreso {
+  /** Devuelve si la línea cambió algo: casi todas son prosa del build, y
+   *  quien pinta se ahorra una foto nueva por cada una. */
+  linea(cruda: string): boolean
+  /** El estado ahora, con el avance que ya se había enseñado como suelo. */
+  foto(anterior?: number): Progreso
+}
+
+export function lectorDeProgreso(
+  opciones: { app?: string; pesos?: number[] } = {},
+): LectorDeProgreso {
   const w = opciones.pesos ?? PASOS.map((p) => p.peso)
   const pasos: EstadoDePaso[] = PASOS.map((p) => ({
     id: p.id, texto: p.texto, estado: 'pendiente', segundos: null,
@@ -93,50 +115,67 @@ export function leerProgreso(
   let transcurrido = 0
   let rotas = 0
 
-  for (const cruda of texto.split('\n')) {
-    const t = cruda.trim()
-    // Por stderr va también todo lo que Orbit le cuenta a una persona. Lo que
-    // no empieza por llave es prosa, no una línea rota.
-    if (!t.startsWith('{')) continue
-    let s: SucesoDeProgreso
-    try {
-      s = JSON.parse(t)
-    } catch {
-      rotas += 1
-      continue
-    }
-    if (opciones.app && s.app && s.app !== opciones.app) continue
-    if (typeof s.elapsed_s === 'number') transcurrido = Math.max(transcurrido, s.elapsed_s)
-    if (s.event !== 'step' || !s.step) continue
-
-    let p = pasos.find((x) => x.id === s.step)
-    if (!p) {
-      // Un paso que no conocemos se AÑADE, no se descarta: el día que Orbit
-      // tenga un séptimo, esta pantalla lo enseña sin actualizarse.
-      p = { id: s.step, texto: s.step, estado: 'pendiente', segundos: null }
-      pasos.push(p)
-    }
-    if (s.status === 'start') {
-      p.estado = 'haciendo'
-      inicio.set(p.id, s.elapsed_s ?? 0)
-    } else if (s.status === 'ok') {
-      p.estado = 'hecho'
-      const i = inicio.get(p.id)
-      if (i !== undefined && typeof s.elapsed_s === 'number') p.segundos = s.elapsed_s - i
-    }
-  }
-
-  let avance = 0
-  pasos.forEach((p, i) => {
-    if (p.estado === 'hecho') avance += w[i] ?? 0
-  })
-  // **Nunca retrocede.** Una barra que retrocede destruye más confianza que
-  // cualquier error.
-  avance = Math.min(1, Math.max(avance, opciones.anterior ?? 0))
-
   return {
-    pasos, avance, transcurrido, rotas,
-    sinHistorico: opciones.pesos === undefined,
+    linea(cruda: string): boolean {
+      const t = cruda.trim()
+      // Por stderr va también todo lo que Orbit le cuenta a una persona. Lo que
+      // no empieza por llave es prosa, no una línea rota.
+      if (!t.startsWith('{')) return false
+      let s: SucesoDeProgreso
+      try {
+        s = JSON.parse(t)
+      } catch {
+        rotas += 1
+        return true
+      }
+      if (s === null || typeof s !== 'object') {
+        rotas += 1
+        return true
+      }
+      if (opciones.app && s.app && s.app !== opciones.app) return false
+      let cambio = false
+      if (typeof s.elapsed_s === 'number' && s.elapsed_s > transcurrido) {
+        transcurrido = s.elapsed_s
+        cambio = true
+      }
+      if (s.event !== 'step' || !s.step) return cambio
+
+      let p = pasos.find((x) => x.id === s.step)
+      if (!p) {
+        // Un paso que no conocemos se AÑADE, no se descarta: el día que Orbit
+        // tenga un séptimo, esta pantalla lo enseña sin actualizarse.
+        p = { id: String(s.step), texto: String(s.step), estado: 'pendiente', segundos: null }
+        pasos.push(p)
+        cambio = true
+      }
+      if (s.status === 'start') {
+        p.estado = 'haciendo'
+        inicio.set(p.id, s.elapsed_s ?? 0)
+        return true
+      } else if (s.status === 'ok') {
+        p.estado = 'hecho'
+        const i = inicio.get(p.id)
+        if (i !== undefined && typeof s.elapsed_s === 'number') p.segundos = s.elapsed_s - i
+        return true
+      }
+      return cambio
+    },
+    foto(anterior?: number): Progreso {
+      let avance = 0
+      pasos.forEach((p, i) => {
+        if (p.estado === 'hecho') avance += w[i] ?? 0
+      })
+      // **Nunca retrocede.** Una barra que retrocede destruye más confianza que
+      // cualquier error.
+      avance = Math.min(1, Math.max(avance, anterior ?? 0))
+      return {
+        // Copias: lo que se entrega a la pantalla no puede cambiar debajo de
+        // ella cuando llegue la siguiente línea.
+        pasos: pasos.map((p) => ({ ...p })),
+        avance, transcurrido, rotas,
+        sinHistorico: opciones.pesos === undefined,
+      }
+    },
   }
 }
 
@@ -160,8 +199,10 @@ export function leerProgreso(
 export type FinalVisual = 'bien' | 'recuperado' | 'revertido' | 'roto' | 'negado' | 'faltan'
 
 export function finalDe(d: Despliegue): FinalVisual {
-  if (d.ok) return d.recovered ? 'recuperado' : 'bien'
-  if (d.rolled_back) return 'revertido'
+  // Sólo `true` es un éxito: un `"false"` o un `1` de un servidor raro no
+  // pueden pintarse como «desplegada».
+  if (d.ok === true) return d.recovered === true ? 'recuperado' : 'bien'
+  if (d.rolled_back === true) return 'revertido'
   if (d.release === null && d.failed_step === null) return 'negado'
   if (faltanVariables(d).length > 0) return 'faltan'
   return 'roto'
@@ -181,7 +222,7 @@ export function finalDe(d: Despliegue): FinalVisual {
  *  opcional pendiente sigue siendo un fallo del build. */
 export function faltanVariables(d: Despliegue): string[] {
   const faltan = d.env_missing ?? []
-  if (d.ok || d.failed_step !== 'release' || faltan.length === 0) return []
+  if (d.ok === true || d.failed_step !== 'release' || !Array.isArray(faltan) || faltan.length === 0) return []
   const nombradas = new Set((d.error ?? '').split(/[^A-Za-z0-9_]+/))
   return faltan.filter((k) => nombradas.has(k))
 }
@@ -208,6 +249,30 @@ export const QUE_MIRAR: Record<string, { mira: string; accion: string }> = {
   activate: { mira: 'El estado del symlink current.',        accion: 'Ir al diagnóstico' },
   service:  { mira: 'Las últimas líneas del journal.',       accion: 'Volver a la anterior' },
   nginx:    { mira: 'La salida de nginx -t.',                accion: 'Ir al diagnóstico' },
+}
+
+/** Lo de `QUE_MIRAR` para un paso **que mande el servidor**. Con `hasOwn` y no
+ *  con `QUE_MIRAR[paso]`: un `failed_step` llamado `constructor` encontraba la
+ *  función del prototipo y pintaba un botón primario sin texto. */
+export function queMirar(paso: string | null | undefined): { mira: string; accion: string } | null {
+  return typeof paso === 'string' && Object.hasOwn(QUE_MIRAR, paso) ? QUE_MIRAR[paso]! : null
+}
+
+/** El nombre de cada paso en la pantalla. Los ids son de Orbit y en inglés;
+ *  el id sigue a mano en un `title`, porque es lo que sale en la salida cruda
+ *  y en un issue. `release` se queda: es la palabra de Orbit para eso. */
+const NOMBRE_DE_PASO = new Map<string, string>([
+  ['code', 'código'],
+  ['release', 'release'],
+  ['build', 'compilación'],
+  ['activate', 'activación'],
+  ['service', 'servicio'],
+  ['nginx', 'nginx'],
+])
+
+/** El nombre de un paso; uno que no conozcamos, tal cual lo manda Orbit. */
+export function nombreDePaso(id: string): string {
+  return NOMBRE_DE_PASO.get(id) ?? id
 }
 
 /** Los finales de un lote, con su glifo y su palabra.
@@ -331,11 +396,28 @@ export interface Pasada {
  * que no conozcamos se ignora sin contarse como rota.
  */
 export function leerPasada(texto: string): Pasada {
+  const l = lectorDePasada()
+  for (const cruda of texto.split('\n')) l.linea(cruda)
+  return l.foto()
+}
+
+/** El mismo análisis que [`leerPasada`], **línea a línea**: una pasada de
+ *  cuarenta apps son treinta mil líneas, y volver a leerlas todas con cada una
+ *  que llegaba costaba 18 s de hilo principal. */
+export interface LectorDePasada {
+  /** Devuelve si la línea cambió algo. */
+  linea(cruda: string): boolean
+  /** El estado ahora, en copias: lo entregado no cambia debajo de la pantalla. */
+  foto(): Pasada
+}
+
+export function lectorDePasada(): LectorDePasada {
   const apps: AppEnPasada[] = []
   const indice = new Map<string, AppEnPasada>()
   let enCurso: string | null = null
   let transcurrido = 0
   let rotas = 0
+  let terminadas = 0
 
   const dame = (nombre: string): AppEnPasada => {
     let a = indice.get(nombre)
@@ -348,49 +430,55 @@ export function leerPasada(texto: string): Pasada {
     }
     return a
   }
-
-  for (const cruda of texto.split('\n')) {
-    const t = cruda.trim()
-    // Por stderr va también todo lo que Orbit le cuenta a una persona. Lo que
-    // no empieza por llave es prosa, no una línea rota.
-    if (!t.startsWith('{')) continue
-    let s: SucesoDeProgreso
-    try {
-      s = JSON.parse(t)
-    } catch {
-      rotas += 1
-      continue
-    }
-    if (!s.app) continue
-
-    if (s.event === 'app') {
-      if (typeof s.elapsed_s === 'number') transcurrido = Math.max(transcurrido, s.elapsed_s)
-      const a = dame(s.app)
-      if (s.status === 'start') {
-        enCurso = s.app
-        a.final = null
-      } else if (s.status) {
-        a.final = s.status
-        a.paso = null
-        if (enCurso === s.app) enCurso = null
-      }
-    } else if (s.event === 'step' && s.step) {
-      // Un paso de dentro. No mueve el reloj de la pasada — ver `transcurrido`.
-      const a = dame(s.app)
-      if (a.final === null) a.paso = s.step
-      // Y un paso implica que esa app está corriendo, aunque su «start» de nivel
-      // de app se hubiera perdido: el canal puede llegar cortado por arriba si
-      // alguien abre la pantalla a mitad.
-      if (a.final === null) enCurso = s.app
-    }
+  // El recuento de terminadas se lleva al día en vez de contarse en cada foto.
+  const ponerFinal = (a: AppEnPasada, f: string | null) => {
+    if ((a.final === null) !== (f === null)) terminadas += f === null ? -1 : 1
+    a.final = f
   }
 
   return {
-    apps,
-    enCurso,
-    terminadas: apps.filter((a) => a.final !== null).length,
-    transcurrido,
-    rotas,
+    linea(cruda: string): boolean {
+      const t = cruda.trim()
+      // Por stderr va también todo lo que Orbit le cuenta a una persona. Lo que
+      // no empieza por llave es prosa, no una línea rota.
+      if (!t.startsWith('{')) return false
+      let s: SucesoDeProgreso
+      try {
+        s = JSON.parse(t)
+      } catch {
+        rotas += 1
+        return true
+      }
+      if (s === null || typeof s !== 'object' || !s.app) return false
+
+      if (s.event === 'app') {
+        if (typeof s.elapsed_s === 'number') transcurrido = Math.max(transcurrido, s.elapsed_s)
+        const a = dame(s.app)
+        if (s.status === 'start') {
+          enCurso = s.app
+          ponerFinal(a, null)
+        } else if (s.status) {
+          ponerFinal(a, s.status)
+          a.paso = null
+          if (enCurso === s.app) enCurso = null
+        }
+        return true
+      }
+      if (s.event === 'step' && s.step) {
+        // Un paso de dentro. No mueve el reloj de la pasada — ver `transcurrido`.
+        const a = dame(s.app)
+        if (a.final === null) a.paso = s.step
+        // Y un paso implica que esa app está corriendo, aunque su «start» de nivel
+        // de app se hubiera perdido: el canal puede llegar cortado por arriba si
+        // alguien abre la pantalla a mitad.
+        if (a.final === null) enCurso = s.app
+        return true
+      }
+      return false
+    },
+    foto(): Pasada {
+      return { apps: apps.map((a) => ({ ...a })), enCurso, terminadas, transcurrido, rotas }
+    },
   }
 }
 
@@ -462,19 +550,53 @@ export function argvDeDespliegue(
   return v
 }
 
+/** Las órdenes de Orbit que leen una palabra suya donde va el nombre de la app. */
+export type OrdenConNombre = 'esperarCi' | 'congelar' | 'descongelar' | 'retirar' | 'metricas'
+
+/** Las palabras que el servidor lee **como palabra suya** en esa posición.
+ *  `autodeploy checks on|off` acepta `on yes si sí enable…` y, con una app que
+ *  se llame así, el servidor la lee como el interruptor y aplica el cambio a
+ *  la primera app de la lista. Las mismas que rechaza el núcleo. */
+const PALABRAS_DE_ORBIT: Record<OrdenConNombre, readonly string[]> = {
+  esperarCi: ['on', 'yes', 'si', 'sí', 'enable', 'off', 'no', 'disable'],
+  congelar: ['help', 'ayuda'],
+  descongelar: ['help', 'ayuda'],
+  retirar: ['help', 'ayuda'],
+  metricas: ['prom'],
+}
+
+/** Si el nombre de la app choca con una palabra de Orbit en esa orden: el
+ *  motivo, o `null`. Mejor negarse aquí que mandar una orden que el servidor
+ *  aplicaría a **otra** app, o a la que contestaría con la ayuda. */
+export function chocaConPalabraDeOrbit(app: string, orden: OrdenConNombre): string | null {
+  if (!PALABRAS_DE_ORBIT[orden].includes(app.trim().toLowerCase())) return null
+  return orden === 'esperarCi'
+    ? `Orbit leería «${app}» como el «on» u «off» de la orden y no como el nombre de la app, y el cambio iría a parar a otra. Hazlo desde un terminal en el servidor.`
+    : `Orbit leería «${app}» como una palabra suya y no como el nombre de la app. Hazlo desde un terminal en el servidor.`
+}
+
+function negarSiChoca(app: string, orden: OrdenConNombre): void {
+  const m = chocaConPalabraDeOrbit(app, orden)
+  if (m !== null) throw new Error(m)
+}
+
 /** `orbit lock`. Sin `--json`, que `lock` no habla. Un motivo en blanco es no
- *  decir motivo, igual que en el núcleo. */
+ *  decir motivo, igual que en el núcleo. Lanza si el nombre choca con una
+ *  palabra de Orbit (`chocaConPalabraDeOrbit`). */
 export function argvDeCongelar(app: string, motivo: string | null): string[] {
+  negarSiChoca(app, 'congelar')
   const v = ['lock', app]
   if (motivo !== null && motivo.trim() !== '') v.push('-m', motivo)
   return v
 }
 
 export function argvDeDescongelar(app: string): string[] {
+  negarSiChoca(app, 'descongelar')
   return ['unlock', app]
 }
 
 export function argvDeEsperarCi(app: string, esperar: boolean): string[] {
+  negarSiChoca(app, 'esperarCi')
   return ['autodeploy', 'checks', esperar ? 'on' : 'off', app]
 }
 

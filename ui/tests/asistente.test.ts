@@ -24,8 +24,10 @@ import {
 } from '../src/lib/asistente'
 import type { AppInfo, Estado } from '../src/lib/contrato'
 
+// `running` es lo que escribe `svc_state` de Orbit; `active` era la palabra de
+// systemd que traían las muestras, y con ella esta prueba no veía el fallo.
 const BASE: Estado = {
-  service: 'active', port: 3001, ssl: true, cert_days: 80,
+  service: 'running', port: 3001, ssl: true, cert_days: 80,
   maintenance: false, served: true, autodeploy: false, queue: false,
   releases: 1, last_deploy: '20260830-120000', last_deploy_sha: 'abc',
 }
@@ -73,6 +75,28 @@ describe('los siete finales', () => {
     const d = clasificar('tienda', info({ service: 'failed' }), true)
     expect(d.final).toBe('F4')
     expect(d.accion?.orden).toContain('logs')
+  })
+
+  it('una web sana con proceso es F1, la llame Orbit «running» o systemd «active»', () => {
+    expect(clasificar('tienda', info({ service: 'running' }), true).final).toBe('F1')
+    expect(clasificar('tienda', info({ service: 'active' }), true).final).toBe('F1')
+  })
+
+  it('«stopped», lo que escribe Orbit de una parada, es F4', () => {
+    const d = clasificar('tienda', info({ service: 'stopped' }), true)
+    expect(d.final).toBe('F4')
+    expect(d.tono).toBe('error')
+  })
+
+  it('un estado que no se conoce no se da por bueno ni por roto', () => {
+    const d = clasificar('tienda', info({ service: 'reloading' }), true)
+    expect(d.final).toBe('F4')
+    expect(d.tono).toBe('atencion')
+    expect(d.falta).toContain('reloading')
+  })
+
+  it('una web estática no tiene proceso, y no es F4', () => {
+    expect(clasificar('tienda', info({ service: null }), true).final).toBe('F1')
   })
 
   it('F5 · sin vhost gana sobre todo lo demás', () => {

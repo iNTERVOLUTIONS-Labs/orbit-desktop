@@ -37,6 +37,6 @@ pub use comando::{Comando, ErrorForma};
 pub use contrato::{App, Estado, Version};
 pub use descubrir::{descubrir, AliasSsh};
 pub use flujo::{leer_log, leer_progreso, SucesoDeLog};
-pub use saludo::{Saludo, ORDEN_DE_INSTALACION};
+pub use saludo::Saludo;
 pub use shquote::{build, shquote, ErrorEscapado};
 pub use transporte::{ErrorTransporte, Respuesta};

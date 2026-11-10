@@ -45,13 +45,22 @@
 /// Se comprueba en **una sola** conexión y antes de tocar nada. Descubrir a
 /// mitad de una instalación que falta `git` deja un servidor a medias y a quien
 /// mira sin saber qué ha quedado hecho.
-pub const COMPROBACION: &str = "\
+///
+/// Dentro de `sh -c '…'`, como [`orden`], y por lo mismo: el shell de login no
+/// lo elegimos. Sin la envoltura, en fish o csh `${ID:-?}`, `$(…)` y `2>&1` no
+/// son sintaxis suya, cada línea fallaba y la pantalla listaba impedimentos que
+/// no existían. Dentro no hay ni una comilla simple, así que la envoltura es
+/// un único argumento en cualquier shell.
+///
+/// Y el `os-release` se mira antes de cargarlo: en un `sh` POSIX (dash), un `.`
+/// de un fichero que no existe **termina el shell**, y el `so=` no salía nunca.
+pub const COMPROBACION: &str = "sh -c '\
 command -v git >/dev/null 2>&1 && echo git=si || echo git=no; \
 command -v sudo >/dev/null 2>&1 && echo sudo=si || echo sudo=no; \
 [ \"$(id -u)\" = 0 ] && echo root=si || echo root=no; \
 sudo -n true >/dev/null 2>&1 && echo sudonp=si || echo sudonp=no; \
 command -v orbit >/dev/null 2>&1 && echo orbit=si || echo orbit=no; \
-. /etc/os-release 2>/dev/null; echo so=${ID:-?}-${VERSION_ID:-?}";
+[ -r /etc/os-release ] && . /etc/os-release; echo \"so=${ID:-?}-${VERSION_ID:-?}\"'";
 
 /// Lo que contestó la comprobación.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -174,15 +183,22 @@ pub const REPOSITORIO: &str = "https://github.com/iNTERVOLUTIONS-Labs/orbit.git"
 /// va a ejecutar**, y una pantalla que enseña una cosa y ejecuta otra es el
 /// único fallo que anula por completo a una pantalla de confirmación.
 ///
-/// `/tmp` y no el HOME: es un clon de usar y tirar, y dejarlo en la carpeta
-/// personal de alguien es dejarle basura que no ha pedido. Se borra al terminar,
-/// salga bien o mal.
+/// En una carpeta **privada** de `mktemp -d` y no en una ruta fija de `/tmp`.
+/// La primera versión clonaba en `/tmp/orbit-instalacion`, y en un servidor con
+/// más usuarios eso era una escalada a root: cualquiera podía crear esa carpeta
+/// entre el `rm` y el `clone` —o dejarla creada antes—, y como dueño de la
+/// carpeta cambiar `install.sh` justo antes del `sudo bash`. `mktemp -d` la crea
+/// nueva, con un nombre que no se adivina y `0700`.
+///
+/// Y no en el HOME: es un clon de usar y tirar, y dejarlo en la carpeta personal
+/// de alguien es dejarle basura que no ha pedido. Se borra al terminar, salga
+/// bien o mal.
 pub fn pasos() -> Vec<String> {
     vec![
-        "rm -rf /tmp/orbit-instalacion".into(),
-        format!("git clone --depth 1 {REPOSITORIO} /tmp/orbit-instalacion"),
-        "cd /tmp/orbit-instalacion && sudo bash install.sh".into(),
-        "rm -rf /tmp/orbit-instalacion".into(),
+        r#"d="$(mktemp -d)""#.into(),
+        format!(r#"git clone --depth 1 {REPOSITORIO} "$d/orbit""#),
+        r#"cd "$d/orbit" && sudo bash install.sh"#.into(),
+        r#"cd / ; rm -rf "$d""#.into(),
     ]
 }
 
@@ -196,9 +212,17 @@ pub fn pasos() -> Vec<String> {
 /// `sudo bash` sin `-n`: los requisitos ya han comprobado que se puede elevar
 /// sin contraseña, y con `-n` un `sudo` configurado de otra forma fallaría por
 /// un motivo distinto del real.
+///
+/// Va dentro de `sh -c '…'` porque usa una variable, y el shell de login del
+/// usuario remoto no lo elegimos nosotros: en fish o en csh `d="$(…)"` no es
+/// una asignación. El código de salida que se devuelve es el del instalador, no
+/// el del borrado.
 pub fn orden() -> String {
     let p = pasos();
-    format!("{} && {} && {} ; {}", p[0], p[1], p[2], p[3])
+    format!(
+        "sh -c '{} && {} && {} ; r=$? ; {} ; exit $r'",
+        p[0], p[1], p[2], p[3]
+    )
 }
 
 #[cfg(test)]
@@ -223,11 +247,58 @@ mod tests {
     #[test]
     fn el_clon_temporal_se_limpia_aunque_falle() {
         let o = orden();
-        // El último borrado va con `;` y no con `&&`: si la instalación falla,
-        // igual hay que llevarse la basura.
-        let (antes, despues) = o.rsplit_once(" ; ").expect("el último paso va con ;");
-        assert!(despues.contains("rm -rf"));
-        assert!(antes.contains("install.sh"));
+        // El borrado va detrás de un `;` y no de un `&&`: si la instalación
+        // falla, igual hay que llevarse la basura. Y el código que se devuelve
+        // es el del instalador.
+        let i = o.find("install.sh").unwrap();
+        let resto = &o[i..];
+        assert!(resto.contains(" ; r=$? ; "), "{o}");
+        assert!(resto.contains("rm -rf"), "{o}");
+        assert!(o.ends_with("exit $r'"), "{o}");
+    }
+
+    /// Una ruta fija en `/tmp` deja a otro usuario del servidor cambiar
+    /// `install.sh` entre el clon y el `sudo bash`: una escalada a root.
+    #[test]
+    fn el_clon_va_a_una_carpeta_privada_y_no_a_una_ruta_fija() {
+        let o = orden();
+        assert!(o.contains("mktemp -d"), "{o}");
+        assert!(!o.contains("/tmp/"), "nada de rutas fijas en /tmp: {o}");
+        // Y entre comillas simples sin otras dentro, para que `sh -c` reciba un
+        // único argumento en cualquier shell de login.
+        assert!(o.starts_with("sh -c '"), "{o}");
+        assert_eq!(o.matches('\'').count(), 2, "{o}");
+    }
+
+    /// En fish o csh la comprobación suelta fallaba entera y enseñaba
+    /// impedimentos inventados. Envuelta, es un único argumento para `sh`.
+    #[test]
+    fn la_comprobacion_va_dentro_de_sh_c_como_la_instalacion() {
+        let c = COMPROBACION;
+        assert!(c.starts_with("sh -c '"), "{c}");
+        assert!(c.ends_with('\''), "{c}");
+        assert_eq!(c.matches('\'').count(), 2, "{c}");
+        // Los `\` de la orden se quedan dentro del `sh -c`, donde sh no los
+        // interpreta: dentro de las comillas simples no hay ninguno.
+        assert!(!c.contains('\\'), "{c}");
+    }
+
+    /// Y hace lo que dice: con un shell POSIX de verdad, las seis claves salen
+    /// y se leen. (En el servidor es Linux; aquí basta con que haya `sh`.)
+    #[test]
+    fn la_comprobacion_contesta_las_seis_claves() {
+        let Ok(o) = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(COMPROBACION)
+            .output()
+        else {
+            eprintln!("sin `sh` en esta máquina: no se comprueba la ejecución");
+            return;
+        };
+        let s = String::from_utf8_lossy(&o.stdout);
+        for k in ["git=", "sudo=", "root=", "sudonp=", "orbit=", "so="] {
+            assert!(s.lines().any(|l| l.starts_with(k)), "falta {k} en {s:?}");
+        }
     }
 
     #[test]

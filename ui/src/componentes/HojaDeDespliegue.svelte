@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { devolverFoco } from '../lib/foco'
   // La hoja de comando de un despliegue. Es la de siempre —la orden literal
   // antes de lanzarla— con las dos cosas que Orbit 1.3.8 y 1.4.3 añadieron al
   // despliegue y que sin terminal no tienen otra salida:
@@ -114,10 +115,15 @@
     // Como en la hoja de siempre: el foco entra en el diálogo, no en el botón.
     dialogo?.focus()
   })
+  // Y al cerrarse vuelve a donde estaba: sin esto, quien navega con teclado
+  // acababa al principio de la página después de cada confirmación.
+  const previo = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null
+  $effect(() => () => devolverFoco(previo))
   $effect(() => () => olvidar())
 
   function teclado(e: KeyboardEvent) {
-    if (e.key === 'Escape') cancelar()
+    // Un Escape que ya ha atendido otra capa —la paleta— no cierra también ésta.
+    if (e.key === 'Escape' && !e.defaultPrevented) cancelar()
   }
 </script>
 
@@ -138,7 +144,9 @@
       <!-- Lo primero, antes de la orden: es lo que cambia la decisión. -->
       <section class="congelada" role="note">
         <p class="aviso">
-          <strong>Está congelada</strong>{#if lock?.at} desde <span title={lock.at}>{lock.at.replace('T', ' ').slice(0, 16)}</span>{/if}{#if lock?.by} por <strong>{lock.by}</strong>{/if}{#if lock?.reason}: «{lock.reason}»{/if}.
+          <!-- Los espacios van como texto explícito: Svelte se come el blanco
+               del principio de un bloque, y salía «congeladadesde …por». -->
+          <strong>Está congelada</strong>{#if lock?.at}{' desde '}<span title={lock.at}>{lock.at.replace('T', ' ').slice(0, 16)}</span>{/if}{#if lock?.by}{' por '}<strong>{lock.by}</strong>{/if}{#if lock?.reason}{': '}«{lock.reason}»{/if}.
         </p>
         <p class="que">
           Desplegarla ahora usa <code>--force</code>: se despliega esta vez y
@@ -162,10 +170,8 @@
         {#if obligatorias.length > 0}
           <p class="que">
             {obligatorias.length === 1
-              ? 'Le falta una variable obligatoria.'
-              : `Le faltan ${obligatorias.length} variables obligatorias.`}
-            Sin ellas el servidor se para antes del build: aquí no hay nadie al
-            teclado para que las pregunte.
+              ? 'Le falta una variable obligatoria. Sin ella el servidor se para antes del build: aquí no hay nadie al teclado para que la pregunte.'
+              : `Le faltan ${obligatorias.length} variables obligatorias. Sin ellas el servidor se para antes del build: aquí no hay nadie al teclado para que las pregunte.`}
           </p>
           {#each obligatorias as k (k)}
             <label class="campo">

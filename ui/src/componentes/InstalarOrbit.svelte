@@ -29,6 +29,29 @@
   const lineas = $derived(salida.split('\n').filter((l) => l.trim() !== ''))
   const marcha = $derived(hitos(salida))
 
+  // Lo que se oye. Una región que existe desde el principio y a la que sólo se
+  // le cambia el texto: el bloque del final aparece de golpe con el texto ya
+  // dentro, y un nodo que nace así no se anuncia — diez minutos de espera
+  // terminaban en silencio. Se anuncia también el hito en curso: es la única
+  // forma de saber, sin mirar, que el proceso no se ha quedado parado.
+  const anuncio = $derived.by(() => {
+    if (resultado) {
+      return resultado.version
+        ? `Orbit ${resultado.version} está instalado en ${alias}.`
+        : `No ha quedado instalado en ${alias}.`
+    }
+    if (instalando) {
+      const ahora = marcha.pasos.find((p) => p.estado === 'haciendo')
+      return ahora ? `Paso ${marcha.pasos.indexOf(ahora) + 1} de ${marcha.pasos.length}: ${ahora.texto}` : ''
+    }
+    if (mirando) return `Mirando qué hay en ${alias}…`
+    return ''
+  })
+
+  // Lo que un lector de pantalla dice de cada hito. El punto de color es la
+  // única marca visible del estado, y es `aria-hidden`.
+  const ESTADO_HITO: Record<string, string> = { hecho: 'hecho', haciendo: 'en curso', pendiente: 'pendiente' }
+
   let visor: HTMLPreElement | undefined = $state()
   // Sigue el final mientras llegan líneas. Sin esto hay que perseguir la barra
   // durante diez minutos; con esto y sin comprobar nada, no se puede subir a
@@ -42,6 +65,7 @@
 </script>
 
 <section class="instalar">
+  <p class="sr" role="status">{anuncio}</p>
   <header>
     <h3>Instalar Orbit en {alias}</h3>
     {#if !instalando}
@@ -83,9 +107,14 @@
          por dónde va, y eso se saca de sus propios títulos. -->
     <ol class="hitos">
       {#each marcha.pasos as p (p.id)}
-        <li class="hito" class:hito--hecho={p.estado === 'hecho'} class:hito--ahora={p.estado === 'haciendo'}>
+        <li
+          class="hito"
+          class:hito--hecho={p.estado === 'hecho'}
+          class:hito--ahora={p.estado === 'haciendo'}
+          aria-current={p.estado === 'haciendo' ? 'step' : undefined}
+        >
           <span class="punto" aria-hidden="true"></span>
-          <span class="nombre">{p.texto}</span>
+          <span class="nombre">{p.texto}<span class="sr">: {ESTADO_HITO[p.estado] ?? p.estado}</span></span>
         </li>
       {/each}
     </ol>
@@ -102,15 +131,20 @@
       </p>
     </div>
   {:else if mirando}
-    <p class="tenue">mirando qué hay en {alias}…</p>
+    <p class="tenue">Mirando qué hay en {alias}…</p>
   {:else if requisitos}
-    <ul class="chequeo">
+    <!-- El ✓ y el ✕ van ocultos al lector —«marca de verificación» no dice
+         nada—, así que la palabra va aparte. Sin ella, un «sudo sin contraseña»
+         que FALTA se leía como una afirmación de que lo hay. -->
+    <ul class="chequeo" aria-label="Requisitos de {alias}">
       <li class:si={requisitos.git} class:no={!requisitos.git}>
-        <span aria-hidden="true">{requisitos.git ? '✓' : '✕'}</span> git
+        <span aria-hidden="true">{requisitos.git ? '✓' : '✕'}</span>
+        <span class="sr">{requisitos.git ? 'Cumple:' : 'Falta:'}</span> git
       </li>
       <li class:si={requisitos.root || requisitos.sudo_sin_contrasena}
           class:no={!(requisitos.root || requisitos.sudo_sin_contrasena)}>
         <span aria-hidden="true">{requisitos.root || requisitos.sudo_sin_contrasena ? '✓' : '✕'}</span>
+        <span class="sr">{requisitos.root || requisitos.sudo_sin_contrasena ? 'Cumple:' : 'Falta:'}</span>
         {requisitos.root ? 'entras como root' : 'sudo sin contraseña'}
       </li>
       {#if requisitos.sistema}
@@ -157,7 +191,8 @@
 
 <style>
   .instalar { display: grid; gap: var(--e-4); max-width: 76ch; }
-  header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--e-3); }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--e-3); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   h3 { margin: 0; font-size: 15px; font-weight: 600; color: var(--fg); }
   .cerrar {
     background: none; border: 0; padding: 0; font: inherit; font-size: 12px;

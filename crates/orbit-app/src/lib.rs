@@ -30,9 +30,11 @@ use orbit_client::{instalar, registro};
 // `dir_control` viene del núcleo: dónde viven los sockets de ControlMaster
 // es política del transporte, y compartirlo con el cliente de terminal es
 // justo lo que hace que el segundo reutilice la conexión del primero.
+use orbit_client::contrato::Version;
 use orbit_client::transporte::{self, dir_control, EnCurso, Servidor};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 
 /// Un fallo, ya en palabras que se le pueden enseñar a alguien.
@@ -91,12 +93,48 @@ type Resultado = Result<serde_json::Value, ErrorParaLaInterfaz>;
 /// mano que pasara por aquí acabaría en un `ssh alias` que no resuelve nada, y
 /// el fallo diría «no he llegado al servidor» — que manda a buscar el problema
 /// a la red cuando está en el cliente.
-fn servidor_del_config(alias: &str, binario: Option<String>) -> Servidor {
+///
+/// **Y sólo si es un `Host` del fichero.** Antes valía cualquier nombre que no
+/// empezara por guion, y `user@atacante.example` también lo es: un renderizador
+/// comprometido podía hacer que `ssh` le ofreciera las claves del agente a un
+/// host cualquiera. La lista es la misma que ve la interfaz
+/// (`descubrir::alias_de`), así que no se pierde ningún servidor que se pueda
+/// elegir; uno añadido a mano entra por [`guardado`], antes de llegar aquí.
+fn servidor_del_config(
+    alias: &str,
+    binario: Option<String>,
+) -> Result<Servidor, ErrorParaLaInterfaz> {
+    let del_config = match descubrir::ruta_por_defecto() {
+        Some(r) => descubrir::alias_de(&r).map_err(|e| ErrorParaLaInterfaz {
+            clase: "registro",
+            mensaje: format!("no he podido leer tu ~/.ssh/config para buscar «{alias}»: {e}"),
+            detalle: None,
+        })?,
+        None => Vec::new(),
+    };
+    servidor_si_esta(alias, binario, &del_config)
+}
+
+fn servidor_si_esta(
+    alias: &str,
+    binario: Option<String>,
+    del_config: &[String],
+) -> Result<Servidor, ErrorParaLaInterfaz> {
+    if !del_config.iter().any(|a| a == alias) {
+        return Err(ErrorParaLaInterfaz {
+            clase: "alias-desconocido",
+            mensaje: format!(
+                "«{alias}» no es ninguno de tus servidores: ni lo has añadido aquí ni es un Host \
+                 de tu ~/.ssh/config"
+            ),
+            detalle: None,
+        });
+    }
     let mut s = Servidor::nuevo(alias, alias);
     if let Some(b) = binario {
         s.binario = b;
     }
-    s
+    Ok(s)
 }
 
 /// Un comando cualquiera del catálogo, ejecutado y devuelto **sin interpretar**.
@@ -105,15 +143,14 @@ fn servidor_del_config(alias: &str, binario: Option<String>) -> Servidor {
 /// se renombra y no se rellena nada: los tipos ya están en `contrato.rs` y en
 /// su gemelo de TypeScript, y meter aquí una tercera forma sería inventar un
 /// tercer contrato.
+///
+/// Sin interpretar no es sin comprobar: pasa por `objeto_del_contrato`, que
+/// mira el `schema` como lo mira el terminal. Antes no se miraba, y un servidor
+/// con `schema:2` se pintaba como si hablara el 1.
 fn pedir(alias: &str, binario: Option<String>, c: Comando) -> Resultado {
-    let s = servidor_por_alias(alias, binario);
+    let s = servidor_por_alias(alias, binario)?;
     let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
-    let texto = r.objeto()?;
-    serde_json::from_str(texto).map_err(|e| ErrorParaLaInterfaz {
-        clase: "json",
-        mensaje: e.to_string(),
-        detalle: None,
-    })
+    Ok(r.objeto_del_contrato(&c)?)
 }
 
 /// Lo bloqueante, **fuera del hilo de la ventana**.
@@ -176,16 +213,33 @@ fn prosa(r: &transporte::Respuesta) -> String {
 /// devuelta como `{salida, codigo}`. Si sale con error, el error es la frase de
 /// Orbit (ver `ErrorTransporte::Orbit`), no «ha salido con 1».
 fn pedir_prosa(alias: &str, binario: Option<String>, c: Comando) -> Resultado {
-    let s = servidor_por_alias(alias, binario);
+    let s = servidor_por_alias(alias, binario)?;
     let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
     Ok(serde_json::json!({ "salida": prosa(&r), "codigo": r.codigo }))
 }
 
 // ── el catálogo, y nada más ────────────────────────────────────────────────
 
+/// `version --json`. Lo que conteste se apunta en [`Versiones`].
 #[tauri::command]
-async fn version(alias: String, binario: Option<String>) -> Resultado {
-    pedir_aparte(alias, binario, Comando::Version).await
+async fn version(
+    versiones: tauri::State<'_, Versiones>,
+    alias: String,
+    binario: Option<String>,
+) -> Resultado {
+    let cache = versiones.inner().clone();
+    aparte(move || {
+        let s = servidor_por_alias(&alias, binario)?;
+        let c = Comando::Version;
+        let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
+        let v = r.objeto_del_contrato(&c)?;
+        match serde_json::from_value::<Version>(v.clone()) {
+            Ok(x) => cache.apuntar(&s, &x),
+            Err(_) => cache.olvidar(&s),
+        }
+        Ok(v)
+    })
+    .await
 }
 
 /// La portada se alimenta de **esto** y no de `list`.
@@ -229,7 +283,7 @@ async fn logs(
     binario: Option<String>,
 ) -> Result<String, ErrorParaLaInterfaz> {
     aparte(move || {
-        let s = servidor_por_alias(&alias, binario);
+        let s = servidor_por_alias(&alias, binario)?;
         let c = Comando::Logs {
             app,
             desde,
@@ -264,14 +318,267 @@ async fn doctor_arreglar(alias: String, binario: Option<String>) -> Resultado {
 /// distintos: cada uno es un proceso SSH independiente y nada en el servidor
 /// los coordina, ni falta. La clave es `servidor:app` y no la app sola, porque
 /// `tienda` existe en tres servidores y son tres despliegues distintos.
+///
+/// Lo que **no** se puede es lanzar dos con la misma clave. Antes el segundo
+/// pisaba al primero en el registro: un doble clic en «Desplegar» eran dos
+/// despliegues de la misma app —dos builds peleándose por la caché de git, lo
+/// que `ejecutar_en_vivo` se niega a hacer reintentando—, el primero se quedaba
+/// sin forma de cancelarse, y al terminar borraba del registro el mando del
+/// segundo, que tampoco se podía cancelar ya.
 #[derive(Default)]
 pub struct Vivos(Mutex<HashMap<String, EnCurso>>);
 
+impl Vivos {
+    /// Apunta un trabajo como vivo, **o se niega si ya hay uno con esa clave**.
+    ///
+    /// La comprobación y el apunte van bajo el mismo cerrojo: mirar y luego
+    /// apuntar en dos pasos dejaría pasar justo el doble clic.
+    fn apuntar(&self, clave: String, ocupado: String) -> Result<Turno<'_>, ErrorParaLaInterfaz> {
+        use std::collections::hash_map::Entry;
+        let mut m = self.0.lock().unwrap();
+        match m.entry(clave.clone()) {
+            Entry::Occupied(_) => Err(ErrorParaLaInterfaz {
+                clase: "en-curso",
+                mensaje: ocupado,
+                detalle: None,
+            }),
+            Entry::Vacant(v) => {
+                let mando = EnCurso::nuevo();
+                v.insert(mando.clone());
+                Ok(Turno {
+                    vivos: self,
+                    clave,
+                    mando,
+                })
+            }
+        }
+    }
+}
+
+/// Un trabajo apuntado en [`Vivos`]. Se desapunta **solo, al soltarse**, pase
+/// lo que pase en medio: con un `remove` a mano al final, cada `?` entre medias
+/// era un despliegue que seguía «vivo» en el registro para siempre.
+struct Turno<'a> {
+    vivos: &'a Vivos,
+    clave: String,
+    mando: EnCurso,
+}
+
+impl Drop for Turno<'_> {
+    fn drop(&mut self) {
+        // Sólo si sigue siendo el suyo. Hoy no puede no serlo —`apuntar` no
+        // deja apuntar otro con la misma clave—, pero quitar «el que haya» es
+        // exactamente el fallo que dejaba a un despliegue sin poder cancelarse.
+        if let Ok(mut m) = self.vivos.0.lock() {
+            if m.get(&self.clave)
+                .is_some_and(|x| x.es_el_mismo(&self.mando))
+            {
+                m.remove(&self.clave);
+            }
+        }
+    }
+}
+
+// ── el progreso, por tandas ────────────────────────────────────────────────
+
+/// El evento por el que llega el progreso: `(clave, líneas)`.
+///
+/// `clave` es `servidor:app` (o `servidor:*`, `servidor:!instalar`) y `líneas`
+/// van en el orden en que llegaron. En la interfaz es `[string, string[]]`.
+pub const EVENTO_DE_PROGRESO: &str = "orbit://progreso";
+
+/// Lo que puede esperar una línea antes de salir. Menos de lo que se nota, y
+/// basta para que un build hablador vaya en tandas de decenas.
+const TANDA_ESPERA: Duration = Duration::from_millis(50);
+/// Y lo que cabe en una antes de salir sin esperar.
+const TANDA_LINEAS: usize = 64;
+
+/// Las líneas de progreso, **en tandas**.
+///
+/// Iba un evento por línea, y cada evento es un despacho al webview que
+/// serializa, cruza el IPC y despierta a los oyentes: un build de 30 000 líneas
+/// eran 30 000 despachos. Ahora sale una tanda cada 50 ms como mucho, o en
+/// cuanto se juntan 64 líneas, y siempre una al final con lo que quede.
+///
+/// Un hilo propio y no «vaciar al llegar la siguiente»: con eso, la última
+/// línea de un servidor que se queda callado a mitad de build —el paso largo,
+/// justo el que se mira— no saldría hasta la siguiente, minutos después. El
+/// hilo vacía por plazo aunque no llegue nada más.
+///
+/// Sólo emite el hilo, así que el orden es el de llegada y no se pierde nada:
+/// lo que se echa después de cerrar no existe, porque se cierra al terminar la
+/// orden, cuando ya no hay quien eche.
+struct Tanda {
+    buzon: Buzon,
+    hilo: Option<std::thread::JoinHandle<()>>,
+}
+
+struct Pendiente {
+    lineas: Vec<String>,
+    desde: Option<Instant>,
+    cerrada: bool,
+}
+
+#[derive(Clone)]
+struct Buzon(Arc<(Mutex<Pendiente>, Condvar)>);
+
+impl Buzon {
+    fn pendiente(&self) -> std::sync::MutexGuard<'_, Pendiente> {
+        // Un pánico en el emisor no puede dejar mudo el resto del despliegue.
+        self.0 .0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn echar(&self, linea: String) {
+        let mut p = self.pendiente();
+        if p.lineas.is_empty() {
+            p.desde = Some(Instant::now());
+        }
+        p.lineas.push(linea);
+        // Sólo se despierta al hilo cuando hay algo que decidir: la primera
+        // línea pone el plazo en marcha y la 64.ª lo adelanta.
+        let avisar = p.lineas.len() == 1 || p.lineas.len() >= TANDA_LINEAS;
+        drop(p);
+        if avisar {
+            self.0 .1.notify_one();
+        }
+    }
+}
+
+impl Tanda {
+    fn nueva(mut emitir: impl FnMut(Vec<String>) + Send + 'static) -> Self {
+        let buzon = Buzon(Arc::new((
+            Mutex::new(Pendiente {
+                lineas: Vec::new(),
+                desde: None,
+                cerrada: false,
+            }),
+            Condvar::new(),
+        )));
+        let b = buzon.clone();
+        let hilo = std::thread::spawn(move || loop {
+            let cv = &b.0 .1;
+            let mut p = b.pendiente();
+            while p.lineas.is_empty() && !p.cerrada {
+                p = cv.wait(p).unwrap_or_else(|e| e.into_inner());
+            }
+            if p.lineas.is_empty() {
+                return;
+            }
+            let limite = p.desde.unwrap_or_else(Instant::now) + TANDA_ESPERA;
+            while !p.cerrada && p.lineas.len() < TANDA_LINEAS {
+                let ahora = Instant::now();
+                if ahora >= limite {
+                    break;
+                }
+                p = cv
+                    .wait_timeout(p, limite - ahora)
+                    .unwrap_or_else(|e| e.into_inner())
+                    .0;
+            }
+            let lote = std::mem::take(&mut p.lineas);
+            p.desde = None;
+            // Se emite sin el cerrojo: el lector de stderr no espera al IPC.
+            drop(p);
+            emitir(lote);
+        });
+        Tanda {
+            buzon,
+            hilo: Some(hilo),
+        }
+    }
+
+    fn buzon(&self) -> Buzon {
+        self.buzon.clone()
+    }
+}
+
+impl Drop for Tanda {
+    /// Vacía lo que quede y espera a que salga, **antes** de que la orden
+    /// devuelva: la interfaz tiene que tener la última línea antes que el
+    /// resultado, o pintaría el final sin el paso que lo explica.
+    fn drop(&mut self) {
+        self.buzon.pendiente().cerrada = true;
+        self.buzon.0 .1.notify_all();
+        if let Some(h) = self.hilo.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+/// Las tandas de una clave, hacia la ventana.
+fn tanda_hacia(ventana: tauri::Window, clave: String) -> Tanda {
+    Tanda::nueva(move |lineas| {
+        // Con varios despliegues a la vez, una línea sin dueño no vale para
+        // nada: por eso cada tanda lleva su clave.
+        let _ = ventana.emit(EVENTO_DE_PROGRESO, (clave.as_str(), lineas));
+    })
+}
+
+// ── la versión de cada servidor, recordada un rato ─────────────────────────
+
+/// Cuánto vale una versión leída. Basta para que desplegar varias apps con
+/// variables no le pregunte al servidor antes de cada una, y es corto porque
+/// el servidor se puede actualizar por fuera (`orbit update`, el terminal).
+const VIDA_DE_LA_VERSION: Duration = Duration::from_secs(5 * 60);
+
+/// La última versión leída de cada servidor.
+///
+/// Existe por `desplegar` con variables, que necesita la versión para decidir
+/// por dónde viajan los valores y la preguntaba **cada vez**: un saludo más
+/// por despliegue. Se apunta cada vez que se lee una respuesta de `version`
+/// —el saludo, la de la interfaz, la de después de instalar— y se olvida al
+/// instalar o cuando el saludo no da una versión.
+///
+/// La clave es servidor **y** binario: dos rutas de `orbit` en la misma máquina
+/// pueden ser dos versiones.
+///
+/// Lo que se acepta: dentro de esos cinco minutos, un servidor actualizado por
+/// fuera de 1.4.8 a 1.4.9 recibe las variables en el `argv` —como antes de
+/// actualizar—, y uno que bajara de versión rechazaría `--env-stdin` con un
+/// error que lo dice. Ninguno de los dos manda un valor a donde no debe.
+#[derive(Clone, Default)]
+pub struct Versiones(Arc<Mutex<HashMap<ServidorYBinario, (Version, Instant)>>>);
+
+/// El alias y la ruta de `orbit`.
+type ServidorYBinario = (String, String);
+
+impl Versiones {
+    fn clave(s: &Servidor) -> ServidorYBinario {
+        (s.alias.clone(), s.binario.clone())
+    }
+
+    fn apuntar(&self, s: &Servidor, v: &Version) {
+        self.apuntar_en(s, v, Instant::now());
+    }
+
+    fn apuntar_en(&self, s: &Servidor, v: &Version, cuando: Instant) {
+        if let Ok(mut m) = self.0.lock() {
+            m.insert(Self::clave(s), (v.clone(), cuando));
+        }
+    }
+
+    fn olvidar(&self, s: &Servidor) {
+        if let Ok(mut m) = self.0.lock() {
+            m.remove(&Self::clave(s));
+        }
+    }
+
+    fn vigente(&self, s: &Servidor) -> Option<Version> {
+        self.vigente_en(s, Instant::now())
+    }
+
+    fn vigente_en(&self, s: &Servidor, ahora: Instant) -> Option<Version> {
+        let m = self.0.lock().ok()?;
+        let (v, cuando) = m.get(&Self::clave(s))?;
+        (ahora.saturating_duration_since(*cuando) < VIDA_DE_LA_VERSION).then(|| v.clone())
+    }
+}
+
 /// Despliega **sirviendo el progreso mientras ocurre**.
 ///
-/// Cada línea de `--progress` sale como un evento `orbit://progreso` en cuanto
-/// llega. Leerlo entero al terminar convertiría tres minutos de información en
-/// un bloque de texto que llega cuando ya no sirve.
+/// El progreso de `--progress` sale por `orbit://progreso` en tandas de como
+/// mucho 50 ms ([`Tanda`]). Leerlo entero al terminar convertiría tres minutos
+/// de información en un bloque de texto que llega cuando ya no sirve.
 ///
 /// Lo que **no** hace, y es lo que importa: si el contacto se pierde, no dice
 /// que el despliegue haya fallado. **No lo sabe.** El proceso sigue en el
@@ -290,11 +597,12 @@ pub struct Vivos(Mutex<HashMap<String, EnCurso>>);
 /// 1.4.9 o posterior van por la entrada estándar (`--env-stdin`) y no tocan ni
 /// `ps` ni el registro de `sudo` del servidor; con 1.4.3–1.4.8 sólo existe
 /// `--env`, que los pone en el `argv` (THREAT-MODEL T-13, y la hoja lo avisa).
-/// La versión se le pregunta al servidor justo antes —una llamada corta, por la
-/// conexión multiplexada— en vez de fiarse de la que tenga la interfaz, que
-/// puede ser de antes de una actualización. Y si no se puede saber, **no se
-/// manda nada**: adivinar mal aquí es poner una contraseña en el `argv` de un
-/// servidor que sí sabía leerla por la entrada.
+/// La versión sale de la que este proceso leyó hace menos de cinco minutos
+/// ([`Versiones`]) o, si no hay, se le pregunta al servidor justo antes —una
+/// llamada corta, por la conexión multiplexada—; nunca de la que tenga la
+/// interfaz, que puede ser de antes de una actualización. Y si no se puede
+/// saber, **no se manda nada**: adivinar mal aquí es poner una contraseña en el
+/// `argv` de un servidor que sí sabía leerla por la entrada.
 ///
 /// `forzar` es `--force`: desplegar una app congelada **sin descongelarla**.
 #[tauri::command]
@@ -302,6 +610,7 @@ pub struct Vivos(Mutex<HashMap<String, EnCurso>>);
 async fn desplegar(
     ventana: tauri::Window,
     vivos: tauri::State<'_, Vivos>,
+    versiones: tauri::State<'_, Versiones>,
     alias: String,
     app: String,
     entorno: Option<Vec<VariableDeLaInterfaz>>,
@@ -310,7 +619,7 @@ async fn desplegar(
 ) -> Resultado {
     let clave = format!("{alias}:{app}");
 
-    let s = servidor_por_alias(&alias, binario);
+    let s = servidor_por_alias(&alias, binario)?;
     let variables: Vec<VariableNueva> = entorno
         .unwrap_or_default()
         .into_iter()
@@ -320,10 +629,15 @@ async fn desplegar(
         false
     } else {
         let s_v = s.clone();
+        let cache = versiones.inner().clone();
         let v = aparte(move || {
+            if let Some(v) = cache.vigente(&s_v) {
+                return Ok(v);
+            }
             let r = transporte::ejecutar(&s_v, &Comando::Version, dir_control().as_deref(), &[])?;
-            r.leer::<orbit_client::contrato::Version>()
-                .map_err(ErrorParaLaInterfaz::from)
+            let v = r.leer::<Version>().map_err(ErrorParaLaInterfaz::from)?;
+            cache.apuntar(&s_v, &v);
+            Ok(v)
         })
         .await
         .map_err(|e| ErrorParaLaInterfaz {
@@ -357,41 +671,38 @@ async fn desplegar(
     // despliegue fantasma en el rail.
     c.argv(&s.binario).map_err(ErrorParaLaInterfaz::from)?;
 
-    let mando = EnCurso::nuevo();
-    vivos.0.lock().unwrap().insert(clave.clone(), mando.clone());
+    let turno = vivos.apuntar(
+        clave.clone(),
+        format!("Ya hay un despliegue de «{app}» en curso en «{alias}»."),
+    )?;
+    let mando = turno.mando.clone();
     let ctrl = dir_control();
-    let clave_ev = clave.clone();
 
     // En un hilo aparte: la llamada bloquea minutos, y bloquear el hilo de la
     // interfaz durante un build es la diferencia entre una ventana viva y una
     // que Windows marca como «no responde».
     let r = tauri::async_runtime::spawn_blocking(move || {
-        transporte::ejecutar_en_vivo(&s, &c, ctrl.as_deref(), &[], mando, move |linea| {
-            // El evento lleva la clave para poder atribuirlo: con varios
-            // despliegues a la vez, una línea sin dueño no vale para nada.
-            let _ = ventana.emit("orbit://progreso", (clave_ev.clone(), linea));
-        })
+        let tanda = tanda_hacia(ventana, clave);
+        let buzon = tanda.buzon();
+        let r = transporte::ejecutar_en_vivo(&s, &c, ctrl.as_deref(), &[], mando, move |l| {
+            buzon.echar(l)
+        });
+        // Lo que quede sale ANTES del resultado.
+        drop(tanda);
+        r.and_then(|r| r.objeto_del_contrato(&c))
     })
     .await;
 
-    vivos.0.lock().unwrap().remove(&clave);
+    drop(turno);
 
-    let r = match r {
-        Ok(v) => v?,
-        Err(e) => {
-            return Err(ErrorParaLaInterfaz {
-                clase: "hilo",
-                mensaje: format!("el despliegue se ha interrumpido: {e}"),
-                detalle: None,
-            })
-        }
-    };
-    let texto = r.objeto()?;
-    serde_json::from_str(texto).map_err(|e| ErrorParaLaInterfaz {
-        clase: "json",
-        mensaje: e.to_string(),
-        detalle: None,
-    })
+    match r {
+        Ok(v) => Ok(v?),
+        Err(e) => Err(ErrorParaLaInterfaz {
+            clase: "hilo",
+            mensaje: format!("el despliegue se ha interrumpido: {e}"),
+            detalle: None,
+        }),
+    }
 }
 
 /// Si las variables de un despliegue van por la entrada estándar (`Some(true)`),
@@ -466,10 +777,13 @@ async fn crear(
     // la misma vía y porque durante `new` no puede haber además un `deploy` de
     // la misma app: todavía no existe.
     let clave = format!("{alias}:{nombre}");
-    let mando = EnCurso::nuevo();
-    vivos.0.lock().unwrap().insert(clave.clone(), mando.clone());
+    let s = servidor_por_alias(&alias, binario)?;
+    let turno = vivos.apuntar(
+        clave.clone(),
+        format!("Ya hay un despliegue de «{nombre}» en curso en «{alias}»."),
+    )?;
+    let mando = turno.mando.clone();
 
-    let s = servidor_por_alias(&alias, binario);
     let c = Comando::Nueva(Box::new(WebNueva {
         nombre: nombre.clone(),
         repo,
@@ -482,16 +796,19 @@ async fn crear(
         ajustes: ajustes.into(),
     }));
     let ctrl = dir_control();
-    let clave_ev = clave.clone();
 
     let r = tauri::async_runtime::spawn_blocking(move || {
-        transporte::ejecutar_en_vivo(&s, &c, ctrl.as_deref(), &[], mando, move |linea| {
-            let _ = ventana.emit("orbit://progreso", (clave_ev.clone(), linea));
-        })
+        let tanda = tanda_hacia(ventana, clave);
+        let buzon = tanda.buzon();
+        let r = transporte::ejecutar_en_vivo(&s, &c, ctrl.as_deref(), &[], mando, move |l| {
+            buzon.echar(l)
+        });
+        drop(tanda);
+        r
     })
     .await;
 
-    vivos.0.lock().unwrap().remove(&clave);
+    drop(turno);
 
     match r {
         Ok(Ok(r)) => Ok(Creacion {
@@ -601,42 +918,40 @@ async fn desplegar_todo(
     binario: Option<String>,
 ) -> Resultado {
     let clave = format!("{alias}:*");
-    let mando = EnCurso::nuevo();
-    vivos.0.lock().unwrap().insert(clave.clone(), mando.clone());
+    let s = servidor_por_alias(&alias, binario)?;
+    let turno = vivos.apuntar(
+        clave.clone(),
+        format!("Ya hay una pasada por todas las apps en curso en «{alias}»."),
+    )?;
+    let mando = turno.mando.clone();
 
-    let s = servidor_por_alias(&alias, binario);
     let c = Comando::DesplegarTodo {
         progreso: true,
         solo_si_cambia,
     };
     let ctrl = dir_control();
-    let clave_ev = clave.clone();
 
     let r = tauri::async_runtime::spawn_blocking(move || {
-        transporte::ejecutar_en_vivo(&s, &c, ctrl.as_deref(), &[], mando, move |linea| {
-            let _ = ventana.emit("orbit://progreso", (clave_ev.clone(), linea));
-        })
+        let tanda = tanda_hacia(ventana, clave);
+        let buzon = tanda.buzon();
+        let r = transporte::ejecutar_en_vivo(&s, &c, ctrl.as_deref(), &[], mando, move |l| {
+            buzon.echar(l)
+        });
+        drop(tanda);
+        r.and_then(|r| r.objeto_del_contrato(&c))
     })
     .await;
 
-    vivos.0.lock().unwrap().remove(&clave);
+    drop(turno);
 
-    let r = match r {
-        Ok(v) => v?,
-        Err(e) => {
-            return Err(ErrorParaLaInterfaz {
-                clase: "hilo",
-                mensaje: format!("la pasada se ha interrumpido: {e}"),
-                detalle: None,
-            })
-        }
-    };
-    let texto = r.objeto()?;
-    serde_json::from_str(texto).map_err(|e| ErrorParaLaInterfaz {
-        clase: "json",
-        mensaje: e.to_string(),
-        detalle: None,
-    })
+    match r {
+        Ok(v) => Ok(v?),
+        Err(e) => Err(ErrorParaLaInterfaz {
+            clase: "hilo",
+            mensaje: format!("la pasada se ha interrumpido: {e}"),
+            detalle: None,
+        }),
+    }
 }
 
 /// A dónde apunta un nombre, y a dónde apunta el servidor.
@@ -665,15 +980,22 @@ async fn desplegar_todo(
 /// de la interfaz mientras alguien escribe en un campo se nota.
 #[tauri::command]
 async fn resolver(nombre: String, alias: String) -> Result<Resolucion, ErrorParaLaInterfaz> {
-    let destino = alias.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    validar_alias(&alias)?;
+    aparte(move || {
         let del_dominio = direcciones(&nombre);
-        // A dónde va el `ssh`: se lo preguntamos a `ssh -G`, que es quien lo
-        // sabe, en vez de leer el fichero por nuestra cuenta.
-        let del_servidor = descubrir::resolver(&destino, None)
-            .and_then(|a| a.hostname)
-            .map(|h| direcciones(&h))
-            .unwrap_or_default();
+        // A dónde va el `ssh`. Si el servidor se añadió a mano, el host es el
+        // que se guardó: preguntarle a `ssh -G` por un alias que no está en el
+        // `~/.ssh/config` no falla —se inventa `hostname <alias>`—, así que la
+        // respuesta era no encontrar nada o, con un dominio de búsqueda de una
+        // red corporativa, las IP de otra máquina, y la pantalla avisaba de un
+        // «no coincide» falso. Para los del fichero sí se le pregunta a
+        // `ssh -G`, que es quien lo sabe, en vez de leer el fichero por nuestra
+        // cuenta.
+        let host = match guardado(&alias) {
+            Some(g) => Some(g.host),
+            None => descubrir::resolver(&alias, None).and_then(|a| a.hostname),
+        };
+        let del_servidor = host.map(|h| direcciones(&h)).unwrap_or_default();
 
         // «Coinciden» sólo se afirma cuando hay las dos listas y comparten algo.
         // Con cualquiera de las dos vacía la respuesta es «no lo sé», que no es
@@ -684,18 +1006,13 @@ async fn resolver(nombre: String, alias: String) -> Result<Resolucion, ErrorPara
             Some(del_dominio.iter().any(|d| del_servidor.contains(d)))
         };
 
-        Resolucion {
+        Ok(Resolucion {
             del_dominio,
             del_servidor,
             coinciden,
-        }
+        })
     })
     .await
-    .map_err(|e| ErrorParaLaInterfaz {
-        clase: "hilo",
-        mensaje: format!("no he podido resolver el nombre: {e}"),
-        detalle: None,
-    })
 }
 
 /// Las direcciones de un nombre, ordenadas y sin repetir para que dos
@@ -768,69 +1085,223 @@ impl From<ServidorParaLaInterfaz> for registro::ServidorGuardado {
     }
 }
 
-#[tauri::command]
-fn servidores_guardados() -> Vec<ServidorParaLaInterfaz> {
-    registro::leer().into_iter().map(Into::into).collect()
-}
-
-#[tauri::command]
-fn guardar_servidor(
-    servidor: ServidorParaLaInterfaz,
-) -> Result<Vec<ServidorParaLaInterfaz>, ErrorParaLaInterfaz> {
-    // Los alias del `~/.ssh/config` se leen aquí y se pasan: un alias repetido
-    // haría que `ssh` resolviera el del fichero y la aplicación enseñara un
-    // servidor mientras habla con otro.
-    let del_config: Vec<String> = descubrir::ruta_por_defecto()
-        .map(|r| descubrir::descubrir(&r))
-        .unwrap_or_default()
-        .into_iter()
-        .map(|a| a.alias)
-        .collect();
-
-    let mut lista = registro::leer();
-    registro::anadir(&mut lista, servidor.into(), &del_config).map_err(|e| {
-        ErrorParaLaInterfaz {
-            clase: "registro",
-            mensaje: e.to_string(),
-            detalle: None,
-        }
-    })?;
-    registro::escribir(&lista).map_err(|e| ErrorParaLaInterfaz {
+fn del_registro(e: registro::ErrorDeRegistro) -> ErrorParaLaInterfaz {
+    ErrorParaLaInterfaz {
         clase: "registro",
         mensaje: e.to_string(),
         detalle: None,
-    })?;
+    }
+}
+
+/// La lista propia. Si existe y no se puede leer **es un error**, no una lista
+/// vacía: la interfaz sigue con los del `~/.ssh/config`, y nadie escribe encima
+/// de un fichero que se podía arreglar (ver `registro::leer`).
+#[tauri::command]
+fn servidores_guardados() -> Result<Vec<ServidorParaLaInterfaz>, ErrorParaLaInterfaz> {
+    Ok(registro::leer()
+        .map_err(del_registro)?
+        .into_iter()
+        .map(Into::into)
+        .collect())
+}
+
+/// Guarda un servidor nuevo, fuera del hilo de la ventana.
+///
+/// Era síncrono y resolvía cada `Host` del `~/.ssh/config` con un `ssh -G` en
+/// fila, en el hilo que pinta: con veinte alias, la ventana congelada medio
+/// segundo o más al pulsar «guardar», para usar sólo los nombres. Ahora los
+/// nombres se leen del fichero sin lanzar nada, y lo poco que queda va aparte.
+#[tauri::command]
+async fn guardar_servidor(
+    servidor: ServidorParaLaInterfaz,
+) -> Result<Vec<ServidorParaLaInterfaz>, ErrorParaLaInterfaz> {
+    aparte(move || guardar_servidor_aqui(servidor)).await
+}
+
+fn guardar_servidor_aqui(
+    servidor: ServidorParaLaInterfaz,
+) -> Result<Vec<ServidorParaLaInterfaz>, ErrorParaLaInterfaz> {
+    if let Some(b) = &servidor.binario {
+        validar_binario(b)?;
+    }
+    // Los alias del `~/.ssh/config` se leen aquí y se pasan: un alias repetido
+    // haría que `ssh` resolviera el del fichero y la aplicación enseñara un
+    // servidor mientras habla con otro. Un fichero que existe y no se puede
+    // leer **para el guardado**: con una lista vacía por error, la comprobación
+    // dejaría pasar justo el choque que existe para impedir.
+    let del_config: Vec<String> = match descubrir::ruta_por_defecto() {
+        Some(r) => descubrir::alias_de(&r).map_err(|e| ErrorParaLaInterfaz {
+            clase: "registro",
+            mensaje: format!(
+                "no he podido leer tu ~/.ssh/config para comprobar que «{}» no choca con \
+                 ninguno de sus Host: {e}",
+                servidor.alias
+            ),
+            detalle: None,
+        })?,
+        None => Vec::new(),
+    };
+
+    // Leer, añadir y escribir bajo un solo cerrojo: en tres llamadas sueltas,
+    // dos guardados a la vez —un doble clic— perdían uno o fallaban con un
+    // «no he podido guardar» que no era verdad.
+    let lista = registro::guardar(servidor.into(), &del_config).map_err(del_registro)?;
     Ok(lista.into_iter().map(Into::into).collect())
 }
 
 #[tauri::command]
 fn olvidar_servidor(alias: String) -> Result<Vec<ServidorParaLaInterfaz>, ErrorParaLaInterfaz> {
-    let mut lista = registro::leer();
-    registro::olvidar(&mut lista, &alias);
-    registro::escribir(&lista).map_err(|e| ErrorParaLaInterfaz {
-        clase: "registro",
-        mensaje: e.to_string(),
-        detalle: None,
-    })?;
+    // Si la lista no se puede leer, no se escribe: olvidar uno sobre una lista
+    // leída como vacía era borrarlos todos.
+    // Y bajo el mismo cerrojo que guardar, por lo mismo.
+    let lista = registro::quitar(&alias).map_err(del_registro)?;
     Ok(lista.into_iter().map(Into::into).collect())
 }
 
-/// Construye el `Servidor` del núcleo a partir de un alias.
+/// El servidor guardado a mano con ese alias, si lo hay.
+///
+/// Una lista que no se puede leer cuenta aquí como vacía, y es la única
+/// excepción: esto sólo **lee** para conectar, y negarse dejaría sin servicio
+/// también a los del `~/.ssh/config`. Escribir sí se niega (ver
+/// `guardar_servidor`).
+fn guardado(alias: &str) -> Option<registro::ServidorGuardado> {
+    registro::leer()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|s| s.alias == alias)
+}
+
+/// Lo que se le acepta a la interfaz como alias.
+///
+/// El alias acaba de destino de `ssh`, y la interfaz es la frontera que el
+/// encabezado de este fichero promete defender: si una dependencia de npm se
+/// compromete, lo único que puede hacer es llamar a estos comandos. Un alias
+/// `-oProxyCommand=…` o `-F\\host\share\cfg` era, hasta ahora, una opción de
+/// `ssh` —ejecutar una orden local— en el sitio donde iba un nombre.
+///
+/// El transporte ya pone `--` delante del destino, que es lo que cierra el
+/// agujero; esto es la segunda capa, y además da un error que se entiende en
+/// vez de un «no he llegado al servidor». No se usa `registro::alias_valido`
+/// porque es más estricta de lo que admite un `~/.ssh/config`: un `Host` puede
+/// llevar `:` (una IPv6) o `@`, y rechazarlo sería no poder abrir un servidor
+/// que el usuario tiene. Lo que se prohíbe es lo que convierte un nombre en otra
+/// cosa: el guion inicial, el espacio y los caracteres de control.
+fn alias_aceptable(a: &str) -> bool {
+    !a.is_empty()
+        && a.len() <= 255
+        && !a.starts_with('-')
+        && !a.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+fn validar_alias(a: &str) -> Result<(), ErrorParaLaInterfaz> {
+    if alias_aceptable(a) {
+        Ok(())
+    } else {
+        Err(ErrorParaLaInterfaz {
+            clase: "forma",
+            mensaje: format!(
+                "«{a}» no vale como nombre de servidor: no puede estar vacío, empezar por guion \
+                 ni llevar espacios"
+            ),
+            detalle: None,
+        })
+    }
+}
+
+/// La ruta de `orbit` que manda la interfaz: **absoluta**, como pide el
+/// cliente de terminal con `--orbit`. Resolverla por `PATH` sería dejar que el
+/// `PATH` del otro lado eligiera qué se ejecuta como root.
+fn binario_aceptable(b: &str) -> bool {
+    b.starts_with('/') && b.len() <= 4096 && !b.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+fn validar_binario(b: &str) -> Result<(), ErrorParaLaInterfaz> {
+    if binario_aceptable(b) {
+        Ok(())
+    } else {
+        Err(ErrorParaLaInterfaz {
+            clase: "forma",
+            mensaje: format!(
+                "«{b}» tiene que ser una ruta absoluta y sin espacios: resolverla por PATH sería \
+                 dejar que el PATH del otro lado eligiera qué se ejecuta"
+            ),
+            detalle: None,
+        })
+    }
+}
+
+/// Construye el `Servidor` del núcleo a partir de un alias, **comprobando antes
+/// lo que manda la interfaz**: el alias y, si viene, la ruta de `orbit`.
 ///
 /// Mira **primero** la lista propia, porque un alias que está ahí no está en el
 /// `~/.ssh/config` —el guardado lo impide— y así se evita una lectura del
 /// fichero en el caso normal.
-fn servidor_por_alias(alias: &str, binario: Option<String>) -> Servidor {
-    if let Some(g) = registro::leer().into_iter().find(|s| s.alias == alias) {
-        let mut s = Servidor::nuevo(&g.alias, g.destino());
-        s.puerto = Some(g.puerto);
-        s.clave = g.clave.clone();
-        if let Some(b) = binario.or(g.binario) {
-            s.binario = b;
-        }
-        return s;
+fn servidor_por_alias(
+    alias: &str,
+    binario: Option<String>,
+) -> Result<Servidor, ErrorParaLaInterfaz> {
+    validar_alias(alias)?;
+    if let Some(b) = &binario {
+        validar_binario(b)?;
     }
-    servidor_del_config(alias, binario)
+    if let Some(g) = guardado(alias) {
+        return Ok(servidor_guardado(g));
+    }
+    match servidor_del_config(alias, binario) {
+        Err(e) if e.clase == "alias-desconocido" => Err(apartado(alias).unwrap_or(e)),
+        r => r,
+    }
+}
+
+/// Si el alias está en la lista propia **pero apartado** al leerla, el error
+/// que lo dice.
+///
+/// Sin esto, un servidor guardado por una versión anterior cuya clave ya no
+/// pasa la validación (`id_ed25519` suelto, `%USERPROFILE%\…`) desaparecía, y
+/// lo siguiente que se oía de él era «no es ninguno de tus servidores: ni lo has
+/// añadido aquí…», que es falso. Se mira sólo cuando ya ha fallado todo lo
+/// demás: es una lectura más del fichero, y en el caso normal no hace falta.
+fn apartado(alias: &str) -> Option<ErrorParaLaInterfaz> {
+    apartado_de(alias, registro::leer_completo().ok()?, registro::ruta())
+}
+
+fn apartado_de(
+    alias: &str,
+    lectura: registro::Lectura,
+    ruta: Option<std::path::PathBuf>,
+) -> Option<ErrorParaLaInterfaz> {
+    let d = lectura
+        .descartados
+        .into_iter()
+        .find(|d| d.alias.as_deref() == Some(alias))?;
+    let donde = ruta
+        .map(|p| format!(" ({})", p.display()))
+        .unwrap_or_default();
+    Some(ErrorParaLaInterfaz {
+        clase: "registro",
+        mensaje: format!(
+            "«{alias}» está en tu lista de servidores{donde}, pero esa entrada no vale y no la \
+             uso: {}. Vuelve a añadirlo con el mismo nombre —la nueva sustituye a la vieja— o \
+             corrígela en el fichero",
+            d.motivo
+        ),
+        detalle: None,
+    })
+}
+
+/// Un servidor de la lista propia, **con la ruta de `orbit` que se guardó**.
+///
+/// La que mande la interfaz no cuenta y por eso ni se recibe: con
+/// `binario.or(..)` cualquier llamada del renderizador elegía qué se ejecuta
+/// como root en ese servidor.
+fn servidor_guardado(g: registro::ServidorGuardado) -> Servidor {
+    let mut s = Servidor::nuevo(&g.alias, g.destino());
+    s.puerto = Some(g.puerto);
+    s.clave = g.clave.clone();
+    if let Some(b) = g.binario {
+        s.binario = b;
+    }
+    s
 }
 
 // ── instalar Orbit ─────────────────────────────────────────────────────────
@@ -868,7 +1339,7 @@ async fn requisitos_de_instalacion(
     alias: String,
     binario: Option<String>,
 ) -> Result<RequisitosParaLaInterfaz, ErrorParaLaInterfaz> {
-    let s = servidor_por_alias(&alias, binario);
+    let s = servidor_por_alias(&alias, binario)?;
     let ctrl = dir_control();
     let r = tauri::async_runtime::spawn_blocking(move || {
         transporte::ejecutar_crudo(&s, instalar::COMPROBACION, ctrl.as_deref())
@@ -924,28 +1395,39 @@ pub struct Instalacion {
 async fn instalar_orbit(
     ventana: tauri::Window,
     vivos: tauri::State<'_, Vivos>,
+    versiones: tauri::State<'_, Versiones>,
     alias: String,
     binario: Option<String>,
 ) -> Result<Instalacion, ErrorParaLaInterfaz> {
     // La clave lleva `!` porque ningún nombre de app puede empezar por ahí: la
     // regla del servidor obliga a `[a-z0-9]`. Igual que el `*` de la pasada.
     let clave = format!("{alias}:!instalar");
-    let mando = EnCurso::nuevo();
-    vivos.0.lock().unwrap().insert(clave.clone(), mando.clone());
-
-    let s = servidor_por_alias(&alias, binario.clone());
+    let s = servidor_por_alias(&alias, binario.clone())?;
+    // Dos instalaciones a la vez en el mismo servidor son dos `apt` peleándose
+    // por el cerrojo de dpkg a mitad de instalar Node y PostgreSQL.
+    let turno = vivos.apuntar(
+        clave.clone(),
+        format!("Ya hay una instalación de Orbit en curso en «{alias}»."),
+    )?;
+    let mando = turno.mando.clone();
     let ctrl = dir_control();
-    let clave_ev = clave.clone();
     let linea = instalar::orden();
+    // Lo que se supiera de su versión deja de valer en cuanto se empieza.
+    let cache = versiones.inner().clone();
+    cache.olvidar(&s);
 
     let r = tauri::async_runtime::spawn_blocking(move || {
-        transporte::ejecutar_crudo_en_vivo(&s, &linea, ctrl.as_deref(), mando, move |l| {
-            let _ = ventana.emit("orbit://progreso", (clave_ev.clone(), l));
-        })
+        let tanda = tanda_hacia(ventana, clave);
+        let buzon = tanda.buzon();
+        let r = transporte::ejecutar_crudo_en_vivo(&s, &linea, ctrl.as_deref(), mando, move |l| {
+            buzon.echar(l)
+        });
+        drop(tanda);
+        r
     })
     .await;
 
-    vivos.0.lock().unwrap().remove(&clave);
+    drop(turno);
 
     let (codigo, salida) = match r {
         Ok(Ok(r)) => (r.codigo, r.stdout),
@@ -962,13 +1444,17 @@ async fn instalar_orbit(
 
     // Y ahora lo único que cuenta: preguntarle al servidor. Si contesta una
     // versión, está instalado — diga lo que diga el código de salida.
-    let s2 = servidor_por_alias(&alias, binario);
+    let s2 = servidor_por_alias(&alias, binario)?;
     let ctrl2 = dir_control();
     let version = tauri::async_runtime::spawn_blocking(move || {
-        transporte::ejecutar(&s2, &Comando::Version, ctrl2.as_deref(), &[])
+        let v = transporte::ejecutar(&s2, &Comando::Version, ctrl2.as_deref(), &[])
             .ok()
-            .and_then(|r| r.leer::<orbit_client::contrato::Version>().ok())
-            .map(|v| v.version)
+            .and_then(|r| r.leer::<Version>().ok());
+        match &v {
+            Some(v) => cache.apuntar(&s2, v),
+            None => cache.olvidar(&s2),
+        }
+        v.map(|v| v.version)
     })
     .await
     .unwrap_or(None);
@@ -1079,7 +1565,7 @@ async fn entorno_valor(
     binario: Option<String>,
 ) -> Result<String, ErrorParaLaInterfaz> {
     aparte(move || {
-        let s = servidor_por_alias(&alias, binario);
+        let s = servidor_por_alias(&alias, binario)?;
         let c = Comando::EntornoValor { app, clave };
         let r = transporte::ejecutar(&s, &c, dir_control().as_deref(), &[])?;
         // Pelado y sin adornos, que es como lo imprime Orbit. El salto final se
@@ -1112,6 +1598,55 @@ async fn trafico(
     pedir_aparte(alias, binario, Comando::Trafico { app, desde }).await
 }
 
+// ── lo del servidor que no es una app ──────────────────────────────────────
+//
+// Las seis estaban en el catálogo del núcleo desde el principio y la ventana no
+// podía pedirlas. Son de sólo lectura —también `verificar_copias`, que abre
+// cada fichero pero no cambia nada— y la interfaz las pide al abrir cada
+// sección, nunca al entrar en el servidor.
+
+/// `backup list --json`, 1.3.7. `verified` llega siempre a `null`: «no lo he
+/// comprobado en esta llamada» no es «está mal».
+#[tauri::command]
+async fn copias(alias: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::CopiasLista).await
+}
+
+/// `backup verify --json`, 1.3.7. **Sale con 1 si alguna copia es mala**, con
+/// el objeto entero por stdout: el transporte lo devuelve como respuesta y no
+/// como fallo, que es la diferencia entre «hay una copia rota» y «no he podido
+/// preguntar».
+#[tauri::command]
+async fn verificar_copias(alias: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::CopiasVerificar).await
+}
+
+/// `db list --json`. Con PostgreSQL caído el servidor sale con error y **sin
+/// objeto**, y así llega: no como «no hay ninguna base de datos», que es lo que
+/// leería un script de copias.
+#[tauri::command]
+async fn bases_de_datos(alias: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::BaseDeDatosLista).await
+}
+
+/// `redirect list --json`, de todas las apps.
+#[tauri::command]
+async fn redirecciones(alias: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::RedireccionesLista { app: None }).await
+}
+
+/// `watch status --json`. `since` y `last_try` usan 0 para «no se sabe».
+#[tauri::command]
+async fn vigilancia(alias: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::VigilanciaEstado).await
+}
+
+/// `queue status --json`.
+#[tauri::command]
+async fn colas(alias: String, binario: Option<String>) -> Resultado {
+    pedir_aparte(alias, binario, Comando::ColaEstado).await
+}
+
 /// El histórico de despliegues de una app.
 #[tauri::command]
 async fn metricas(alias: String, app: String, binario: Option<String>) -> Resultado {
@@ -1128,8 +1663,8 @@ async fn metricas(alias: String, app: String, binario: Option<String>) -> Result
 /// hereda de Orbit, que apunta `exec <app>` con el comentario de que un comando
 /// puede llevar una contraseña delante y un log no es sitio para secretos.
 #[tauri::command]
-/// `shell: true` manda el texto como **un** argumento y el servidor lo pasa a
-/// `bash -lc`; `false` manda los argumentos separados y no hay shell. La
+/// `shell: true` manda el texto detrás de `/bin/bash -lc`; `false` manda los
+/// argumentos separados y no hay shell. La
 /// diferencia se elige en la pantalla y se ve, en vez de deducirla de la
 /// heurística del servidor: quien escribe tiene que poder predecir cuándo su
 /// `&&` se ejecuta y cuándo se pasa como texto.
@@ -1155,7 +1690,7 @@ fn correr_aqui(
     } else {
         ModoDeExec::Argumentos(argumentos)
     };
-    let s = servidor_por_alias(&alias, binario);
+    let s = servidor_por_alias(&alias, binario)?;
     let c = Comando::Ejecutar { app, modo };
     // Se enseña la orden exacta que se va a mandar, ya escapada. Es lo que
     // convierte «confío en la interfaz» en «he leído lo que va a pasar».
@@ -1169,6 +1704,14 @@ fn correr_aqui(
         }),
         // Un comando que sale con error NO es un fallo del transporte: es un
         // comando que salió con error, y su salida es lo que hay que enseñar.
+        //
+        // Y eso incluye un 127 por una errata o el aviso de un `sudo` de dentro
+        // del comando: el transporte sabe que con `exec` habla un proceso
+        // ajeno y ya no los convierte en «no hay orbit» ni en «sudo pide
+        // contraseña» (ver `Origen` en transporte.rs), así que llegan aquí.
+        // Igual un 255 —un PHP con un error fatal— o un «Host key verification
+        // failed» de un `git` de dentro: sólo son «no he llegado» o «la clave
+        // ha cambiado» si lo dice nuestro `ssh`, y si no, son esta salida.
         Err(transporte::ErrorTransporte::Orbit {
             codigo,
             stdout,
@@ -1251,33 +1794,46 @@ async fn revertir(
 /// pantalla que se abra.
 #[tauri::command]
 async fn saludar(
+    versiones: tauri::State<'_, Versiones>,
     alias: String,
     binario: Option<String>,
 ) -> Result<serde_json::Value, ErrorParaLaInterfaz> {
-    aparte(move || saludar_aqui(alias, binario)).await
+    let cache = versiones.inner().clone();
+    aparte(move || saludar_aqui(&cache, alias, binario)).await
 }
 
 fn saludar_aqui(
+    cache: &Versiones,
     alias: String,
     binario: Option<String>,
 ) -> Result<serde_json::Value, ErrorParaLaInterfaz> {
-    let s = servidor_por_alias(&alias, binario);
+    let s = servidor_por_alias(&alias, binario)?;
     let c = Comando::Version;
     let saludo = match transporte::ejecutar(&s, &c, dir_control().as_deref(), &[]) {
-        Ok(r) => orbit_client::saludo::clasificar(&r),
+        Ok(r) => orbit_client::saludo::clasificar_para(&r, &s.binario),
         // Un fallo de `orbit` con salida también se clasifica: un Orbit a
         // medias sale con 1 y su prosa es justamente el dato.
         Err(transporte::ErrorTransporte::Orbit {
             codigo,
             stdout,
             stderr,
-        }) => orbit_client::saludo::clasificar(&transporte::Respuesta {
-            stdout,
-            stderr,
-            codigo,
-        }),
+        }) => orbit_client::saludo::clasificar_para(
+            &transporte::Respuesta {
+                stdout,
+                stderr,
+                codigo,
+                cancelado: false,
+            },
+            &s.binario,
+        ),
         Err(e) => orbit_client::saludo::de_error(&e),
     };
+    // El saludo es la lectura de la versión más fresca que hay: si da una, es
+    // ésa; si no, la que hubiera ya no se sabe si vale.
+    match &saludo {
+        orbit_client::Saludo::Ok(v) | orbit_client::Saludo::MasNuevo(v) => cache.apuntar(&s, v),
+        _ => cache.olvidar(&s),
+    }
     Ok(serde_json::json!({
         "clase": clase_de(&saludo),
         "version": version_de(&saludo),
@@ -1285,7 +1841,12 @@ fn saludar_aqui(
         "motivo": motivo_de(&saludo),
         "puede_operar": saludo.permite_operar(),
         "puede_leer": saludo.permite_leer(),
-        "orden_de_instalacion": orbit_client::saludo::ORDEN_DE_INSTALACION,
+        // La de `instalar`, que es la que funciona. Aquí iba un `curl … | sudo
+        // bash` que el propio instalador desmiente —install.sh lee los ficheros
+        // que tiene al lado y por una tubería no los hay— y cuyo comentario
+        // decía «nunca un botón de instalar» cuando ese botón ya existe. El
+        // campo se queda porque es parte de la respuesta que tipa la interfaz.
+        "orden_de_instalacion": instalar::orden(),
     }))
 }
 
@@ -1333,20 +1894,28 @@ fn motivo_de(s: &orbit_client::Saludo) -> Option<String> {
 /// **No conecta con ninguno**: enumerar no es visitar. Saber si en un alias hay
 /// un Orbit es otra pregunta, se hace después y de una en una, porque abrir una
 /// pantalla no puede significar abrir cuarenta sesiones SSH.
+///
+/// Fuera del hilo de la ventana: es un `ssh -G` por alias —en paralelo, pero
+/// procesos al fin y al cabo— y la versión síncrona congelaba la ventana al
+/// abrirla, que es justo cuando alguien la está mirando.
 #[tauri::command]
-fn servidores_del_config() -> Result<Vec<descubrir::AliasSsh>, ErrorParaLaInterfaz> {
-    let ruta = descubrir::ruta_por_defecto().ok_or(ErrorParaLaInterfaz {
-        clase: "sin-home",
-        mensaje: "no sé dónde está tu carpeta personal".into(),
-        detalle: None,
-    })?;
-    Ok(descubrir::descubrir(&ruta))
+async fn servidores_del_config() -> Result<Vec<descubrir::AliasSsh>, ErrorParaLaInterfaz> {
+    aparte(|| {
+        let ruta = descubrir::ruta_por_defecto().ok_or(ErrorParaLaInterfaz {
+            clase: "sin-home",
+            mensaje: "no sé dónde está tu carpeta personal".into(),
+            detalle: None,
+        })?;
+        Ok(descubrir::descubrir(&ruta))
+    })
+    .await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn ejecutar() {
     tauri::Builder::default()
         .manage(Vivos::default())
+        .manage(Versiones::default())
         .invoke_handler(tauri::generate_handler![
             version,
             portada,
@@ -1365,6 +1934,12 @@ pub fn ejecutar() {
             monitor,
             trafico,
             metricas,
+            copias,
+            verificar_copias,
+            bases_de_datos,
+            redirecciones,
+            vigilancia,
+            colas,
             detalle,
             retirar,
             retirar_y_borrar,
@@ -1407,6 +1982,273 @@ mod pruebas {
         }
     }
 
+    /// Un doble clic en «Desplegar» no puede ser dos despliegues, y al terminar
+    /// cada uno sólo se quita a sí mismo del registro.
+    #[test]
+    fn un_segundo_despliegue_con_la_misma_clave_se_rechaza() {
+        let v = Vivos::default();
+        let uno = v
+            .apuntar("prod:tienda".into(), "ocupado".into())
+            .ok()
+            .expect("se apunta");
+        let e = v
+            .apuntar("prod:tienda".into(), "Ya hay un despliegue".into())
+            .err()
+            .expect("el segundo se rechaza");
+        assert_eq!(e.clase, "en-curso");
+        assert_eq!(e.mensaje, "Ya hay un despliegue");
+        // El primero sigue siendo el que se cancela.
+        assert!(v.0.lock().unwrap()["prod:tienda"].es_el_mismo(&uno.mando));
+        // Otra app, u otro servidor, sí.
+        let otra = v
+            .apuntar("prod:blog".into(), String::new())
+            .ok()
+            .expect("se apunta");
+        let fuera = v
+            .apuntar("staging:tienda".into(), String::new())
+            .ok()
+            .expect("se apunta");
+        drop(uno);
+        assert!(!v.0.lock().unwrap().contains_key("prod:tienda"));
+        assert!(v.0.lock().unwrap().contains_key("prod:blog"));
+        // Y con el primero terminado, se puede volver a desplegar.
+        let otra_vez = v
+            .apuntar("prod:tienda".into(), String::new())
+            .ok()
+            .expect("se apunta");
+        drop((otra, fuera, otra_vez));
+        assert!(v.0.lock().unwrap().is_empty());
+    }
+
+    /// Un turno que se suelta no quita el mando de otro que ocupe su clave.
+    #[test]
+    fn al_terminar_solo_se_quita_el_mando_propio() {
+        let v = Vivos::default();
+        let uno = v
+            .apuntar("prod:tienda".into(), String::new())
+            .ok()
+            .expect("se apunta");
+        // Simula que alguien ha puesto otro mando en su sitio.
+        let ajeno = EnCurso::nuevo();
+        v.0.lock()
+            .unwrap()
+            .insert("prod:tienda".into(), ajeno.clone());
+        drop(uno);
+        assert!(v.0.lock().unwrap()["prod:tienda"].es_el_mismo(&ajeno));
+    }
+
+    /// Un alias que empieza por guion es una opción de `ssh` en el sitio donde
+    /// va un nombre; la interfaz no puede mandarlo.
+    #[test]
+    fn la_interfaz_no_puede_colar_una_opcion_de_ssh_como_alias() {
+        for malo in [
+            "-oProxyCommand=calc",
+            "-F\\\\host\\share\\cfg",
+            "",
+            "prod web",
+            "prod\n-oX=y",
+            "prod\t",
+        ] {
+            assert!(!alias_aceptable(malo), "«{malo}»");
+            let e = servidor_por_alias(malo, None).expect_err("se rechaza");
+            assert_eq!(e.clase, "forma");
+        }
+        // Lo que un `~/.ssh/config` admite y `registro::alias_valido` no.
+        for bueno in ["prod", "vps-ovh.2", "fe80::1", "dave@bastion"] {
+            assert!(alias_aceptable(bueno), "«{bueno}»");
+        }
+    }
+
+    /// Uno guardado pero apartado al leer dice que está y por qué no vale, en
+    /// vez de «no es ninguno de tus servidores».
+    #[test]
+    fn rc2_un_servidor_apartado_dice_que_esta_y_por_que_no_vale() {
+        let l = registro::Lectura {
+            servidores: Vec::new(),
+            descartados: vec![registro::Descartado {
+                alias: Some("viejo".into()),
+                motivo: registro::ErrorDeRegistro::Clave("id_ed25519".into()).to_string(),
+            }],
+        };
+        let e = apartado_de("viejo", l.clone(), Some("/h/servidores.json".into()))
+            .expect("está apartado");
+        assert_eq!(e.clase, "registro");
+        assert!(e.mensaje.contains("está en tu lista"), "{}", e.mensaje);
+        assert!(e.mensaje.contains("~/.ssh/id_ed25519"), "{}", e.mensaje);
+        assert!(e.mensaje.contains("Vuelve a añadirlo"), "{}", e.mensaje);
+        assert!(apartado_de("otro", l, None).is_none());
+    }
+
+    /// Un alias que no está guardado ni en el `~/.ssh/config` no llega a `ssh`:
+    /// `user@atacante.example` también es un nombre sin guion.
+    #[test]
+    fn rc_un_alias_que_no_es_de_nadie_no_llega_a_ssh() {
+        let config = vec!["prod".to_string(), "dave@bastion".to_string()];
+        let e = servidor_si_esta("user@atacante.example", None, &config).expect_err("se rechaza");
+        assert_eq!(e.clase, "alias-desconocido");
+        let Ok(s) = servidor_si_esta("prod", Some("/opt/orbit".into()), &config) else {
+            panic!("«prod» está en el fichero");
+        };
+        assert_eq!(s.destino, "prod");
+        // Para los del fichero la ruta de la interfaz sí vale: no hay otra.
+        assert_eq!(s.binario, "/opt/orbit");
+        assert!(servidor_si_esta("dave@bastion", None, &config).is_ok());
+    }
+
+    /// La ruta de `orbit` de un servidor guardado es la guardada.
+    #[test]
+    fn rc_la_interfaz_no_elige_el_binario_de_un_servidor_guardado() {
+        let g = |binario: Option<&str>| registro::ServidorGuardado {
+            alias: "vps".into(),
+            host: "203.0.113.7".into(),
+            usuario: "dave".into(),
+            puerto: 2222,
+            clave: None,
+            binario: binario.map(Into::into),
+        };
+        let s = servidor_guardado(g(Some("/opt/orbit/bin/orbit")));
+        assert_eq!(s.binario, "/opt/orbit/bin/orbit");
+        assert_eq!(s.destino, "dave@203.0.113.7");
+        assert_eq!(s.puerto, Some(2222));
+        // Sin ruta guardada, la de fábrica; nunca la de la interfaz.
+        assert_eq!(servidor_guardado(g(None)).binario, "/usr/local/bin/orbit");
+    }
+
+    fn version(v: &str) -> Version {
+        Version {
+            schema: 1,
+            version: v.into(),
+            contract: 1,
+        }
+    }
+
+    #[test]
+    fn rc_la_version_se_recuerda_un_rato_y_por_servidor_y_binario() {
+        let c = Versiones::default();
+        let s = Servidor::nuevo("prod", "prod");
+        let mut otro_bin = s.clone();
+        otro_bin.binario = "/opt/orbit".into();
+        let antes = Instant::now();
+        c.apuntar_en(&s, &version("1.4.9"), antes);
+        assert_eq!(
+            c.vigente_en(&s, antes).map(|v| v.version),
+            Some("1.4.9".into())
+        );
+        assert!(c.vigente_en(&otro_bin, antes).is_none());
+        assert!(c
+            .vigente_en(&Servidor::nuevo("staging", "staging"), antes)
+            .is_none());
+        // Pasada su vida, se vuelve a preguntar.
+        assert!(c.vigente_en(&s, antes + VIDA_DE_LA_VERSION).is_none());
+        // Y se olvida al instalar o cuando el saludo no da versión.
+        c.apuntar(&s, &version("1.5.0"));
+        assert!(c.vigente(&s).is_some());
+        c.olvidar(&s);
+        assert!(c.vigente(&s).is_none());
+    }
+
+    /// Lo que ha emitido una tanda, con cuándo llegó cada envío.
+    type Visto = Arc<Mutex<Vec<(Instant, Vec<String>)>>>;
+
+    /// Recoge lo que emite una tanda.
+    fn recoger() -> (Tanda, Visto) {
+        let visto = Arc::new(Mutex::new(Vec::new()));
+        let v = Arc::clone(&visto);
+        let t = Tanda::nueva(move |l| v.lock().unwrap().push((Instant::now(), l)));
+        (t, visto)
+    }
+
+    /// Medido: 30 000 líneas eran 30 000 eventos. Ahora salen en tandas, en
+    /// orden y sin perder ninguna.
+    #[test]
+    fn rc_el_progreso_sale_en_tandas_en_orden_y_entero() {
+        let (t, visto) = recoger();
+        let b = t.buzon();
+        let n = 30_000;
+        let t0 = Instant::now();
+        for i in 0..n {
+            b.echar(format!("línea {i}"));
+        }
+        drop(t);
+        let dur = t0.elapsed();
+        let visto = visto.lock().unwrap();
+        let todas: Vec<&String> = visto.iter().flat_map(|(_, l)| l).collect();
+        assert_eq!(todas.len(), n);
+        for (i, l) in todas.iter().enumerate() {
+            assert_eq!(**l, format!("línea {i}"));
+        }
+        let eventos = visto.len();
+        eprintln!("{n} líneas → {eventos} eventos en {dur:?} (antes: {n} eventos)");
+        assert!(eventos <= n / TANDA_LINEAS + 1, "{eventos} eventos");
+    }
+
+    /// Una línea sola no espera a la siguiente: un servidor callado a mitad de
+    /// build enseña su última línea enseguida, sin que se cierre nada.
+    #[test]
+    fn rc_una_linea_sola_sale_sin_esperar_a_la_siguiente() {
+        let (t, visto) = recoger();
+        let b = t.buzon();
+        let t0 = Instant::now();
+        b.echar("compilando…".into());
+        let limite = t0 + Duration::from_secs(2);
+        while visto.lock().unwrap().is_empty() && Instant::now() < limite {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let (cuando, l) = visto.lock().unwrap().first().cloned().expect("ha salido");
+        assert_eq!(l, ["compilando…"]);
+        let espera = cuando - t0;
+        eprintln!("una línea sola ha salido a los {espera:?}");
+        // 50 ms de plazo; el margen es para una máquina de CI cargada.
+        assert!(espera < Duration::from_millis(500), "{espera:?}");
+        drop(t);
+        // Y cerrar sin nada pendiente no emite una tanda vacía.
+        assert_eq!(visto.lock().unwrap().len(), 1);
+    }
+
+    /// Lo que queda al terminar sale al cerrar, no se pierde.
+    #[test]
+    fn rc_lo_que_queda_sale_al_cerrar() {
+        let (t, visto) = recoger();
+        let b = t.buzon();
+        for i in 0..10 {
+            b.echar(i.to_string());
+        }
+        drop(t);
+        let todas: Vec<String> = visto
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|(_, l)| l.clone())
+            .collect();
+        assert_eq!(todas, (0..10).map(|i| i.to_string()).collect::<Vec<_>>());
+    }
+
+    /// La forma del evento: `[clave, [líneas…]]`, que es lo que espera la
+    /// interfaz.
+    #[test]
+    fn rc_la_forma_del_evento_es_clave_y_lineas() {
+        let v = serde_json::to_value(("prod:tienda", vec!["a".to_string(), "b".into()])).unwrap();
+        assert_eq!(v, serde_json::json!(["prod:tienda", ["a", "b"]]));
+        assert_eq!(EVENTO_DE_PROGRESO, "orbit://progreso");
+    }
+
+    #[test]
+    fn la_ruta_de_orbit_tiene_que_ser_absoluta() {
+        assert!(binario_aceptable("/usr/local/bin/orbit"));
+        assert!(binario_aceptable("/opt/orbit/bin/orbit"));
+        for malo in [
+            "orbit",
+            "./orbit",
+            "",
+            "/usr/local/bin/orbit --help",
+            "/x\n",
+        ] {
+            assert!(!binario_aceptable(malo), "«{malo}»");
+        }
+        let e = servidor_por_alias("prod", Some("orbit".into())).expect_err("se rechaza");
+        assert_eq!(e.clase, "forma");
+    }
+
     /// Una orden sin `--json` cuenta lo que ha hecho por **stdout**, y los
     /// avisos por stderr. La primera versión devolvía sólo stderr, y de un
     /// `remove` que salía bien llegaba una cadena vacía.
@@ -1416,6 +2258,7 @@ mod pruebas {
             stdout: "  ✓ «tienda» congelada\n".into(),
             stderr: "  ! sin avisos configurados\n".into(),
             codigo: 0,
+            cancelado: false,
         };
         let p = prosa(&r);
         assert!(p.contains("congelada"));
@@ -1424,6 +2267,7 @@ mod pruebas {
             stdout: "hecho\n".into(),
             stderr: String::new(),
             codigo: 0,
+            cancelado: false,
         };
         assert_eq!(prosa(&solo), "hecho");
     }

@@ -20,18 +20,22 @@
   portador, y el `title` lleva la frase completa: el color sin la frase no dice
   qué hacer.
 
-  `aria-label` incluye el texto porque el glifo solo no se lee bien en un lector
-  de pantalla — «círculo negro» no es «activo».
+  `role="img"` y no un `aria-label` a secas: en un `<span>` sin rol, ARIA 1.2
+  prohíbe el nombre y NVDA en modo exploración no lo lee, así que en los dos
+  estados neutros —donde lo único que hay dentro es el glifo, oculto— el chip
+  se quedaba mudo. Con el rol, el nombre es lo que se anuncia, y lleva la
+  palabra y la frase: «círculo negro» no es «activo», y «raya» no es «no
+  aplica».
 -->
-<span class="chip chip--{s}" title={p.frase} aria-label="{etiqueta}. {p.frase}">
+<span class="chip chip--{s}" role="img" title={p.frase} aria-label="{etiqueta}. {p.frase}">
   <span class="chip__glifo" aria-hidden="true">{p.glifo}</span>
   <!--
     En los dos estados neutros el glifo ES el texto —`—` y `·`—, así que
     pintarlos los dos salía duplicado: la fila decía «— —». Lo vi en una
     captura, no en una prueba: el DOM era correcto y la pantalla, absurda.
 
-    El `aria-label` sí lleva la palabra completa, porque «raya» no le dice nada
-    a nadie: lo que hay que anunciar es «no aplica».
+    El nombre accesible sí lleva la palabra completa, porque «raya» no le dice
+    nada a nadie: lo que hay que anunciar es «no aplica».
   -->
   {#if p.texto !== p.glifo}
     <span class="chip__texto">{p.texto}</span>

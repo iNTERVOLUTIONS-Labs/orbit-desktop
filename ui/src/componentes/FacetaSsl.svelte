@@ -12,6 +12,9 @@
   // `letsencrypt` se pintan igual que siempre.
   const origen = $derived(estado.cert_type === 'origin')
   const de = $derived(origen ? 'Certificado de origen de Cloudflare: sólo vale detrás de su proxy. ' : '')
+  // Los días sólo si son un número: lo del puente ya está validado, pero un
+  // `undefined` que llegue por otro camino no puede salir como «undefined días».
+  const dias = $derived(typeof estado.cert_days === 'number' && Number.isFinite(estado.cert_days) ? estado.cert_days : null)
 </script>
 
 <!--
@@ -24,20 +27,20 @@
 -->
 {#if !estado.ssl}
   <Faceta texto="sin HTTPS" titulo="No tiene certificado. Se emite con «orbit ssl»." />
-{:else if estado.cert_days === null}
+{:else if dias === null}
   {#if origen}
     <Faceta texto="origen CF" titulo="{de}No se han mirado los días que le quedan. Los da «orbit info»." />
   {:else}
     <Faceta texto="·" tono="desconocida" titulo="No se han mirado los días que le quedan al certificado. Los da «orbit info»." />
   {/if}
-{:else if estado.cert_days < 0}
-  <Faceta texto="caducado" tono="aviso" titulo="{de}El certificado caducó hace {Math.abs(estado.cert_days)} días." />
-{:else if estado.cert_days < 10}
+{:else if dias < 0}
+  <Faceta texto="caducado" tono="aviso" titulo="{de}El certificado caducó hace {Math.abs(dias)} días." />
+{:else if dias < 10}
   <Faceta
-    texto="caduca en {estado.cert_days} d"
+    texto="caduca en {dias} d"
     tono="aviso"
     titulo={origen ? `${de}No lo renueva certbot: pide otro con «orbit ssl --origin».` : 'Renueva con «orbit ssl».'}
   />
 {:else}
-  <Faceta texto={origen ? 'HTTPS · origen CF' : 'HTTPS'} titulo="{de}Certificado válido {estado.cert_days} días más." />
+  <Faceta texto={origen ? 'HTTPS · origen CF' : 'HTTPS'} titulo="{de}Certificado válido {dias} días más." />
 {/if}

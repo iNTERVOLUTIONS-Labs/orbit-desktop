@@ -87,7 +87,7 @@ una función que haya que escribir.
 
 ## Con qué Orbit habla
 
-Con **Orbit 1.3.6 a 1.4.9**, contrato 1. Lo que un servidor más viejo no sabe
+Con **Orbit 1.3.6 a 1.5.1**, contrato 1. Lo que un servidor más viejo no sabe
 hacer —congelar despliegues, esperar a la CI, pedir las variables que faltan—
 no se ofrece, y su silencio no se pinta como un «no». La tabla, con fechas y
 con lo que cambió entre medias, está en
@@ -100,8 +100,8 @@ Todavía no hay interfaz, pero sí hay núcleo — y se prueba entero sin levant
 una ventana:
 
 ```bash
-cargo test --all          # 230 pruebas del núcleo, más 13 de punta a punta con --ignored
-cd ui && npx vitest run   # 385 de la interfaz
+cargo test --all          # 341 pruebas del núcleo, el envoltorio y el terminal (13 de punta a punta, con --ignored)
+cd ui && npx vitest run   # 699 de la interfaz
 ```
 
 La interfaz tiene sus dos pantallas de la fase 1 y se puede mirar:

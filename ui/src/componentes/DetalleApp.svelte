@@ -1,7 +1,7 @@
 <script lang="ts">
   import ChipEstado from './ChipEstado.svelte'
   import FacetaSsl from './FacetaSsl.svelte'
-  import { PRESENTACION, salud, num, type App, type AppInfo, type Tareas } from '../lib/contrato'
+  import { PRESENTACION, marcarInvisibles as vis, salud, num, type App, type AppInfo, type Tareas } from '../lib/contrato'
   import { problemaDelMotivo } from '../lib/despliegue'
 
   let {
@@ -68,7 +68,9 @@
          identifica nada por sí solo: `tienda` existe en tres servidores, y ese
          accidente tiene precedente — la suite de pruebas de Orbit borró el
          vhost de una app de producción llamada así. -->
-    <p class="ruta"><span class="servidor">{servidor}</span> : <strong>{app.name}</strong></p>
+    <!-- Con lo invisible a la vista: un nombre o un dominio con un carácter de
+         ancho cero o un homoglifo se lee como otro, y aquí se confirman cosas. -->
+    <p class="ruta"><span class="servidor">{servidor}</span> : <strong>{vis(app.name)}</strong></p>
     <ChipEstado estado={estado} />
   </header>
 
@@ -77,11 +79,11 @@
   <p class="frase">{PRESENTACION[s].frase}</p>
 
   <dl>
-    <div><dt>Dominio</dt><dd>{app.domain}</dd></div>
+    <div><dt>Dominio</dt><dd>{vis(app.domain)}</dd></div>
     {#if app.aliases.length > 0}
-      <div><dt>Alias</dt><dd>{app.aliases.join(' · ')}</dd></div>
+      <div><dt>Alias</dt><dd>{app.aliases.map(vis).join(' · ')}</dd></div>
     {/if}
-    <div><dt>Tipo</dt><dd>{app.type}</dd></div>
+    <div><dt>Tipo</dt><dd>{vis(app.type)}</dd></div>
     <div><dt>Puerto</dt><dd class="mono">{num(estado.port)}</dd></div>
     <div>
       <dt>HTTPS</dt>
@@ -133,7 +135,7 @@
     <section class="seccion congelada" aria-labelledby="t-congelada">
       <h3 id="t-congelada">Despliegues congelados</h3>
       <p>
-        Desde <span title={lock?.at ?? ''}>{cuando(lock?.at ?? null)}</span>{#if lock?.by} por <strong>{lock.by}</strong>{/if}{#if lock?.reason}: «{lock.reason}»{/if}.
+        Desde <span title={lock?.at ?? ''}>{cuando(lock?.at ?? null)}</span>{#if lock?.by} por <strong>{vis(lock.by)}</strong>{/if}{#if lock?.reason}: «{lock.reason}»{/if}.
       </p>
       <p class="tenue">
         El autodespliegue y «desplegar todo» la saltan; desplegarla a mano pide
@@ -215,9 +217,11 @@
             <tr><th scope="col">Tarea</th><th scope="col">Última</th><th scope="col">Resultado</th><th scope="col">Próxima</th></tr>
           </thead>
           <tbody>
-            {#each tareas.tasks as t (t.name)}
+            <!-- Por posición: el nombre lo pone el orbit.json y nadie impide
+                 que se repita. -->
+            {#each tareas.tasks as t, i (i)}
               <tr>
-                <td class="mono">{t.name}</td>
+                <td class="mono">{vis(t.name)}</td>
                 <!-- `null` es «nunca», no una fecha vacía. -->
                 <td class="mono">{t.last_run ?? 'nunca'}</td>
                 <td class="mono">{t.result ?? '·'}</td>
@@ -270,4 +274,10 @@
   }
   .tabla td { padding: var(--e-1) var(--e-3) var(--e-1) 0; border-bottom: 1px solid var(--border); color: var(--fg); }
   code { font-family: var(--mono); font-size: 12px; }
+
+  /* A 320 px (o al 200 % en una ventana estrecha) las columnas fijas
+     empujaban la página hacia un lado: una sola columna. */
+  @media (max-width: 480px) {
+    dl > div { grid-template-columns: minmax(0, 1fr); }
+  }
 </style>

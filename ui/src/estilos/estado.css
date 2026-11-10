@@ -101,8 +101,13 @@
 
 /* Una fila cuyo nombre no pasa la regla de forma: llega del servidor y no se
    puede operar sobre ella. Se marca y no se «arregla»: un nombre arreglado ya
-   no identifica a nadie. */
-.fila--no-operable { opacity: .72; }
+   no identifica a nadie.
+
+   Se marca por el NOMBRE —tachado, y sin el botón que tienen las demás— y no
+   bajando la opacidad de la fila: con `opacity: .72` el texto apagado de esa
+   fila caía a 3,6:1 y el chip sólido a 4,49:1, por debajo de AA. Que no se
+   pueda operar no la convierte en un control deshabilitado: lo que dice sigue
+   teniendo que leerse. */
 .fila--no-operable .celda-nombre { text-decoration: line-through; }
 
 /* La pantalla bloqueante de la clave de host cambiada. Va aquí y no en el
@@ -260,3 +265,28 @@
 .hito--ahora .punto  { --hito-ahora: var(--accent); }
 .final--bien         { --final-borde: var(--st-ok); }
 .final--mal          { --final-borde: var(--st-error); }
+
+/* Un fallo dicho en línea, al lado de lo que ha fallado: el valor que no se
+   pudo leer, la orden que no llegó a ejecutarse, la política que Orbit
+   rechazaría. Es texto, no una pantalla de fallo. */
+.dicho--mal { color: var(--st-error); }
+.campo--mal { border-color: var(--st-error) !important; }
+/* Lo que se enseña es una foto anterior: la última vuelta no contestó. */
+.foto--vieja { border-color: var(--st-warn); }
+
+/* La vista del servidor. Un servicio del sistema se enciende o se apaga, y un
+   punto apagado NO es un error de por sí: ufw o fail2ban pueden no usarse. */
+.servicio--activo   { --punto: var(--st-ok); }
+.servicio--inactivo { --punto: var(--st-na); }
+/* Lo que vigila `orbit watch`. «rendido» es caído de verdad; «fallo», que está
+   reintentando; lo que no se conoce, con su nombre y en gris. */
+.vigilado--ok      { --punto: var(--st-ok); }
+.vigilado--fallo   { --punto: var(--st-warn); }
+.vigilado--rendido { --punto: var(--st-error); }
+.vigilado--otro    { --punto: var(--st-unknown); }
+.copia--buena { --punto: var(--st-ok); }
+.copia--mala  { --punto: var(--st-error); }
+.copia--sin-mirar { --punto: var(--st-unknown); }
+/* Un medidor que pasa del 90 % —disco, memoria— avisa. No es rojo: lleno no
+   es roto, todavía. */
+.medidor--alto { --medidor: var(--st-warn); }

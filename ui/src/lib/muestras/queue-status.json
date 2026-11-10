@@ -1,0 +1,1 @@
+{"schema":1,"timer_active":true,"every_minutes":1,"max_seconds":55,"apps":[{"app":"portal","type":"laravel","connection":"database"}]}

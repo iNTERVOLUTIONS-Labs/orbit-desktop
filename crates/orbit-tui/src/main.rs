@@ -64,7 +64,7 @@ fn main() {
             0
         }
         otro => {
-            eprintln!("No entiendo «{otro}».");
+            eprintln!("No entiendo «{}».", limpio(otro));
             ayuda();
             2
         }
@@ -199,6 +199,46 @@ impl Pinta {
     }
 }
 
+/// Lo que ha dicho un servidor, **apto para un terminal y en una línea**.
+///
+/// Todo lo que viene del otro lado pasa por aquí antes de imprimirse: nombres
+/// de app, releases, pasos, errores y la prosa de stderr. Un `\u001b` en el
+/// JSON llega como un ESC de verdad, y con él un servidor hostil borraba y
+/// redibujaba las filas de **otros** servidores de la tabla, cambiaba el título
+/// de la ventana o escribía en el portapapeles (OSC 52) de quien mira.
+///
+/// Se cambia por su escape visible (`\u{1b}`) y no se borra: un nombre con un
+/// ESC dentro no es el mismo nombre sin él, y quien lo lee tiene que poder
+/// verlo. Fuera: C0 entero (también TAB y salto de línea, que en una celda
+/// parten la fila), DEL, C1 y los controles de dirección (U+202A–U+202E,
+/// U+2066–U+2069, U+200E/F, U+061C), que reordenan lo que se ve sin que se vea.
+fn limpio(s: &str) -> String {
+    limpiar(s, false)
+}
+
+/// Igual que [`limpio`], pero para prosa de varias líneas: conserva `\n` y nada
+/// más.
+fn limpio_prosa(s: &str) -> String {
+    limpiar(s, true)
+}
+
+fn limpiar(s: &str, saltos: bool) -> String {
+    let mut fuera = String::with_capacity(s.len());
+    for c in s.chars() {
+        let peligroso = c.is_control()
+            || matches!(
+                c,
+                '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}' | '\u{061c}'
+            );
+        if peligroso && !(saltos && c == '\n') {
+            fuera.push_str(&format!("\\u{{{:x}}}", c as u32));
+        } else {
+            fuera.push(c);
+        }
+    }
+    fuera
+}
+
 /// Cuánto ocupa en pantalla, que no es `len()`.
 ///
 /// Los glifos del vocabulario son de fuera de ASCII y `len()` cuenta bytes: con
@@ -252,9 +292,19 @@ fn servidores(o: &Opciones) -> i32 {
         "{}",
         p.tenue("Salen de tu ~/.ssh/config. Enumerarlos no habla con ninguno.")
     );
-    let n = alias.iter().map(|a| ancho(&a.alias)).max().unwrap_or(0);
+    // Salen del fichero del propio usuario y de `ssh -G`, no de un servidor,
+    // pero pasan por el mismo filtro: es una línea de código y no una apuesta.
+    let n = alias
+        .iter()
+        .map(|a| ancho(&limpio(&a.alias)))
+        .max()
+        .unwrap_or(0);
     for a in &alias {
-        println!("{}  {}", relleno(&a.alias, n), p.tenue(&donde(a)));
+        println!(
+            "{}  {}",
+            relleno(&limpio(&a.alias), n),
+            p.tenue(&limpio(&donde(a)))
+        );
     }
     0
 }
@@ -336,11 +386,18 @@ fn estado(o: &Opciones, args: &[String]) -> i32 {
     respuestas.sort_by_key(|(a, _)| alias.iter().position(|x| x == a).unwrap_or(usize::MAX));
 
     let p = Pinta::nueva();
-    let ancho_srv = alias.iter().map(|a| ancho(a)).max().unwrap_or(0).max(9);
+    // Los anchos se miden sobre lo que de verdad se imprime: el texto ya
+    // limpio, que es más largo que el original si traía controles.
+    let ancho_srv = alias
+        .iter()
+        .map(|a| ancho(&limpio(a)))
+        .max()
+        .unwrap_or(0)
+        .max(9);
     let ancho_app = respuestas
         .iter()
         .filter_map(|(_, r)| match r {
-            Respuesta::Apps(v) => v.iter().map(|a| ancho(&a.name)).max(),
+            Respuesta::Apps(v) => v.iter().map(|a| ancho(&limpio(&a.name))).max(),
             _ => None,
         })
         .max()
@@ -360,6 +417,7 @@ fn estado(o: &Opciones, args: &[String]) -> i32 {
     let mut mudos = 0;
     let mut total = 0;
     for (a, r) in &respuestas {
+        let a = &limpio(a);
         match r {
             Respuesta::NoContesta(motivo) => {
                 mudos += 1;
@@ -372,7 +430,11 @@ fn estado(o: &Opciones, args: &[String]) -> i32 {
                     relleno(a, ancho_srv),
                     p.de(Salud::SinVhost, "no contesta")
                 );
-                println!("{}  {}", relleno("", ancho_srv), p.tenue(motivo));
+                // El motivo es prosa de stderr del otro lado: puede tener varias
+                // líneas, y ninguna otra cosa que no se vea.
+                for l in limpio_prosa(motivo).lines() {
+                    println!("{}  {}", relleno("", ancho_srv), p.tenue(l));
+                }
             }
             Respuesta::Apps(apps) if apps.is_empty() => {
                 println!("{}  {}", relleno(a, ancho_srv), p.tenue("sin apps todavía"));
@@ -399,8 +461,10 @@ fn estado(o: &Opciones, args: &[String]) -> i32 {
                     println!(
                         "{}  {}  {}{}",
                         relleno(a, ancho_srv),
-                        relleno(&app.name, ancho_app),
-                        p.de(s, &s.rotulo()),
+                        relleno(&limpio(&app.name), ancho_app),
+                        // Un estado que no conocemos se rotula con lo que dijo el
+                        // servidor, así que también se limpia.
+                        p.de(s, &limpio(&s.rotulo())),
                         congelada,
                     );
                 }
@@ -462,7 +526,14 @@ fn desplegar(o: &Opciones, args: &[String]) -> i32 {
         por_entrada: false,
     };
 
-    println!("{}", p.tenue(&format!("Desplegando {app} en {alias}…")));
+    println!(
+        "{}",
+        p.tenue(&format!(
+            "Desplegando {} en {}…",
+            limpio(&app),
+            limpio(&alias)
+        ))
+    );
 
     let mando = EnCurso::nuevo();
     let r = transporte::ejecutar_en_vivo(
@@ -482,7 +553,9 @@ fn desplegar(o: &Opciones, args: &[String]) -> i32 {
                     println!("  {paso}");
                 }
             } else if !t.is_empty() {
-                println!("  {t}");
+                // Prosa del servidor: una línea por llamada, así que ni el
+                // salto de línea se deja pasar.
+                println!("  {}", limpio(t));
             }
             let _ = std::io::stdout().flush();
         },
@@ -496,7 +569,7 @@ fn desplegar(o: &Opciones, args: &[String]) -> i32 {
                         "{}",
                         p.de(
                             Salud::Activa,
-                            &format!("Publicada: {}", d.release.unwrap_or_default())
+                            &format!("Publicada: {}", limpio(&d.release.unwrap_or_default()))
                         )
                     );
                     0
@@ -504,7 +577,7 @@ fn desplegar(o: &Opciones, args: &[String]) -> i32 {
                 Ok(d) if d.failed_step.is_none() && d.release.is_none() => {
                     // Se negó antes de empezar —congelada, otro despliegue en
                     // curso—: no ha fallado nada, y «Falló en ?» lo diría.
-                    let motivo = d.error.unwrap_or_else(|| "sin motivo".into());
+                    let motivo = limpio(&d.error.unwrap_or_else(|| "sin motivo".into()));
                     println!(
                         "{}",
                         p.de(
@@ -522,15 +595,21 @@ fn desplegar(o: &Opciones, args: &[String]) -> i32 {
                         println!(
                             "{}",
                             p.tenue(&format!(
-                                "Sin valor: {}. Dalo con  ssh {alias} orbit deploy {app} --env CLAVE=valor",
-                                faltan.join(", ")
+                                "Sin valor: {}. Dalo con  ssh {} orbit deploy {} --env CLAVE=valor",
+                                faltan
+                                    .iter()
+                                    .map(|f| limpio(f))
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                                limpio(&alias),
+                                limpio(&app)
                             ))
                         );
                     }
                     // Un despliegue que falla y revierte **no deja la web
                     // caída**, y decir sólo «ha fallado» esconde justo eso.
-                    let paso = d.failed_step.unwrap_or_else(|| "?".into());
-                    if let Some(previa) = d.previous {
+                    let paso = limpio(&d.failed_step.unwrap_or_else(|| "?".into()));
+                    if let Some(previa) = d.previous.as_deref().map(limpio) {
                         println!(
                             "{}",
                             p.de(
@@ -546,7 +625,10 @@ fn desplegar(o: &Opciones, args: &[String]) -> i32 {
                     1
                 }
                 Err(e) => {
-                    eprintln!("no he entendido la respuesta: {e}");
+                    eprintln!(
+                        "no he entendido la respuesta: {}",
+                        limpio_prosa(&e.to_string())
+                    );
                     1
                 }
             }
@@ -555,9 +637,13 @@ fn desplegar(o: &Opciones, args: &[String]) -> i32 {
             // Perder el contacto **no es que haya fallado**: el proceso sigue en
             // el servidor y el estado es desconocido. Decir «ha fallado» sería
             // afirmar algo que no se sabe, y decir «ha ido bien» también.
-            eprintln!("{e}");
+            eprintln!("{}", limpio_prosa(&e.to_string()));
             eprintln!("Si se ha perdido el contacto, el despliegue puede seguir en el servidor.");
-            eprintln!("Para averiguarlo:  ssh {alias} orbit info {app}");
+            eprintln!(
+                "Para averiguarlo:  ssh {} orbit info {}",
+                limpio(&alias),
+                limpio(&app)
+            );
             4
         }
     }
@@ -580,11 +666,87 @@ fn paso_de(linea: &str) -> Option<String> {
                 "ok" => "✓",
                 _ => estado,
             };
-            Some(format!("{como} {paso}"))
+            Some(format!("{} {}", limpio(como), limpio(paso)))
         }
         // Una pasada por varias apps también pasa por aquí: los dos niveles
         // viajan por el mismo canal y los dos traen `app`.
-        "app" => Some(format!("{} {}", s.app.as_deref().unwrap_or("?"), estado)),
+        "app" => Some(format!(
+            "{} {}",
+            limpio(s.app.as_deref().unwrap_or("?")),
+            limpio(estado)
+        )),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// La carga de la ronda adversaria (`lista-ansi.json`): con ella un
+    /// servidor borraba filas de otros, ponía el título de la ventana y
+    /// escribía en el portapapeles.
+    const NOMBRE_HOSTIL: &str = "tienda\u{1b}[2K\u{1b}[1A\u{1b}[2K\rproduccion  tienda  \u{1b}[32m● activo\u{1b}[0m\u{1b}]0;pwned\u{7}\u{1b}]52;c;Y3VybCBldmlsLnNofHNo\u{7}";
+
+    fn sin_controles(s: &str) -> bool {
+        !s.chars().any(|c| {
+            c.is_control()
+                || matches!(
+                    c,
+                    '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}' | '\u{061c}'
+                )
+        })
+    }
+
+    #[test]
+    fn un_nombre_con_escapes_de_terminal_sale_visible_y_sin_esc() {
+        let l = limpio(NOMBRE_HOSTIL);
+        assert!(sin_controles(&l), "{l:?}");
+        assert!(l.contains(r"\u{1b}]52;c;"), "se ve lo que intentaba: {l}");
+        assert!(l.starts_with(r"tienda\u{1b}[2K"), "{l}");
+        // El texto normal no se toca.
+        assert_eq!(limpio("mi-web.es · ✓ activa"), "mi-web.es · ✓ activa");
+    }
+
+    #[test]
+    fn en_una_celda_ni_tab_ni_salto_ni_c1_ni_bidi() {
+        for (entrada, sale) in [
+            ("a\tb", r"a\u{9}b"),
+            ("a\nb", r"a\u{a}b"),
+            ("a\u{9b}31m", r"a\u{9b}31m"),
+            ("a\u{7f}", r"a\u{7f}"),
+            ("prod\u{202e}gnitset", r"prod\u{202e}gnitset"),
+            ("x\u{2066}y\u{200f}z\u{61c}", r"x\u{2066}y\u{200f}z\u{61c}"),
+        ] {
+            assert_eq!(limpio(entrada), sale);
+        }
+    }
+
+    #[test]
+    fn la_prosa_conserva_los_saltos_y_nada_mas() {
+        let p = limpio_prosa("fatal: algo\n\u{1b}]0;pwned\u{7}\r\nsegunda");
+        assert_eq!(p, "fatal: algo\n\\u{1b}]0;pwned\\u{7}\\u{d}\nsegunda");
+        assert!(sin_controles(&p.replace('\n', "")));
+    }
+
+    #[test]
+    fn el_paso_del_progreso_se_limpia() {
+        // `dep-stderr.txt` de la ronda adversaria.
+        let l = r#"{"event":"step","app":"tienda","step":"build\u001b]52;c;cm0gLXJmIH4=\u0007","status":"start","elapsed_s":1}"#;
+        let p = paso_de(l).expect("es un paso");
+        assert!(sin_controles(&p), "{p:?}");
+        assert!(p.contains(r"build\u{1b}]52;"), "{p}");
+        let a = r#"{"event":"app","app":"x\u001b[2J","status":"ok\u009b"}"#;
+        let p = paso_de(a).expect("es una app");
+        assert!(sin_controles(&p), "{p:?}");
+    }
+
+    #[test]
+    fn el_ancho_se_mide_sobre_lo_que_se_imprime() {
+        // Si se midiera el original, la columna de al lado quedaría montada
+        // encima del escape visible.
+        let n = ancho(&limpio("a\u{1b}b"));
+        assert_eq!(n, r"a\u{1b}b".chars().count());
+        assert_eq!(ancho(&relleno(&limpio("a\u{1b}b"), 12)), 12);
     }
 }
