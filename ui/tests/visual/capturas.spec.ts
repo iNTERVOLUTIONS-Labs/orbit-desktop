@@ -40,9 +40,12 @@ for (const tema of ['dark', 'light'] as const) {
     })
 
     test('log de una app', async ({ page }) => {
+      // En `produccion`, que es un 1.4.8: los demás servidores de ejemplo son
+      // un 1.3.6, y ahí el log dice —con razón— que `logs --json` llegó en la
+      // 1.3.7, en vez de pintarse.
       await page.goto('/')
-      await page.getByRole('button', { name: 'pruebas', exact: true }).click()
-      await page.getByRole('button', { name: /parada/ }).click()
+      await page.getByRole('button', { name: 'produccion', exact: true }).click()
+      await page.getByRole('button', { name: 'api', exact: true }).click()
       await page.getByRole('button', { name: 'log', exact: true }).click()
       await expect(page.locator('.log')).toBeVisible()
       await page.screenshot({ path: `capturas/${tema}-log.png`, fullPage: true })
@@ -56,7 +59,7 @@ for (const tema of ['dark'] as const) {
     await page.emulateMedia({ colorScheme: tema })
     await page.goto('/')
     await page.getByRole('button', { name: 'pruebas', exact: true }).click()
-    await page.getByRole('button', { name: /parada/ }).click()
+    await page.getByRole('button', { name: 'parada', exact: true }).click()
     await page.getByRole('button', { name: 'entorno', exact: true }).click()
     await expect(page.locator('.claves li').first()).toBeVisible()
     // Con uno revelado, que es lo que hay que poder mirar: que se ve el reloj y
@@ -79,7 +82,7 @@ test('tráfico y métricas · tema dark', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.goto('/')
   await page.getByRole('button', { name: 'pruebas', exact: true }).click()
-  await page.getByRole('button', { name: /parada/ }).click()
+  await page.getByRole('button', { name: 'parada', exact: true }).click()
   await page.getByRole('button', { name: 'tráfico', exact: true }).click()
   await expect(page.locator('.cifras').first()).toBeVisible()
   await page.screenshot({ path: 'capturas/dark-trafico.png', fullPage: true })
@@ -89,7 +92,7 @@ test('exec · tema dark', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.goto('/')
   await page.getByRole('button', { name: 'pruebas', exact: true }).click()
-  await page.getByRole('button', { name: /parada/ }).click()
+  await page.getByRole('button', { name: 'parada', exact: true }).click()
   await page.getByRole('button', { name: 'exec', exact: true }).click()
   await page.locator('.entrada input').fill('rm -rf /srv/apps/parada/releases')
   await page.getByRole('button', { name: 'Ejecutar' }).click()
@@ -101,7 +104,7 @@ test('retirar y borrar · tema dark', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.goto('/')
   await page.getByRole('button', { name: 'pruebas', exact: true }).click()
-  await page.getByRole('button', { name: /parada/ }).click()
+  await page.getByRole('button', { name: 'parada', exact: true }).click()
   await page.getByRole('button', { name: 'retirar', exact: true }).click()
   await page.getByText('Y borrar también sus datos').click()
   await page.getByRole('button', { name: 'Retirar y borrar los datos' }).click()
@@ -113,7 +116,7 @@ test('revertir · tema dark', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.goto('/')
   await page.getByRole('button', { name: 'pruebas', exact: true }).click()
-  await page.getByRole('button', { name: /parada/ }).click()
+  await page.getByRole('button', { name: 'parada', exact: true }).click()
   await page.getByRole('button', { name: 'revertir', exact: true }).click()
   await expect(page.locator('.releases')).toBeVisible()
   await page.screenshot({ path: 'capturas/dark-revertir.png', fullPage: true })

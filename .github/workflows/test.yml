@@ -244,9 +244,15 @@ jobs:
         # Playwright no cubren todas las distribuciones —aquí se desarrolla en
         # una Ubuntu 26.04 donde no hay— así que el navegador se elige por
         # variable en los dos sitios.
+        #
+        # Con la galería: desde la 0.1.2 no entra en el build de la ventana
+        # —Tauri empaqueta todo `ui/dist`—, así que se compila aquí, después de
+        # medir el paquete para que su peso no cuente.
         env:
           CHROMIUM: /usr/bin/google-chrome
-        run: npx playwright test
+        run: |
+          npm run build:galeria
+          npx playwright test
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
